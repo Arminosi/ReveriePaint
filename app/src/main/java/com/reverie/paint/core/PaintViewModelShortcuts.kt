@@ -264,7 +264,7 @@ internal fun PaintViewModel.setShortcutKey(id: String, keyStr: String) {
         for (def in ALL_SHORTCUT_DEFINITIONS) {
             if (def.id != id) {
                 val current = map[def.id] ?: def.defaultKey
-                if (current.equals(targetKey, ignoreCase = true)) {
+                if (isShortcutMatch(current, targetKey)) {
                     map[def.id] = "无"
                     overriddenDef = def
                 }
@@ -316,16 +316,86 @@ internal fun PaintViewModel.loadShortcuts() {
 
 private var lastRepeatActionTime = 0L
 
-/** Convert a Compose KeyEvent to a canonical key combination string like "LeftCtrl + S" */
+/**
+ * 规范化快捷键组合字符串，统一修饰键名称并排序，消除 "LeftCtrl + Z" 与 "Ctrl + Z"、
+ * "Ctrl + Shift + Z" 与 "Shift + Ctrl + Z" 的格式差异。
+ */
+fun normalizeShortcut(shortcut: String): String {
+    val trimmed = shortcut.trim()
+    if (trimmed.isEmpty() || trimmed.equals("无", ignoreCase = true) || trimmed.equals("none", ignoreCase = true)) {
+        return ""
+    }
+    if (trimmed.equals("Space(长按)", ignoreCase = true)) {
+        return "SPACE(长按)"
+    }
+
+    val tokens = trimmed.split("+").map { it.trim() }.filter { it.isNotEmpty() }
+    if (tokens.isEmpty()) return ""
+
+    var hasCtrl = false
+    var hasAlt = false
+    var hasShift = false
+    val mainKeys = mutableListOf<String>()
+
+    for (token in tokens) {
+        val lower = token.lowercase()
+        when (lower) {
+            "ctrl", "leftctrl", "rightctrl", "control", "meta", "leftmeta", "rightmeta", "command", "win" -> hasCtrl = true
+            "alt", "leftalt", "rightalt", "option" -> hasAlt = true
+            "shift", "leftshift", "rightshift" -> hasShift = true
+            else -> mainKeys.add(token.uppercase())
+        }
+    }
+
+    val parts = mutableListOf<String>()
+    if (hasCtrl) parts.add("CTRL")
+    if (hasAlt) parts.add("ALT")
+    if (hasShift) parts.add("SHIFT")
+    parts.addAll(mainKeys)
+    return parts.joinToString("+")
+}
+
+/**
+ * 判断两个快捷键组合在逻辑上是否等价 (忽略大小写、左右修饰键与修饰键顺序差异)
+ */
+fun isShortcutMatch(shortcutA: String, shortcutB: String): Boolean {
+    val normA = normalizeShortcut(shortcutA)
+    val normB = normalizeShortcut(shortcutB)
+    if (normA.isEmpty() || normB.isEmpty()) return false
+    return normA == normB
+}
+
+/**
+ * Convert a Compose KeyEvent to a canonical key combination string like "LeftCtrl + S",
+ * "F1", "Button 1", "ZoomIn" for keyboards and external graphics tablets (数位板).
+ */
 fun keyEventToString(event: KeyEvent): String {
+    val nativeEvent = event.nativeKeyEvent
+    val nativeCode = nativeEvent.keyCode
+
+    // 单独按下修饰键 (Ctrl/Alt/Shift/Meta) 不构成独立快捷键
+    if (nativeCode in listOf(
+            android.view.KeyEvent.KEYCODE_CTRL_LEFT,
+            android.view.KeyEvent.KEYCODE_CTRL_RIGHT,
+            android.view.KeyEvent.KEYCODE_SHIFT_LEFT,
+            android.view.KeyEvent.KEYCODE_SHIFT_RIGHT,
+            android.view.KeyEvent.KEYCODE_ALT_LEFT,
+            android.view.KeyEvent.KEYCODE_ALT_RIGHT,
+            android.view.KeyEvent.KEYCODE_META_LEFT,
+            android.view.KeyEvent.KEYCODE_META_RIGHT,
+        )
+    ) {
+        return ""
+    }
+
     val parts = mutableListOf<String>()
     // 兼容外接蓝牙键盘的 Command / Win (Meta) 键，与 Ctrl 统一为主要修饰键
-    if (event.isCtrlPressed || event.nativeKeyEvent.isMetaPressed) parts.add("LeftCtrl")
+    if (event.isCtrlPressed || nativeEvent.isMetaPressed) parts.add("LeftCtrl")
     if (event.isAltPressed) parts.add("LeftAlt")
     if (event.isShiftPressed) parts.add("LeftShift")
 
     val k = event.key
-    val keyName = when (k) {
+    var keyName: String? = when (k) {
         Key.LeftBracket -> "["
         Key.RightBracket -> "]"
         Key.Equals -> "="
@@ -352,6 +422,18 @@ fun keyEventToString(event: KeyEvent): String {
         Key.MoveHome -> "Home"
         Key.MoveEnd -> "End"
         Key.Insert -> "Insert"
+        Key.F1 -> "F1"
+        Key.F2 -> "F2"
+        Key.F3 -> "F3"
+        Key.F4 -> "F4"
+        Key.F5 -> "F5"
+        Key.F6 -> "F6"
+        Key.F7 -> "F7"
+        Key.F8 -> "F8"
+        Key.F9 -> "F9"
+        Key.F10 -> "F10"
+        Key.F11 -> "F11"
+        Key.F12 -> "F12"
         Key.A -> "A"
         Key.B -> "B"
         Key.C -> "C"
@@ -406,6 +488,40 @@ fun keyEventToString(event: KeyEvent): String {
         else -> null
     }
 
+    // 数位板物理按键与专用快捷键 (F1..F12, BUTTON_1..16, ZOOM_IN/OUT, VOLUME_UP/DOWN 等)
+    if (keyName == null) {
+        keyName = when (nativeCode) {
+            in android.view.KeyEvent.KEYCODE_F1..android.view.KeyEvent.KEYCODE_F12 ->
+                "F${nativeCode - android.view.KeyEvent.KEYCODE_F1 + 1}"
+            in android.view.KeyEvent.KEYCODE_BUTTON_1..android.view.KeyEvent.KEYCODE_BUTTON_16 ->
+                "Button ${nativeCode - android.view.KeyEvent.KEYCODE_BUTTON_1 + 1}"
+            android.view.KeyEvent.KEYCODE_BUTTON_A -> "Button A"
+            android.view.KeyEvent.KEYCODE_BUTTON_B -> "Button B"
+            android.view.KeyEvent.KEYCODE_BUTTON_C -> "Button C"
+            android.view.KeyEvent.KEYCODE_BUTTON_X -> "Button X"
+            android.view.KeyEvent.KEYCODE_BUTTON_Y -> "Button Y"
+            android.view.KeyEvent.KEYCODE_BUTTON_Z -> "Button Z"
+            android.view.KeyEvent.KEYCODE_BUTTON_L1 -> "Button L1"
+            android.view.KeyEvent.KEYCODE_BUTTON_R1 -> "Button R1"
+            android.view.KeyEvent.KEYCODE_BUTTON_L2 -> "Button L2"
+            android.view.KeyEvent.KEYCODE_BUTTON_R2 -> "Button R2"
+            android.view.KeyEvent.KEYCODE_BUTTON_SELECT -> "Select"
+            android.view.KeyEvent.KEYCODE_BUTTON_START -> "Start"
+            android.view.KeyEvent.KEYCODE_ZOOM_IN -> "ZoomIn"
+            android.view.KeyEvent.KEYCODE_ZOOM_OUT -> "ZoomOut"
+            android.view.KeyEvent.KEYCODE_VOLUME_UP -> "VolumeUp"
+            android.view.KeyEvent.KEYCODE_VOLUME_DOWN -> "VolumeDown"
+            android.view.KeyEvent.KEYCODE_PAGE_UP -> "PageUp"
+            android.view.KeyEvent.KEYCODE_PAGE_DOWN -> "PageDown"
+            else -> {
+                val codeStr = android.view.KeyEvent.keyCodeToString(nativeCode)
+                if (!codeStr.isNullOrBlank() && codeStr != "KEYCODE_UNKNOWN") {
+                    codeStr.removePrefix("KEYCODE_")
+                } else null
+            }
+        }
+    }
+
     if (keyName != null) {
         parts.add(keyName)
         return parts.joinToString(" + ")
@@ -455,12 +571,12 @@ internal fun PaintViewModel.handleKeyEvent(event: KeyEvent): Boolean {
     val customMatch = ALL_SHORTCUT_DEFINITIONS.firstOrNull { def ->
         val custom = shortcutBindings[def.id]
         custom != null && !custom.equals("无", ignoreCase = true) && !custom.equals("none", ignoreCase = true) &&
-            (custom.equals(keyStr, ignoreCase = true) || (custom == "Space(长按)" && keyStr == "Space"))
+            (isShortcutMatch(custom, keyStr) || (custom == "Space(长按)" && isShortcutMatch(keyStr, "Space")))
     }
     val targetDef = customMatch ?: ALL_SHORTCUT_DEFINITIONS.firstOrNull { def ->
         val bound = getShortcutKey(def.id)
         if (bound.equals("无", ignoreCase = true) || bound.equals("none", ignoreCase = true)) false
-        else bound.equals(keyStr, ignoreCase = true) || (bound == "Space(长按)" && keyStr == "Space")
+        else isShortcutMatch(bound, keyStr) || (bound == "Space(长按)" && isShortcutMatch(keyStr, "Space"))
     }
 
     val repeatCount = event.nativeKeyEvent.repeatCount
@@ -473,15 +589,16 @@ internal fun PaintViewModel.handleKeyEvent(event: KeyEvent): Boolean {
             "brush_size_inc", "brush_size_dec",
             "brush_opacity_inc", "brush_opacity_dec",
             "zoom_in", "zoom_out",
-        ) || keyStr in listOf(
-            "[", "]", "LeftCtrl + [", "LeftCtrl + ]",
-            "LeftCtrl + =", "LeftCtrl + -", "LeftCtrl + +",
-            "LeftCtrl + LeftShift + =", "LeftCtrl + LeftShift + +",
-            "LeftCtrl + NumPadSubtract",
-        )
+        ) || isShortcutMatch(keyStr, "[") || isShortcutMatch(keyStr, "]") ||
+            isShortcutMatch(keyStr, "LeftCtrl + [") || isShortcutMatch(keyStr, "LeftCtrl + ]") ||
+            isShortcutMatch(keyStr, "LeftCtrl + =") || isShortcutMatch(keyStr, "LeftCtrl + -") ||
+            isShortcutMatch(keyStr, "LeftCtrl + +") || isShortcutMatch(keyStr, "LeftCtrl + LeftShift + =") ||
+            isShortcutMatch(keyStr, "LeftCtrl + LeftShift + +") || isShortcutMatch(keyStr, "ZoomIn") ||
+            isShortcutMatch(keyStr, "ZoomOut") || isShortcutMatch(keyStr, "LeftCtrl + NumPadSubtract")
 
         val isUndoRedo = actionId in listOf("undo", "redo") ||
-            keyStr in listOf("LeftCtrl + Z", "LeftCtrl + LeftShift + Z", "LeftCtrl + Y")
+            isShortcutMatch(keyStr, "LeftCtrl + Z") || isShortcutMatch(keyStr, "LeftCtrl + LeftShift + Z") ||
+            isShortcutMatch(keyStr, "LeftCtrl + Y")
 
         if (isContinuous) {
             if (now - lastRepeatActionTime < 50L) {
@@ -510,22 +627,23 @@ internal fun PaintViewModel.handleKeyEvent(event: KeyEvent): Boolean {
     val isExplicitlyDisabled = ALL_SHORTCUT_DEFINITIONS.any { def ->
         val custom = shortcutBindings[def.id]
         custom != null && (custom.equals("无", ignoreCase = true) || custom.equals("none", ignoreCase = true)) &&
-            def.defaultKey.equals(keyStr, ignoreCase = true)
+            isShortcutMatch(def.defaultKey, keyStr)
     }
     if (isExplicitlyDisabled) return false
 
-    // 3. 行业标准桌面快捷键兜底 (Photoshop / Krita 规范)
-    return when (keyStr) {
-        "LeftCtrl + Z" -> { undo(); true }
-        "LeftCtrl + LeftShift + Z", "LeftCtrl + Y" -> { redo(); true }
-        "LeftCtrl + S" -> { saveProject(docName); true }
-        "LeftCtrl + D" -> { clearSelectionAction(); true }
-        "LeftCtrl + J" -> { copyLayer(currentLayerIndex); true }
-        "LeftCtrl + E" -> { mergeDown(currentLayerIndex); true }
-        "LeftCtrl + T", "V" -> { applyTool("transform"); true }
-        "LeftCtrl + =", "LeftCtrl + +", "LeftCtrl + LeftShift + =", "LeftCtrl + LeftShift + +" -> { requestUiCommand("zoom_in"); true }
-        "LeftCtrl + -", "LeftCtrl + NumPadSubtract" -> { requestUiCommand("zoom_out"); true }
-        "LeftCtrl + 0", "LeftCtrl + NumPad0" -> { requestUiCommand("reset_view"); true }
+    // 3. 行业标准桌面快捷键兜底 (Photoshop / Krita 规范与数位板滚轮/常用按键)
+    val norm = normalizeShortcut(keyStr)
+    return when (norm) {
+        "CTRL+Z" -> { undo(); true }
+        "CTRL+SHIFT+Z", "CTRL+Y" -> { redo(); true }
+        "CTRL+S" -> { saveProject(docName); true }
+        "CTRL+D" -> { clearSelectionAction(); true }
+        "CTRL+J" -> { copyLayer(currentLayerIndex); true }
+        "CTRL+E" -> { mergeDown(currentLayerIndex); true }
+        "CTRL+T", "V" -> { applyTool("transform"); true }
+        "CTRL+=", "CTRL++", "CTRL+SHIFT+=", "CTRL+SHIFT++", "ZOOMIN" -> { requestUiCommand("zoom_in"); true }
+        "CTRL+-", "CTRL+NUMPADSUBTRACT", "ZOOMOUT" -> { requestUiCommand("zoom_out"); true }
+        "CTRL+0", "CTRL+NUMPAD0" -> { requestUiCommand("reset_view"); true }
         "[" -> {
             val minL = brushMinSizeLimit.coerceAtLeast(0.5)
             updateBrushSize((brushSize / 1.25).coerceAtLeast(minL))
@@ -536,11 +654,11 @@ internal fun PaintViewModel.handleKeyEvent(event: KeyEvent): Boolean {
             updateBrushSize((brushSize * 1.25).coerceAtMost(maxL))
             true
         }
-        "LeftCtrl + [" -> {
+        "CTRL+[" -> {
             updateBrushOpacity((brushOpacity - 0.1).coerceAtLeast(0.01))
             true
         }
-        "LeftCtrl + ]" -> {
+        "CTRL+]" -> {
             updateBrushOpacity((brushOpacity + 0.1).coerceAtMost(1.0))
             true
         }
@@ -549,7 +667,7 @@ internal fun PaintViewModel.handleKeyEvent(event: KeyEvent): Boolean {
         "S" -> { applyTool("smudge"); true }
         "I" -> { applyTool("picker"); isTemporaryPicker = true; true }
         "G" -> { applyTool("fill"); true }
-        "LeftShift + G", "Shift + G" -> { applyTool("gradient"); true }
+        "SHIFT+G" -> { applyTool("gradient"); true }
         "M" -> { applyTool("select_rect"); true }
         "L" -> { applyTool("lasso"); true }
         "W" -> { applyTool("magicwand"); true }
@@ -562,12 +680,12 @@ internal fun PaintViewModel.handleKeyEvent(event: KeyEvent): Boolean {
         // 真正镜像像素的完全翻转在面板里长按触发, 没有默认快捷键
         "H" -> { toggleViewFlipHorizontal(); true }
         "R" -> { requestUiCommand("rotate_cw"); true }
-        "Delete", "Backspace" -> { removeLayer(currentLayerIndex); true }
-        "PageDown" -> {
+        "DELETE", "BACKSPACE" -> { removeLayer(currentLayerIndex); true }
+        "PAGEDOWN" -> {
             if (currentToolId == "eraser") applyTool("brush") else applyTool("eraser")
             true
         }
-        "PageUp" -> { requestUiCommand("open_color"); true }
+        "PAGEUP" -> { requestUiCommand("open_color"); true }
         else -> false
     }
 }

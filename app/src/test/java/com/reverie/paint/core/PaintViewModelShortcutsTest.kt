@@ -80,4 +80,32 @@ class PaintViewModelShortcutsTest {
             com.reverie.paint.model.QuickAction.DEFAULT_ACTIONS.contains(com.reverie.paint.model.QuickAction.DISABLE_TOUCH),
         )
     }
+
+    @Test
+    fun `normalizeShortcut normalizes modifiers and orders correctly`() {
+        assertEquals("CTRL+Z", normalizeShortcut("Ctrl + Z"))
+        assertEquals("CTRL+Z", normalizeShortcut("LeftCtrl + Z"))
+        assertEquals("CTRL+Z", normalizeShortcut("RightCtrl + Z"))
+        assertEquals("CTRL+SHIFT+Z", normalizeShortcut("Ctrl + Shift + Z"))
+        assertEquals("CTRL+SHIFT+Z", normalizeShortcut("Shift + Ctrl + Z"))
+        assertEquals("CTRL+SHIFT+Z", normalizeShortcut("LeftCtrl + LeftShift + Z"))
+        assertEquals("CTRL+ALT+SHIFT+Z", normalizeShortcut("Shift + Alt + Ctrl + Z"))
+        assertEquals("SPACE(长按)", normalizeShortcut("Space(长按)"))
+        assertEquals("F1", normalizeShortcut("F1"))
+        assertEquals("BUTTON 1", normalizeShortcut("Button 1"))
+        assertEquals("ZOOMIN", normalizeShortcut("ZoomIn"))
+    }
+
+    @Test
+    fun `isShortcutMatch compares combinations irrespective of modifier naming and order`() {
+        org.junit.Assert.assertTrue(isShortcutMatch("LeftCtrl + Z", "Ctrl + Z"))
+        org.junit.Assert.assertTrue(isShortcutMatch("Ctrl + Shift + Z", "LeftCtrl + LeftShift + Z"))
+        org.junit.Assert.assertTrue(isShortcutMatch("Shift + Ctrl + Z", "Ctrl + Shift + Z"))
+        org.junit.Assert.assertTrue(isShortcutMatch("Button 1", "button 1"))
+        org.junit.Assert.assertTrue(isShortcutMatch("F1", "f1"))
+        org.junit.Assert.assertTrue(isShortcutMatch("ZoomIn", "zoomin"))
+        org.junit.Assert.assertFalse(isShortcutMatch("Ctrl + Z", "Ctrl + Y"))
+        org.junit.Assert.assertFalse(isShortcutMatch("Ctrl + Z", "无"))
+    }
 }
+

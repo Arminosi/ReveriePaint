@@ -483,7 +483,8 @@ class MainActivity : ComponentActivity() {
         val vm = currentViewModel
         if (vm != null) {
             val driver = vm.stylusDriver ?: vm.getOrCreateStylusDriver(this)
-            if (driver.onStylusKeyEvent(event)) {
+            // 录制快捷键状态下放行全部硬件按键 (含数位板/手写笔侧键)，使按键录制对话框能正常捕获
+            if (!vm.isShortcutRecordingActive && driver.onStylusKeyEvent(event)) {
                 return true
             }
             if (vm.currentPage == com.reverie.paint.core.Page.PAINTING) {

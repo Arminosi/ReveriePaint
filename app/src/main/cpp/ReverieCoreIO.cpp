@@ -1083,15 +1083,14 @@ static QByteArray readAllStoreBytes(KoStore *store)
 // ---- LayerPixelLoader: 见 ReverieCoreInternal.h 的结构说明 ----
 
 namespace {
-// stage 累计字节的自动 flush 阈值: 防止超大文档 (169 层 .kra) 的全部压缩
-// 字节同时驻留内存。约等于该文档所有层的 PNG 总量, 超过则先落盘一批。
-constexpr qint64 kLayerPixelFlushBytes = 192LL * 1024 * 1024;
+// stage 累计字节的自动 flush 阈值: 降低至 48MB, 避免多层大工程积压大量 PNG 压缩字节
+constexpr qint64 kLayerPixelFlushBytes = 48LL * 1024 * 1024;
+constexpr int kLayerPixelFlushMaxJobs = 8;
 
 int layerPixelChunk()
 {
-    // 每块并行解码的层数。解码后的 QImage 是未压缩 RGBA (4K 层 ~64MB),
-    // chunk 同时限制了额外的解码峰值内存。8 核手机取 4-6 即可近线性加速。
-    static const int chunk = qBound(2, QThread::idealThreadCount(), 6);
+    // 每块并行解码的层数。限制在 2~3 个并发线程，避免瞬时并发解码 4~6 个未压缩 RGBA 大图导致内存爆表
+    static const int chunk = qBound(2, QThread::idealThreadCount() / 2, 3);
     return chunk;
 }
 } // namespace
@@ -1107,7 +1106,7 @@ void LayerPixelLoader::stage(PendingLayerPixels job)
     if (!job.dev) return;
     m_stagedBytes += job.pngBytes.size() + job.defaultPixel.size();
     m_jobs.append(job);
-    if (m_stagedBytes >= kLayerPixelFlushBytes) {
+    if (m_stagedBytes >= kLayerPixelFlushBytes || m_jobs.size() >= kLayerPixelFlushMaxJobs) {
         flush();
     }
 }
@@ -1261,12 +1260,22 @@ static bool loadKraNodesDom(const QDomElement &parentElem,
         KisNodeSP node;
         const bool isGroup = (nodeType == "grouplayer");
 
+        const bool isMask = (el.tagName().toLower() == "mask") ||
+                            (nodeType == "transparencymask") ||
+                            (nodeType.contains("mask"));
+
         if (isGroup) {
             node = new KisGroupLayer(image, name, opacity, cs);
         } else {
             KisPaintLayerSP pl = new KisPaintLayer(image, name, opacity, cs);
+            if (isMask) {
+                pl->setProperty("reverie_is_transparency_mask", true);
+            }
             const QString fn = el.attribute("filename");
-            stageLayerDataFromStore(store, loader, pl->paintDevice(), docName, fn, layerIndexCounter++);
+            const bool loaded = stageLayerDataFromStore(store, loader, pl->paintDevice(), docName, fn, layerIndexCounter++);
+            if (isMask && !loaded) {
+                pl->paintDevice()->fill(QRect(0, 0, image->width(), image->height()), KoColor(Qt::white, cs));
+            }
             node = pl;
         }
 
@@ -1279,6 +1288,9 @@ static bool loadKraNodesDom(const QDomElement &parentElem,
             node->setColorLabelIndex(colorLabel);
             node->setX(el.attribute("x", "0").toInt());
             node->setY(el.attribute("y", "0").toInt());
+            if (isMask) {
+                node->setProperty("reverie_is_transparency_mask", true);
+            }
 
             if (KisLayer *l = dynamic_cast<KisLayer *>(node.data())) {
                 const bool isClipped = (el.attribute("clipped", "0") == "1") ||
@@ -1313,6 +1325,30 @@ static bool loadKraNodesDom(const QDomElement &parentElem,
                 if (subLayers.isNull()) subLayers = el.firstChildElement("LAYERS");
                 if (!subLayers.isNull()) {
                     loadKraNodesDom(subLayers, image, node, store, docName, layerIndexCounter, bgVisible, loader);
+                }
+            } else if (!isMask) {
+                // 加载内嵌在图层内的蒙版 (Krita 官方结构常将 mask 节点作为 layer 的直接子元素)
+                for (QDomElement childMask = el.firstChildElement(); !childMask.isNull(); childMask = childMask.nextSiblingElement()) {
+                    const QString cTag = childMask.tagName().toLower();
+                    const QString cType = childMask.attribute("nodetype", childMask.attribute("layertype")).toLower();
+                    if (cTag == "mask" || cType.contains("mask")) {
+                        QString mName = childMask.attribute("name");
+                        if (mName.isEmpty()) mName = QStringLiteral("蒙版");
+                        const int mOpacity = qBound(0, childMask.attribute("opacity", "255").toInt(), 255);
+                        KisPaintLayerSP tmask = new KisPaintLayer(image, mName, mOpacity, cs);
+                        tmask->setProperty("reverie_is_transparency_mask", true);
+                        const QString mFn = childMask.attribute("filename");
+                        const bool mLoaded = stageLayerDataFromStore(store, loader, tmask->paintDevice(), docName, mFn, layerIndexCounter++);
+                        if (!mLoaded) {
+                            tmask->paintDevice()->fill(QRect(0, 0, image->width(), image->height()), KoColor(Qt::white, cs));
+                        }
+                        tmask->setVisible(childMask.attribute("visible", "1") != "0");
+                        tmask->setOpacity(quint8(mOpacity));
+                        tmask->setUserLocked(childMask.attribute("locked", "0") == "1");
+                        tmask->setX(childMask.attribute("x", "0").toInt());
+                        tmask->setY(childMask.attribute("y", "0").toInt());
+                        image->addNode(tmask, node);
+                    }
                 }
             }
         }

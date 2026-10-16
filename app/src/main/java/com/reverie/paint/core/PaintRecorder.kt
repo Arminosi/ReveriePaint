@@ -158,15 +158,21 @@ class PaintRecorder {
             }
         } else if (snapshotSource != null && snapshotSource.exists() && snapshotSource.length() > 0) {
             try {
-                snapshotTempDir.mkdirs()
-                val ext = snapshotSource.extension
-                val target = File.createTempFile("initial-", if (ext.isEmpty()) null else ".$ext", snapshotTempDir)
-                snapshotSource.inputStream().use { i ->
-                    target.outputStream().use { o -> i.copyTo(o, 64 * 1024) }
+                // 超大工程文件 (>64MB) 跳过全量落盘复制作为录制快照, 避免在打开大工程时发生磁盘与内存争抢
+                if (snapshotSource.length() <= 64L * 1024 * 1024) {
+                    snapshotTempDir.mkdirs()
+                    val ext = snapshotSource.extension
+                    val target = File.createTempFile("initial-", if (ext.isEmpty()) null else ".$ext", snapshotTempDir)
+                    snapshotSource.inputStream().use { i ->
+                        target.outputStream().use { o -> i.copyTo(o, 64 * 1024) }
+                    }
+                    snapshotFile = target
+                } else {
+                    android.util.Log.i("ReveriePaint", "recording snapshot skipped for oversized file: ${snapshotSource.length()} bytes")
+                    snapshotFile = null
                 }
-                snapshotFile = target
-            } catch (e: Exception) {
-                android.util.Log.e("ReveriePaint", "recording snapshot copy failed", e)
+            } catch (t: Throwable) {
+                android.util.Log.e("ReveriePaint", "recording snapshot copy failed", t)
                 snapshotFile = null
             }
         }

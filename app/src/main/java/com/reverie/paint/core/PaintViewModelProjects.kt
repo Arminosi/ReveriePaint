@@ -398,6 +398,7 @@ internal fun PaintViewModel.loadProject(p: com.reverie.paint.model.Project) {
     stopPaintingTimer()
     resetAnimationState()
     resetProjectReferences(loading = true)
+    releaseReclaimableCaches(aggressive = true)
     val referenceLoadSession = referenceSession
     // Navigate to painting page first, then show loading overlay while reading native file
     currentPage = Page.PAINTING

@@ -429,6 +429,8 @@ private suspend fun PaintViewModel.convertViaCore(
         } finally {
             // 导入转换完成后立即释放 native 文档, 避免多图层超大工程驻留在 g_core 累积内存峰值
             ReverieCoreBridge.closeDocument()
+            releaseReclaimableCaches(aggressive = true)
+            System.gc()
         }
     }
 }

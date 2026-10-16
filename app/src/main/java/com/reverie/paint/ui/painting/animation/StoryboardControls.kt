@@ -72,7 +72,7 @@ internal fun StoryboardReferenceBar(vm: PaintViewModel) {
     var showList by remember { mutableStateOf(false) }
     val frames = state.frames
     val mappingMissing = state.singleFrameMode && frames.size != cues.size
-    val active = frames.indexOfFirst { vm.anim.currentTime >= it.start && vm.anim.currentTime < it.endExclusive }
+    val active = SrtStoryboard.findActiveFrameIndex(frames, vm.anim.currentTime)
     Row(
         modifier = Modifier.fillMaxWidth().background(Morandi.panel)
             .clickable { showList = true }.padding(horizontal = 12.dp, vertical = 6.dp),
@@ -102,13 +102,16 @@ internal fun StoryboardReferenceBar(vm: PaintViewModel) {
             text = {
                 LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp)) {
                     itemsIndexed(cues) { index, cue ->
+                        val targetFrame = frames.getOrNull(index)
                         Column(
-                            modifier = Modifier.fillMaxWidth().clickable(enabled = !mappingMissing) {
-                                vm.animationPause()
-                                vm.animationSeek(frames[index].start)
-                                vm.anim.scrollPx = frames[index].start * vm.anim.frameWidthPx
-                                vm.anim.toolbarExpanded = false
-                                showList = false
+                            modifier = Modifier.fillMaxWidth().clickable(enabled = !mappingMissing && targetFrame != null) {
+                                targetFrame?.let { frame ->
+                                    vm.animationPause()
+                                    vm.animationSeek(frame.start)
+                                    vm.anim.scrollPx = frame.start * vm.anim.frameWidthPx
+                                    vm.anim.toolbarExpanded = false
+                                    showList = false
+                                }
                             }.padding(vertical = 8.dp),
                         ) {
                             Text("${index + 1} · ${SrtStoryboard.timestamp(cue.startMs)} → " +

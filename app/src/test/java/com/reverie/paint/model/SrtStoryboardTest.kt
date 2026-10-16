@@ -124,4 +124,39 @@ class SrtStoryboardTest {
         assertTrue(SrtStoryboard.resizedShots(cues, listOf(0, 0), 1).isEmpty())
         assertTrue(SrtStoryboard.resizedShots(cues, listOf(-1, 1), 1).isEmpty())
     }
+
+    @Test fun `binary search finds active frame index correctly across gaps and boundaries`() {
+        val cueA = SrtCue(0, 1000, "a")
+        val cueB = SrtCue(2000, 3000, "b")
+        val cueC = SrtCue(5000, 8000, "c")
+        val frames = listOf(
+            StoryboardFrame(cueA, 0, 5),
+            StoryboardFrame(cueB, 10, 15),
+            StoryboardFrame(cueC, 20, 25),
+        )
+        assertEquals(-1, SrtStoryboard.findActiveFrameIndex(frames, -1))
+        assertEquals(0, SrtStoryboard.findActiveFrameIndex(frames, 0))
+        assertEquals(0, SrtStoryboard.findActiveFrameIndex(frames, 4))
+        assertEquals(-1, SrtStoryboard.findActiveFrameIndex(frames, 5))
+        assertEquals(-1, SrtStoryboard.findActiveFrameIndex(frames, 9))
+        assertEquals(1, SrtStoryboard.findActiveFrameIndex(frames, 10))
+        assertEquals(1, SrtStoryboard.findActiveFrameIndex(frames, 14))
+        assertEquals(-1, SrtStoryboard.findActiveFrameIndex(frames, 15))
+        assertEquals(-1, SrtStoryboard.findActiveFrameIndex(frames, 19))
+        assertEquals(2, SrtStoryboard.findActiveFrameIndex(frames, 20))
+        assertEquals(2, SrtStoryboard.findActiveFrameIndex(frames, 24))
+        assertEquals(-1, SrtStoryboard.findActiveFrameIndex(frames, 25))
+        assertEquals(-1, SrtStoryboard.findActiveFrameIndex(frames, 100))
+        assertEquals(-1, SrtStoryboard.findActiveFrameIndex(emptyList(), 0))
+
+        val singleFrame = listOf(StoryboardFrame(cueA, 2, 7))
+        assertEquals(-1, SrtStoryboard.findActiveFrameIndex(singleFrame, 1))
+        assertEquals(0, SrtStoryboard.findActiveFrameIndex(singleFrame, 2))
+        assertEquals(0, SrtStoryboard.findActiveFrameIndex(singleFrame, 6))
+        assertEquals(-1, SrtStoryboard.findActiveFrameIndex(singleFrame, 7))
+
+        val contiguous = listOf(StoryboardFrame(cueA, 0, 3), StoryboardFrame(cueB, 3, 6))
+        assertEquals(0, SrtStoryboard.findActiveFrameIndex(contiguous, 2))
+        assertEquals(1, SrtStoryboard.findActiveFrameIndex(contiguous, 3))
+    }
 }

@@ -101,4 +101,20 @@ object SrtStoryboard {
     fun encode(cues: List<SrtCue>): ByteArray = cues.mapIndexed { index, cue ->
         "${index + 1}\n${timestamp(cue.startMs)} --> ${timestamp(cue.endMs)}\n${cue.text}"
     }.joinToString("\n\n").toByteArray(Charsets.UTF_8)
+
+    /** Binary search for the active frame index at [currentTime]; returns -1 if in a gap or out of range. */
+    fun findActiveFrameIndex(frames: List<StoryboardFrame>, currentTime: Int): Int {
+        var low = 0
+        var high = frames.size - 1
+        while (low <= high) {
+            val mid = (low + high) ushr 1
+            val frame = frames[mid]
+            when {
+                currentTime < frame.start -> high = mid - 1
+                currentTime >= frame.endExclusive -> low = mid + 1
+                else -> return mid
+            }
+        }
+        return -1
+    }
 }

@@ -2694,7 +2694,7 @@
 
     <!-- SRT storyboard import -->
     <string name="srt_import_title">导入 SRT 分镜</string>
-    <string name="srt_import_description">每条字幕按顺序生成一个关键帧，默认长度为 1 帧，可拖动帧格右边缘调整时长。SRT 轨道绘画不会自动切分关键帧。原始时间码只作参考，不决定帧的位置或长度。重新导入会新增轨道并替换字幕参考，不压缩或删除已有画面。请保存为 REVP 工程</string>
+    <string name="srt_import_description">每条字幕按顺序生成一个关键帧，默认长度为 1 帧，可拖动帧格右边缘调整时长；SRT 轨道绘画不会自动切分关键帧；原始时间码只作参考，不决定帧的位置或长度；重新导入会新增轨道并替换字幕参考，不压缩或删除已有画面；请保存为 REVP 工程</string>
     <string name="srt_choose_file">选择 SRT 文件</string>
     <string name="srt_close">关闭</string>
     <string name="srt_layer_name">SRT 分镜</string>

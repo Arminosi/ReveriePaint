@@ -230,6 +230,7 @@ class CanvasTouchView(context: Context) : View(context) {
     // 3D 参考图层交互状态
     private var touch3DStartX = 0f
     private var touch3DStartY = 0f
+    private val canvas3DDrawer = com.reverie.paint.core.gl3d.Canvas3DDrawer()
 
     // 触控交互锁 (手指接触期间，阻止外部 Compose 状态回冲覆盖)
     var isInteracting = false
@@ -2616,8 +2617,10 @@ class CanvasTouchView(context: Context) : View(context) {
                 canvas.drawBitmap(bmp, -imgW / 2f, -imgH / 2f, directBitmapPaint)
             }
             if (v.isCurrentLayer3D && v.isInteracting3D) {
-                v.live3DPreviewBitmap?.let { previewBmp ->
-                    canvas.drawBitmap(previewBmp, null, android.graphics.RectF(-imgW / 2f, -imgH / 2f, imgW / 2f, imgH / 2f), directBitmapPaint)
+                val state = v.currentLayer3DState
+                if (state != null) {
+                    val mesh = v.getMeshForState(state)
+                    canvas3DDrawer.draw(canvas, mesh, state, imgW.toFloat(), imgH.toFloat())
                 }
             }
             v.onLiquifyBitmapDrawn(bmp)

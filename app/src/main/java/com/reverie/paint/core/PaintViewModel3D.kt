@@ -7,6 +7,8 @@ package com.reverie.paint.core
 import android.graphics.Bitmap
 import android.net.Uri
 import android.util.Log
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.launch
 import com.reverie.paint.R
 import com.reverie.paint.model.*
 import java.io.BufferedReader
@@ -158,15 +160,10 @@ internal fun PaintViewModel.handle3DGesture(deltaX: Float, deltaY: Float) {
 }
 
 /**
- * 更新 3D 状态并即时刷新预览位图
+ * 更新 3D 状态 (仅更新轻量内存模型，驱动视口硬件 Canvas 120Hz 实时重绘)
  */
 internal fun PaintViewModel.update3DState(updated: Model3DState) {
     active3DLayers = active3DLayers + (updated.layerId to updated)
-    // 异步快速离屏渲染预览 (保持 120Hz 手势流畅度)
-    val mesh = getMeshForState(updated)
-    val w = docWidth.coerceIn(256, 2048)
-    val h = docHeight.coerceIn(256, 2048)
-    live3DPreviewBitmap = gl3dRenderer.renderToBitmap(mesh, updated, w, h, live3DPreviewBitmap)
 }
 
 /**
@@ -199,25 +196,27 @@ internal fun PaintViewModel.set3DRenderMode(mode: RenderMode3D) {
 }
 
 /**
- * 将 3D 离屏渲染烘焙结果写回底层 Krita 颜料图层 (持久化位图保证无缝展示与导出)
+ * 异步将 3D 烘焙结果写回底层 Krita 颜料图层 (在工作线程渲染，彻底杜绝主线程阻塞)
  */
 internal fun PaintViewModel.commit3DLayerPixels(layerId: Long) {
     val state = active3DLayers[layerId] ?: return
     val layerIdx = layers.indexOfFirst { it.id == layerId }
     if (layerIdx < 0) return
 
-    val mesh = getMeshForState(state)
-    val w = docWidth.coerceAtLeast(1)
-    val h = docHeight.coerceAtLeast(1)
+    viewModelScope.launch(kotlinx.coroutines.Dispatchers.Default) {
+        val mesh = getMeshForState(state)
+        val w = docWidth.coerceAtLeast(1)
+        val h = docHeight.coerceAtLeast(1)
 
-    val rendered = gl3dRenderer.renderToBitmap(mesh, state, w, h) ?: return
-    val stampBmp = ImageImportHelper.swapRedAndBlueForStamp(rendered)
+        val rendered = gl3dRenderer.renderToBitmap(mesh, state, w, h) ?: return@launch
+        val stampBmp = ImageImportHelper.swapRedAndBlueForStamp(rendered)
 
-    runCore(render = true, after = {
-        notifyLayerChanged()
-    }) {
-        ReverieCoreBridge.clearLayer(layerIdx)
-        ReverieCoreBridge.stampBitmap(0, 0, stampBmp)
+        runCore(render = true, after = {
+            notifyLayerChanged()
+        }) {
+            ReverieCoreBridge.clearLayer(layerIdx)
+            ReverieCoreBridge.stampBitmap(0, 0, stampBmp)
+        }
     }
 }
 

@@ -12,6 +12,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -23,19 +24,27 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.reverie.paint.R
 import com.reverie.paint.core.*
 import com.reverie.paint.model.Interaction3DMode
 import com.reverie.paint.model.RenderMode3D
+import com.reverie.paint.ui.components.ReDropdownMenu
+import com.reverie.paint.ui.components.ReDropdownMenuItem
 import com.reverie.paint.ui.theme.Morandi
+import kotlin.math.roundToInt
 
 /**
- * 3D 参考图层专属视口悬浮微型控制条
+ * 手机与平板自适应 3D 参考图层专属视口悬浮微型控制条
+ *
+ * 采用超紧凑胶囊设计，支持全屏自由拖拽吸附，手势操作 1 触即达，次级功能收纳于菜单中，
+ * 彻底消除小屏遮挡与溢出问题。
  */
 @Composable
 fun Floating3DToolbar(
@@ -44,158 +53,203 @@ fun Floating3DToolbar(
 ) {
     val state = vm.currentLayer3DState ?: return
 
+    var offsetX by remember { mutableFloatStateOf(0f) }
+    var offsetY by remember { mutableFloatStateOf(0f) }
+
+    var showStyleMenu by remember { mutableStateOf(false) }
+    var showMoreMenu by remember { mutableStateOf(false) }
+
     AnimatedVisibility(
         visible = vm.isCurrentLayer3D,
         enter = fadeIn() + slideInVertically { it / 2 },
         exit = fadeOut() + slideOutVertically { it / 2 },
-        modifier = modifier,
+        modifier = modifier
+            .offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
+            .pointerInput(Unit) {
+                detectDragGestures { change, dragAmount ->
+                    change.consume()
+                    offsetX += dragAmount.x
+                    offsetY += dragAmount.y
+                }
+            },
     ) {
         Box(
             modifier = Modifier
-                .shadow(8.dp, RoundedCornerShape(24.dp), ambientColor = Color.Black.copy(alpha = 0.15f))
-                .clip(RoundedCornerShape(24.dp))
+                .shadow(10.dp, RoundedCornerShape(22.dp), ambientColor = Color.Black.copy(alpha = 0.2f))
+                .clip(RoundedCornerShape(22.dp))
                 .background(Morandi.panel.copy(alpha = 0.94f))
-                .border(1.dp, Morandi.border.copy(alpha = 0.35f), RoundedCornerShape(24.dp))
-                .padding(horizontal = 8.dp, vertical = 6.dp)
+                .border(1.dp, Morandi.border.copy(alpha = 0.35f), RoundedCornerShape(22.dp))
+                .padding(horizontal = 6.dp, vertical = 4.dp)
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                // 3D 标牌
+                // 3D 拖拽手柄与标识
                 Box(
+                    contentAlignment = Alignment.Center,
                     modifier = Modifier
                         .clip(RoundedCornerShape(12.dp))
-                        .background(Morandi.accent.copy(alpha = 0.18f))
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .background(Morandi.accent.copy(alpha = 0.16f))
+                        .padding(horizontal = 7.dp, vertical = 5.dp)
                 ) {
                     Text(
-                        text = stringResource(R.string.layer_3d_tag),
+                        text = "3D",
                         color = Morandi.accent,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp,
                     )
                 }
 
                 Spacer(modifier = Modifier.width(2.dp))
 
-                // 1. 手势操作模式切换 (旋转 / 平移 / 打光)
-                ToolbarModeButton(
+                // 1. 核心手势模式 (旋转 / 平移 / 打光)
+                CompactModeIconButton(
                     icon = R.drawable.ic_rotate_cw,
-                    label = stringResource(R.string.layer_3d_mode_rotate),
+                    tooltip = stringResource(R.string.layer_3d_mode_rotate),
                     active = vm.active3DInteractionMode == Interaction3DMode.ROTATE,
                     onClick = { vm.active3DInteractionMode = Interaction3DMode.ROTATE },
                 )
-                ToolbarModeButton(
+                CompactModeIconButton(
                     icon = R.drawable.ic_move,
-                    label = stringResource(R.string.layer_3d_mode_pan),
+                    tooltip = stringResource(R.string.layer_3d_mode_pan),
                     active = vm.active3DInteractionMode == Interaction3DMode.PAN,
                     onClick = { vm.active3DInteractionMode = Interaction3DMode.PAN },
                 )
-                ToolbarModeButton(
+                CompactModeIconButton(
                     icon = R.drawable.ic_sun,
-                    label = stringResource(R.string.layer_3d_mode_light),
+                    tooltip = stringResource(R.string.layer_3d_mode_light),
                     active = vm.active3DInteractionMode == Interaction3DMode.LIGHT,
                     onClick = { vm.active3DInteractionMode = Interaction3DMode.LIGHT },
                 )
 
-                // 竖直分割线
+                // 竖向细微分割线
                 Box(
                     modifier = Modifier
-                        .height(20.dp)
+                        .height(18.dp)
                         .width(1.dp)
                         .background(Morandi.border.copy(alpha = 0.4f))
-                        .padding(horizontal = 2.dp)
+                        .padding(horizontal = 1.dp)
                 )
 
-                // 2. 着色风格切换 (素模 / 光影 / 线框)
-                ToolbarModeButton(
-                    icon = R.drawable.ic_circle,
-                    label = stringResource(R.string.layer_3d_style_clay),
-                    active = state.renderMode == RenderMode3D.CLAY,
-                    onClick = { vm.set3DRenderMode(RenderMode3D.CLAY) },
-                )
-                ToolbarModeButton(
-                    icon = R.drawable.ic_contrast,
-                    label = stringResource(R.string.layer_3d_style_shading),
-                    active = state.renderMode == RenderMode3D.SHADING,
-                    onClick = { vm.set3DRenderMode(RenderMode3D.SHADING) },
-                )
-                ToolbarModeButton(
-                    icon = R.drawable.ic_grid,
-                    label = stringResource(R.string.layer_3d_style_wireframe),
-                    active = state.renderMode == RenderMode3D.WIREFRAME,
-                    onClick = { vm.set3DRenderMode(RenderMode3D.WIREFRAME) },
-                )
+                // 2. 着色风格下拉菜单
+                Box {
+                    val currentStyleIcon = when (state.renderMode) {
+                        RenderMode3D.CLAY -> R.drawable.ic_circle
+                        RenderMode3D.SHADING -> R.drawable.ic_contrast
+                        RenderMode3D.WIREFRAME -> R.drawable.ic_grid
+                    }
+                    CompactModeIconButton(
+                        icon = currentStyleIcon,
+                        tooltip = stringResource(R.string.layer_3d_style_clay),
+                        active = showStyleMenu,
+                        onClick = { showStyleMenu = true },
+                    )
 
-                // 竖直分割线
-                Box(
-                    modifier = Modifier
-                        .height(20.dp)
-                        .width(1.dp)
-                        .background(Morandi.border.copy(alpha = 0.4f))
-                        .padding(horizontal = 2.dp)
-                )
+                    ReDropdownMenu(
+                        expanded = showStyleMenu,
+                        onDismissRequest = { showStyleMenu = false },
+                        modifier = Modifier.width(150.dp),
+                    ) {
+                        ReDropdownMenuItem(
+                            text = stringResource(R.string.layer_3d_style_clay),
+                            icon = R.drawable.ic_circle,
+                            selected = state.renderMode == RenderMode3D.CLAY,
+                            onClick = {
+                                showStyleMenu = false
+                                vm.set3DRenderMode(RenderMode3D.CLAY)
+                            },
+                        )
+                        ReDropdownMenuItem(
+                            text = stringResource(R.string.layer_3d_style_shading),
+                            icon = R.drawable.ic_contrast,
+                            selected = state.renderMode == RenderMode3D.SHADING,
+                            onClick = {
+                                showStyleMenu = false
+                                vm.set3DRenderMode(RenderMode3D.SHADING)
+                            },
+                        )
+                        ReDropdownMenuItem(
+                            text = stringResource(R.string.layer_3d_style_wireframe),
+                            icon = R.drawable.ic_grid,
+                            selected = state.renderMode == RenderMode3D.WIREFRAME,
+                            onClick = {
+                                showStyleMenu = false
+                                vm.set3DRenderMode(RenderMode3D.WIREFRAME)
+                            },
+                        )
+                    }
+                }
 
-                // 3. 辅助功能按钮 (复位 / 提取线稿 / 栅格化)
-                ToolbarModeButton(
-                    icon = R.drawable.ic_refresh,
-                    label = stringResource(R.string.layer_3d_mode_reset),
-                    active = false,
-                    onClick = { vm.reset3DView() },
-                )
-                ToolbarModeButton(
-                    icon = R.drawable.ic_magicwand,
-                    label = stringResource(R.string.layer_3d_extract_outline),
-                    active = false,
-                    onClick = { vm.extract3DOutlines(state.layerId) },
-                )
-                ToolbarModeButton(
-                    icon = R.drawable.ic_layers,
-                    label = stringResource(R.string.layer_3d_rasterize),
-                    active = false,
-                    onClick = { vm.rasterize3DLayer(state.layerId) },
-                )
+                // 3. 更多功能下拉菜单 (复位 / 提取线稿 / 栅格化)
+                Box {
+                    CompactModeIconButton(
+                        icon = R.drawable.ic_dots_vertical,
+                        tooltip = stringResource(R.string.common_more),
+                        active = showMoreMenu,
+                        onClick = { showMoreMenu = true },
+                    )
+
+                    ReDropdownMenu(
+                        expanded = showMoreMenu,
+                        onDismissRequest = { showMoreMenu = false },
+                        modifier = Modifier.width(160.dp),
+                    ) {
+                        ReDropdownMenuItem(
+                            text = stringResource(R.string.layer_3d_mode_reset),
+                            icon = R.drawable.ic_refresh,
+                            onClick = {
+                                showMoreMenu = false
+                                vm.reset3DView()
+                            },
+                        )
+                        ReDropdownMenuItem(
+                            text = stringResource(R.string.layer_3d_extract_outline),
+                            icon = R.drawable.ic_magicwand,
+                            onClick = {
+                                showMoreMenu = false
+                                vm.extract3DOutlines(state.layerId)
+                            },
+                        )
+                        ReDropdownMenuItem(
+                            text = stringResource(R.string.layer_3d_rasterize),
+                            icon = R.drawable.ic_layers,
+                            onClick = {
+                                showMoreMenu = false
+                                vm.rasterize3DLayer(state.layerId)
+                            },
+                        )
+                    }
+                }
             }
         }
     }
 }
 
 @Composable
-private fun ToolbarModeButton(
-    resId: Int? = null,
+private fun CompactModeIconButton(
     icon: Int,
-    label: String,
+    tooltip: String,
     active: Boolean,
     onClick: () -> Unit,
 ) {
-    val bg = if (active) Morandi.accent.copy(alpha = 0.18f) else Color.Transparent
-    val tint = if (active) Morandi.accent else Morandi.subText
+    val bg = if (active) Morandi.accent.copy(alpha = 0.22f) else Color.Transparent
+    val tint = if (active) Morandi.accent else Morandi.icon
 
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
-            .clip(RoundedCornerShape(16.dp))
+            .size(36.dp)
+            .clip(CircleShape)
             .background(bg)
             .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 6.dp)
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Icon(
-                painter = painterResource(icon),
-                contentDescription = label,
-                tint = tint,
-                modifier = Modifier.size(16.dp),
-            )
-            Text(
-                text = label,
-                color = tint,
-                fontSize = 11.sp,
-                fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
-            )
-        }
+        Icon(
+            painter = painterResource(icon),
+            contentDescription = tooltip,
+            tint = tint,
+            modifier = Modifier.size(18.dp),
+        )
     }
 }

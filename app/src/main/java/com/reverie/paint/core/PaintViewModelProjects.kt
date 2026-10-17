@@ -132,6 +132,10 @@ internal fun PaintViewModel.saveProject(
             if (autoSaveTmp.exists()) {
                 autoSaveTmp.delete()
             }
+            val cur3DLayer = layers.getOrNull(currentLayerIndex)
+            if (cur3DLayer != null && active3DLayers.containsKey(cur3DLayer.id)) {
+                ensure3DLayerClearedInCore(cur3DLayer.id)
+            }
             refreshProjects()
             maybeAutoBackup()
             onComplete?.invoke()
@@ -1175,6 +1179,10 @@ internal fun PaintViewModel.exportDocument(
             }
         }
         mainHandler.post {
+            val cur3DLayer = layers.getOrNull(currentLayerIndex)
+            if (cur3DLayer != null && active3DLayers.containsKey(cur3DLayer.id)) {
+                ensure3DLayerClearedInCore(cur3DLayer.id)
+            }
             if (ok && targetFile.exists() && targetFile.length() > 0) {
                 onSuccess(targetFile)
             } else {

@@ -179,7 +179,6 @@ internal fun PaintViewModel.zoom3DModel(scaleRatio: Float) {
     val newZoom = (state.zoom * scaleRatio).coerceIn(0.1f, 10.0f)
     val updated = state.copy(zoom = newZoom)
     update3DState(updated)
-    commit3DLayerPixels(updated.layerId)
 }
 
 /**
@@ -189,7 +188,6 @@ internal fun PaintViewModel.reset3DZoom() {
     val state = currentLayer3DState ?: return
     val updated = state.copy(zoom = 1.0f)
     update3DState(updated)
-    commit3DLayerPixels(updated.layerId)
 }
 
 /**
@@ -215,7 +213,6 @@ internal fun PaintViewModel.reset3DView() {
         lightPitch = 35f,
     )
     update3DState(reset)
-    commit3DLayerPixels(reset.layerId)
 }
 
 /**
@@ -225,7 +222,6 @@ internal fun PaintViewModel.set3DRenderMode(mode: RenderMode3D) {
     val state = currentLayer3DState ?: return
     val updated = state.copy(renderMode = mode)
     update3DState(updated)
-    commit3DLayerPixels(updated.layerId)
 }
 
 /**

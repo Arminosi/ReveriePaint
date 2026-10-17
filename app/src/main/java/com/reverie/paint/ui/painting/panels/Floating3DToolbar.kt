@@ -133,7 +133,44 @@ fun Floating3DToolbar(
                         .padding(horizontal = 1.dp)
                 )
 
-                // 2. 着色风格下拉菜单
+                // 2. 缩放快捷调节微组件
+                CompactModeIconButton(
+                    icon = R.drawable.ic_minus,
+                    tooltip = stringResource(R.string.layer_3d_zoom_out),
+                    active = false,
+                    onClick = { vm.zoom3DModel(1f / 1.15f) },
+                )
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable { vm.reset3DZoom() }
+                        .padding(horizontal = 3.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = "${(state.zoom * 100).roundToInt()}%",
+                        color = Morandi.text,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+                CompactModeIconButton(
+                    icon = R.drawable.ic_plus,
+                    tooltip = stringResource(R.string.layer_3d_zoom_in),
+                    active = false,
+                    onClick = { vm.zoom3DModel(1.15f) },
+                )
+
+                // 竖向细微分割线
+                Box(
+                    modifier = Modifier
+                        .height(18.dp)
+                        .width(1.dp)
+                        .background(Morandi.border.copy(alpha = 0.4f))
+                        .padding(horizontal = 1.dp)
+                )
+
+                // 3. 着色风格下拉菜单
                 Box {
                     val currentStyleIcon = when (state.renderMode) {
                         RenderMode3D.CLAY -> R.drawable.ic_circle
@@ -240,7 +277,7 @@ private fun CompactModeIconButton(
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
-            .size(36.dp)
+            .size(32.dp)
             .clip(CircleShape)
             .background(bg)
             .clickable(onClick = onClick)
@@ -249,7 +286,7 @@ private fun CompactModeIconButton(
             painter = painterResource(icon),
             contentDescription = tooltip,
             tint = tint,
-            modifier = Modifier.size(18.dp),
+            modifier = Modifier.size(16.dp),
         )
     }
 }

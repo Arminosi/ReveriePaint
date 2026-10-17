@@ -37,6 +37,7 @@ class Canvas3DDrawer {
 
     private var triangleOrder = IntArray(1024)
     private var triangleDepths = FloatArray(1024)
+    private var triangleIsFront = BooleanArray(1024)
 
     private fun ensureCapacity(vertCount: Int, lineCount: Int, triCount: Int) {
         if (screenX.size < vertCount) {
@@ -53,6 +54,7 @@ class Canvas3DDrawer {
             val newCap = maxOf(triCount * 2, 1024)
             triangleOrder = IntArray(newCap)
             triangleDepths = FloatArray(newCap)
+            triangleIsFront = BooleanArray(newCap)
         }
     }
 
@@ -120,24 +122,75 @@ class Canvas3DDrawer {
 
         when (state.renderMode) {
             RenderMode3D.WIREFRAME -> {
+                val indices = mesh.indices
+                val edgeTris = mesh.wireframeEdgeTriangles
+
+                // 标记正面朝向的三角形并收集深度
+                var visibleCount = 0
+                for (t in 0 until triCount) {
+                    val i0 = indices[t * 3]
+                    val i1 = indices[t * 3 + 1]
+                    val i2 = indices[t * 3 + 2]
+
+                    val x0 = screenX[i0]; val y0 = screenY[i0]
+                    val x1 = screenX[i1]; val y1 = screenY[i1]
+                    val x2 = screenX[i2]; val y2 = screenY[i2]
+
+                    val cross = (x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0)
+                    val isFront = cross < 0f
+                    triangleIsFront[t] = isFront
+                    if (isFront) {
+                        triangleOrder[visibleCount] = t
+                        triangleDepths[visibleCount] = (depthZ[i0] + depthZ[i1] + depthZ[i2]) * 0.3333f
+                        visibleCount++
+                    }
+                }
+                sortTriangles(visibleCount)
+
+                // 1. 实心浅色底面遮挡背面杂线 (形成纯净易辨的实体参考)
+                fillPaint.color = 0xFFF5F6F8.toInt()
+                for (k in 0 until visibleCount) {
+                    val t = triangleOrder[k]
+                    val i0 = indices[t * 3]
+                    val i1 = indices[t * 3 + 1]
+                    val i2 = indices[t * 3 + 2]
+
+                    triPath.rewind()
+                    triPath.moveTo(screenX[i0], screenY[i0])
+                    triPath.lineTo(screenX[i1], screenY[i1])
+                    triPath.lineTo(screenX[i2], screenY[i2])
+                    triPath.close()
+                    canvas.drawPath(triPath, fillPaint)
+                }
+
+                // 2. 筛选并绘制正面特征结构线段
                 wirePaint.color = (state.wireframeColor or 0xFF000000L).toInt()
                 var pIdx = 0
                 val wireIndices = mesh.wireframeIndices
                 for (k in 0 until lineCount) {
-                    val i1 = wireIndices[k * 2]
-                    val i2 = wireIndices[k * 2 + 1]
-                    linePts[pIdx++] = screenX[i1]
-                    linePts[pIdx++] = screenY[i1]
-                    linePts[pIdx++] = screenX[i2]
-                    linePts[pIdx++] = screenY[i2]
+                    val t0 = if (k * 2 < edgeTris.size) edgeTris[k * 2] else -1
+                    val t1 = if (k * 2 + 1 < edgeTris.size) edgeTris[k * 2 + 1] else -1
+                    val isVisible = (t0 >= 0 && triangleIsFront[t0]) || (t1 >= 0 && triangleIsFront[t1]) || (t0 < 0 && t1 < 0)
+
+                    if (isVisible) {
+                        val i1 = wireIndices[k * 2]
+                        val i2 = wireIndices[k * 2 + 1]
+                        linePts[pIdx++] = screenX[i1]
+                        linePts[pIdx++] = screenY[i1]
+                        linePts[pIdx++] = screenX[i2]
+                        linePts[pIdx++] = screenY[i2]
+                    }
                 }
-                canvas.drawLines(linePts, 0, pIdx, wirePaint)
+                if (pIdx > 0) {
+                    canvas.drawLines(linePts, 0, pIdx, wirePaint)
+                }
             }
 
             RenderMode3D.CLAY, RenderMode3D.SHADING -> {
                 val indices = mesh.indices
                 val normals = mesh.normals
                 val hasNormals = normals.isNotEmpty()
+                val isSphere = (state.modelType == "sphere" && hasNormals)
 
                 // 背面剔除与深度排序收集
                 var visibleCount = 0
@@ -170,7 +223,8 @@ class Canvas3DDrawer {
                     val i2 = indices[t * 3 + 2]
 
                     var nx = 0f; var ny = 0f; var nz = 1f
-                    if (hasNormals && i0 * 3 + 2 < normals.size) {
+
+                    if (isSphere && i0 * 3 + 2 < normals.size) {
                         val rawNx = (normals[i0 * 3] + normals[i1 * 3] + normals[i2 * 3]) * 0.3333f
                         val rawNy = (normals[i0 * 3 + 1] + normals[i1 * 3 + 1] + normals[i2 * 3 + 1]) * 0.3333f
                         val rawNz = (normals[i0 * 3 + 2] + normals[i1 * 3 + 2] + normals[i2 * 3 + 2]) * 0.3333f
@@ -180,6 +234,26 @@ class Canvas3DDrawer {
                         nz = nm2 * rawNx + nm6 * rawNy + nm10 * rawNz
                         val len = hypot(hypot(nx, ny), nz).coerceAtLeast(1e-6f)
                         nx /= len; ny /= len; nz /= len
+                    } else {
+                        // 真实几何三角面法线 (硬朗分面，消除平滑模糊)
+                        val p0x = positions[i0 * 3]; val p0y = positions[i0 * 3 + 1]; val p0z = positions[i0 * 3 + 2]
+                        val p1x = positions[i1 * 3]; val p1y = positions[i1 * 3 + 1]; val p1z = positions[i1 * 3 + 2]
+                        val p2x = positions[i2 * 3]; val p2y = positions[i2 * 3 + 1]; val p2z = positions[i2 * 3 + 2]
+
+                        val e1x = p1x - p0x; val e1y = p1y - p0y; val e1z = p1z - p0z
+                        val e2x = p2x - p0x; val e2y = p2y - p0y; val e2z = p2z - p0z
+
+                        var rawNx = e1y * e2z - e1z * e2y
+                        var rawNy = e1z * e2x - e1x * e2z
+                        var rawNz = e1x * e2y - e1y * e2x
+                        val rlen = hypot(hypot(rawNx, rawNy), rawNz).coerceAtLeast(1e-6f)
+                        rawNx /= rlen; rawNy /= rlen; rawNz /= rlen
+
+                        nx = nm0 * rawNx + nm4 * rawNy + nm8 * rawNz
+                        ny = nm1 * rawNx + nm5 * rawNy + nm9 * rawNz
+                        nz = nm2 * rawNx + nm6 * rawNy + nm10 * rawNz
+                        val nlen = hypot(hypot(nx, ny), nz).coerceAtLeast(1e-6f)
+                        nx /= nlen; ny /= nlen; nz /= nlen
                     }
 
                     val color = if (state.renderMode == RenderMode3D.CLAY) {

@@ -230,6 +230,10 @@ class CanvasTouchView(context: Context) : View(context) {
     // 3D 参考图层交互状态
     private var touch3DStartX = 0f
     private var touch3DStartY = 0f
+    private var touch3DIsPinch = false
+    private var touch3DPinchDist = 0f
+    private var touch3DMidX = 0f
+    private var touch3DMidY = 0f
     private val canvas3DDrawer = com.reverie.paint.core.gl3d.Canvas3DDrawer()
 
     // 触控交互锁 (手指接触期间，阻止外部 Compose 状态回冲覆盖)
@@ -3905,37 +3909,85 @@ class CanvasTouchView(context: Context) : View(context) {
         }
 
         // =========================================================
-        // 3D 参考图层手势交互 (单指/笔拖拽调整视角/位置/打光；双指保留视口变换)
+        // 3D 参考图层手势交互 (单指/笔旋转或选定模式，双指自由缩放平移)
         // =========================================================
         if (v.isCurrentLayer3D) {
-            if (fingerCount >= 2 || isTransformActive) {
-                if (v.isInteracting3D) {
-                    v.isInteracting3D = false
-                    v.currentLayer3DState?.let { v.commit3DLayerPixels(it.layerId) }
-                }
-            } else {
-                val pIdx = if (isStylusTouch) stylusPointerIndex else (if (fingerCount > 0) fingerIndices[0] else 0)
-                val curX = event.getX(pIdx)
-                val curY = event.getY(pIdx)
-
+            val state = v.currentLayer3DState
+            if (state != null) {
                 when (event.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> {
-                        touch3DStartX = curX
-                        touch3DStartY = curY
+                    MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
                         v.isInteracting3D = true
+                        if (fingerCount >= 2) {
+                            touch3DIsPinch = true
+                            val idx0 = fingerIndices[0]
+                            val idx1 = fingerIndices[1]
+                            val x0 = event.getX(idx0); val y0 = event.getY(idx0)
+                            val x1 = event.getX(idx1); val y1 = event.getY(idx1)
+                            touch3DPinchDist = hypot(x1 - x0, y1 - y0).coerceAtLeast(10f)
+                            touch3DMidX = (x0 + x1) * 0.5f
+                            touch3DMidY = (y0 + y1) * 0.5f
+                        } else {
+                            touch3DIsPinch = false
+                            val pIdx = if (isStylusTouch) stylusPointerIndex else (if (fingerCount > 0) fingerIndices[0] else 0)
+                            touch3DStartX = event.getX(pIdx)
+                            touch3DStartY = event.getY(pIdx)
+                        }
                     }
                     MotionEvent.ACTION_MOVE -> {
-                        val dx = curX - touch3DStartX
-                        val dy = curY - touch3DStartY
-                        touch3DStartX = curX
-                        touch3DStartY = curY
-                        v.handle3DGesture(dx, dy)
-                        invalidate()
+                        if (touch3DIsPinch && fingerCount >= 2) {
+                            val idx0 = fingerIndices[0]
+                            val idx1 = fingerIndices[1]
+                            val x0 = event.getX(idx0); val y0 = event.getY(idx0)
+                            val x1 = event.getX(idx1); val y1 = event.getY(idx1)
+                            val curDist = hypot(x1 - x0, y1 - y0).coerceAtLeast(10f)
+                            val curMidX = (x0 + x1) * 0.5f
+                            val curMidY = (y0 + y1) * 0.5f
+
+                            val scaleFactor = curDist / touch3DPinchDist
+                            val midDx = curMidX - touch3DMidX
+                            val midDy = curMidY - touch3DMidY
+
+                            touch3DPinchDist = curDist
+                            touch3DMidX = curMidX
+                            touch3DMidY = curMidY
+
+                            val panSensitivity = 0.0035f / state.zoom.coerceAtLeast(0.1f)
+                            val newZoom = (state.zoom * scaleFactor).coerceIn(0.1f, 10.0f)
+                            val newPanX = (state.panX + midDx * panSensitivity).coerceIn(-5.0f, 5.0f)
+                            val newPanY = (state.panY - midDy * panSensitivity).coerceIn(-5.0f, 5.0f)
+
+                            val updated = state.copy(zoom = newZoom, panX = newPanX, panY = newPanY)
+                            v.update3DState(updated)
+                            invalidate()
+                        } else if (!touch3DIsPinch) {
+                            val pIdx = if (isStylusTouch) stylusPointerIndex else (if (fingerCount > 0) fingerIndices[0] else 0)
+                            val curX = event.getX(pIdx)
+                            val curY = event.getY(pIdx)
+                            val dx = curX - touch3DStartX
+                            val dy = curY - touch3DStartY
+                            touch3DStartX = curX
+                            touch3DStartY = curY
+                            v.handle3DGesture(dx, dy)
+                            invalidate()
+                        }
                     }
                     MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        touch3DIsPinch = false
                         v.isInteracting3D = false
-                        v.currentLayer3DState?.let { v.commit3DLayerPixels(it.layerId) }
+                        v.commit3DLayerPixels(state.layerId)
                         invalidate()
+                    }
+                    MotionEvent.ACTION_POINTER_UP -> {
+                        if (fingerCount <= 2) {
+                            touch3DIsPinch = false
+                            val remainingIdx = if (event.actionIndex == fingerIndices[0]) {
+                                if (fingerCount > 1) fingerIndices[1] else 0
+                            } else {
+                                fingerIndices[0]
+                            }
+                            touch3DStartX = event.getX(remainingIdx)
+                            touch3DStartY = event.getY(remainingIdx)
+                        }
                     }
                 }
                 return true

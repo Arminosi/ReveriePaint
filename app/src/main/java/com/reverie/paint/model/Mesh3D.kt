@@ -15,12 +15,47 @@ class Mesh3D(
     val normals: FloatArray,          // [nx0, ny0, nz0, nx1, ny1, nz1, ...]
     val indices: IntArray,            // 三角形顶点索引
     val wireframeIndices: IntArray,   // 线框线段顶点对索引 [e0_a, e0_b, e1_a, e1_b, ...]
+    val wireframeEdgeTriangles: IntArray = computeEdgeTriangles(indices, wireframeIndices),
 ) {
     val vertexCount: Int get() = positions.size / 3
     val triangleCount: Int get() = indices.size / 3
     val wireframeLineCount: Int get() = wireframeIndices.size / 2
 
     companion object {
+
+        /**
+         * 预计算每条线框线段对应的邻接三角面索引 (最多关联 2 个三角面，用于正面边缘剔除)
+         */
+        fun computeEdgeTriangles(triangleIndices: IntArray, wireIndices: IntArray): IntArray {
+            val lineCount = wireIndices.size / 2
+            val result = IntArray(lineCount * 2) { -1 }
+            val triCount = triangleIndices.size / 3
+
+            for (k in 0 until lineCount) {
+                val e0 = wireIndices[k * 2]
+                val e1 = wireIndices[k * 2 + 1]
+                var found = 0
+
+                for (t in 0 until triCount) {
+                    val a = triangleIndices[t * 3]
+                    val b = triangleIndices[t * 3 + 1]
+                    val c = triangleIndices[t * 3 + 2]
+
+                    val hasE0 = (a == e0 || b == e0 || c == e0)
+                    val hasE1 = (a == e1 || b == e1 || c == e1)
+                    if (hasE0 && hasE1) {
+                        if (found == 0) {
+                            result[k * 2] = t
+                            found = 1
+                        } else {
+                            result[k * 2 + 1] = t
+                            break
+                        }
+                    }
+                }
+            }
+            return result
+        }
 
         /**
          * 提取三角形网格中不重复的边缘线段，构造线框索引
@@ -156,10 +191,36 @@ class Mesh3D(
                 }
             }
 
+            // 结构线框：纯净的主经纬圆环 (赤道、±45° 纬线、4 条主要子午线)，不含任何杂乱对角线
+            val wireList = ArrayList<Int>()
+            val stride = slices + 1
+
+            // 纬线圈：赤道与上下两条纬线圈
+            val keyStacks = intArrayOf(stacks / 4, stacks / 2, (stacks * 3) / 4)
+            for (st in keyStacks) {
+                for (j in 0 until slices) {
+                    val v1 = st * stride + j
+                    val v2 = st * stride + (j + 1)
+                    wireList.add(v1)
+                    wireList.add(v2)
+                }
+            }
+
+            // 4 条主要子午线：0°, 90°, 180°, 270°
+            val keySlices = intArrayOf(0, slices / 4, slices / 2, (slices * 3) / 4)
+            for (sl in keySlices) {
+                for (i in 0 until stacks) {
+                    val v1 = i * stride + sl
+                    val v2 = (i + 1) * stride + sl
+                    wireList.add(v1)
+                    wireList.add(v2)
+                }
+            }
+
             val pArray = positions.toFloatArray()
             val nArray = normals.toFloatArray()
             val iArray = indices.toIntArray()
-            val wArray = extractWireframeIndices(iArray)
+            val wArray = wireList.toIntArray()
             return Mesh3D(pArray, nArray, iArray, wArray)
         }
 
@@ -172,7 +233,7 @@ class Mesh3D(
             val indices = ArrayList<Int>()
             val halfH = height * 0.5f
 
-            // 侧面
+            // 侧面顶点 (上圈与下圈)
             for (j in 0..slices) {
                 val theta = (2.0 * PI * j / slices).toFloat()
                 val nx = sin(theta)
@@ -199,10 +260,44 @@ class Mesh3D(
                 indices.add(bot1); indices.add(bot2); indices.add(top2)
             }
 
+            // 顶盖与底盖中心点
+            val topCenterIdx = positions.size / 3
+            positions.add(0f); positions.add(halfH); positions.add(0f)
+            normals.add(0f); normals.add(1f); normals.add(0f)
+
+            val botCenterIdx = positions.size / 3
+            positions.add(0f); positions.add(-halfH); positions.add(0f)
+            normals.add(0f); normals.add(-1f); normals.add(0f)
+
+            // 顶底面三角形
+            for (j in 0 until slices) {
+                val top1 = j * 2
+                val top2 = (j + 1) * 2
+                indices.add(topCenterIdx); indices.add(top2); indices.add(top1)
+
+                val bot1 = j * 2 + 1
+                val bot2 = (j + 1) * 2 + 1
+                indices.add(botCenterIdx); indices.add(bot1); indices.add(bot2)
+            }
+
+            // 结构线框：顶圈、底圈与 4 根主母线，完全去除对角交叉杂线
+            val wireList = ArrayList<Int>()
+            for (j in 0 until slices) {
+                wireList.add(j * 2)
+                wireList.add((j + 1) * 2)
+                wireList.add(j * 2 + 1)
+                wireList.add((j + 1) * 2 + 1)
+            }
+            val keySlices = intArrayOf(0, slices / 4, slices / 2, (slices * 3) / 4)
+            for (sl in keySlices) {
+                wireList.add(sl * 2)
+                wireList.add(sl * 2 + 1)
+            }
+
             val pArray = positions.toFloatArray()
             val nArray = normals.toFloatArray()
             val iArray = indices.toIntArray()
-            val wArray = extractWireframeIndices(iArray)
+            val wArray = wireList.toIntArray()
             return Mesh3D(pArray, nArray, iArray, wArray)
         }
 
@@ -312,7 +407,30 @@ class Mesh3D(
                 normals[i * 3 + 2] = nz / len
             }
 
-            val wire = extractWireframeIndices(rawTriangles)
+            // 头部解剖与体块关键结构基准线 (严谨定义三庭五眼与面部折面，消除网格对角线杂乱)
+            val wire = intArrayOf(
+                // 头部中轴线 (三庭五眼主线)
+                0, 5,   5, 10,   10, 15,   15, 16,   16, 19,   19, 20,   20, 23,   23, 28,
+                // 额头发际线与头顶轮廓
+                1, 3,   3, 5,    5, 4,     4, 2,     0, 1,     0, 2,
+                // 眉弓横线 (左右贯通)
+                6, 8,   8, 10,   10, 9,    9, 7,
+                // 眼眶与颧骨结构
+                8, 13,  13, 11,  9, 14,    14, 12,   10, 13,   10, 14,
+                11, 6,  12, 7,
+                // 鼻梁与鼻部体块
+                13, 17, 14, 18,  15, 17,   15, 18,   17, 16,   18, 16,
+                // 嘴唇轮廓与嘴角
+                21, 19, 19, 22,  21, 20,   20, 22,   17, 21,   18, 22,
+                // 下颌与下巴 (下颌骨边缘)
+                26, 24, 24, 23,  23, 25,   25, 27,
+                26, 21, 27, 22,  21, 24,   22, 25,
+                // 侧脸与耳前垂直分界
+                6, 26,  7, 27,   11, 26,   12, 27,
+                // 颈部与后脑轮廓
+                24, 28, 25, 28,  26, 30,   27, 30,   28, 30,
+                1, 29,  2, 29,   29, 30,   0, 29
+            )
             return Mesh3D(v, normals, rawTriangles, wire)
         }
 

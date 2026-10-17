@@ -113,4 +113,34 @@ class Model3DTest {
         assertEquals(4, mesh.triangleCount)
         assertTrue(mesh.wireframeLineCount >= 6)
     }
+
+    @Test
+    fun `Mesh3D cylinder and sphere produce clean wireframe without diagonal clutter`() {
+        val cyl = Mesh3D.createCylinder()
+        assertTrue(cyl.triangleCount > 0)
+        assertTrue(cyl.wireframeLineCount > 0)
+        assertEquals(cyl.wireframeLineCount * 2, cyl.wireframeEdgeTriangles.size)
+
+        val sph = Mesh3D.createSphere()
+        assertTrue(sph.triangleCount > 0)
+        assertTrue(sph.wireframeLineCount > 0)
+        assertEquals(sph.wireframeLineCount * 2, sph.wireframeEdgeTriangles.size)
+    }
+
+    @Test
+    fun `computeEdgeTriangles associates wireframe edges with adjacent triangles`() {
+        // Simple quad made of 2 triangles: (0,1,2) and (0,2,3)
+        // Edge 0-2 is shared by both triangles
+        val triIndices = intArrayOf(0, 1, 2,  0, 2, 3)
+        val wireIndices = intArrayOf(0, 2,  1, 2)
+        val edgeTris = Mesh3D.computeEdgeTriangles(triIndices, wireIndices)
+
+        assertEquals(4, edgeTris.size)
+        // Edge 0-2 belongs to tri 0 and tri 1
+        assertEquals(0, edgeTris[0])
+        assertEquals(1, edgeTris[1])
+        // Edge 1-2 belongs to tri 0 only
+        assertEquals(0, edgeTris[2])
+        assertEquals(-1, edgeTris[3])
+    }
 }

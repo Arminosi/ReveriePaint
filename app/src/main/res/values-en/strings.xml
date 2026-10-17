@@ -2800,6 +2800,9 @@
     <string name="layer_3d_model_head">Head Proportions</string>
     <string name="layer_3d_model_head_sub">Facial planes &amp; classical proportions</string>
     <string name="layer_3d_import_obj">Import 3D Model (.obj)</string>
+    <string name="layer_3d_zoom_in">Zoom In</string>
+    <string name="layer_3d_zoom_out">Zoom Out</string>
+    <string name="layer_3d_zoom_reset">Reset Zoom</string>
     <string name="toast_3d_layer_created">3D reference layer created</string>
     <string name="toast_3d_rasterized">3D reference layer rasterized</string>
     <string name="toast_3d_outline_extracted">3D outline extracted to new layer</string>

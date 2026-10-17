@@ -144,9 +144,9 @@ internal fun PaintViewModel.handle3DGesture(deltaX: Float, deltaY: Float) {
             update3DState(updated)
         }
         Interaction3DMode.PAN -> {
-            val factor = 2.0f / docWidth.coerceAtLeast(1)
-            val newPanX = (state.panX + deltaX * factor).coerceIn(-2.5f, 2.5f)
-            val newPanY = (state.panY - deltaY * factor).coerceIn(-2.5f, 2.5f)
+            val factor = 0.0035f / state.zoom.coerceAtLeast(0.1f)
+            val newPanX = (state.panX + deltaX * factor).coerceIn(-5.0f, 5.0f)
+            val newPanY = (state.panY - deltaY * factor).coerceIn(-5.0f, 5.0f)
             val updated = state.copy(panX = newPanX, panY = newPanY)
             update3DState(updated)
         }
@@ -157,6 +157,27 @@ internal fun PaintViewModel.handle3DGesture(deltaX: Float, deltaY: Float) {
             update3DState(updated)
         }
     }
+}
+
+/**
+ * 按比例缩放当前 3D 模型
+ */
+internal fun PaintViewModel.zoom3DModel(scaleRatio: Float) {
+    val state = currentLayer3DState ?: return
+    val newZoom = (state.zoom * scaleRatio).coerceIn(0.1f, 10.0f)
+    val updated = state.copy(zoom = newZoom)
+    update3DState(updated)
+    commit3DLayerPixels(updated.layerId)
+}
+
+/**
+ * 还原当前 3D 模型缩放到 100%
+ */
+internal fun PaintViewModel.reset3DZoom() {
+    val state = currentLayer3DState ?: return
+    val updated = state.copy(zoom = 1.0f)
+    update3DState(updated)
+    commit3DLayerPixels(updated.layerId)
 }
 
 /**

@@ -280,18 +280,52 @@ class Gl3dRenderer {
             mv[8], mv[9], mv[10]
         )
 
-        // 顶点与法线数据 Buffer
-        val posBuf = ByteBuffer.allocateDirect(mesh.positions.size * 4)
-            .order(ByteOrder.nativeOrder()).asFloatBuffer().apply {
-                put(mesh.positions); position(0)
+        // 构造扁平着色数据以消除插值平滑模糊，呈现清晰的面部与体块切面
+        val triCount = mesh.indices.size / 3
+        val flatPositions = FloatArray(triCount * 9)
+        val flatNormals = FloatArray(triCount * 9)
+        val isSphere = (state.modelType == "sphere" && mesh.normals.size == mesh.positions.size)
+
+        for (t in 0 until triCount) {
+            val i0 = mesh.indices[t * 3]
+            val i1 = mesh.indices[t * 3 + 1]
+            val i2 = mesh.indices[t * 3 + 2]
+
+            val p0x = mesh.positions[i0 * 3]; val p0y = mesh.positions[i0 * 3 + 1]; val p0z = mesh.positions[i0 * 3 + 2]
+            val p1x = mesh.positions[i1 * 3]; val p1y = mesh.positions[i1 * 3 + 1]; val p1z = mesh.positions[i1 * 3 + 2]
+            val p2x = mesh.positions[i2 * 3]; val p2y = mesh.positions[i2 * 3 + 1]; val p2z = mesh.positions[i2 * 3 + 2]
+
+            val bIdx = t * 9
+            flatPositions[bIdx] = p0x; flatPositions[bIdx + 1] = p0y; flatPositions[bIdx + 2] = p0z
+            flatPositions[bIdx + 3] = p1x; flatPositions[bIdx + 4] = p1y; flatPositions[bIdx + 5] = p1z
+            flatPositions[bIdx + 6] = p2x; flatPositions[bIdx + 7] = p2y; flatPositions[bIdx + 8] = p2z
+
+            if (isSphere) {
+                flatNormals[bIdx] = mesh.normals[i0 * 3]; flatNormals[bIdx + 1] = mesh.normals[i0 * 3 + 1]; flatNormals[bIdx + 2] = mesh.normals[i0 * 3 + 2]
+                flatNormals[bIdx + 3] = mesh.normals[i1 * 3]; flatNormals[bIdx + 4] = mesh.normals[i1 * 3 + 1]; flatNormals[bIdx + 5] = mesh.normals[i1 * 3 + 2]
+                flatNormals[bIdx + 6] = mesh.normals[i2 * 3]; flatNormals[bIdx + 7] = mesh.normals[i2 * 3 + 1]; flatNormals[bIdx + 8] = mesh.normals[i2 * 3 + 2]
+            } else {
+                val e1x = p1x - p0x; val e1y = p1y - p0y; val e1z = p1z - p0z
+                val e2x = p2x - p0x; val e2y = p2y - p0y; val e2z = p2z - p0z
+                var fnx = e1y * e2z - e1z * e2y
+                var fny = e1z * e2x - e1x * e2z
+                var fnz = e1x * e2y - e1y * e2x
+                val len = kotlin.math.hypot(kotlin.math.hypot(fnx, fny), fnz).coerceAtLeast(1e-6f)
+                fnx /= len; fny /= len; fnz /= len
+
+                flatNormals[bIdx] = fnx; flatNormals[bIdx + 1] = fny; flatNormals[bIdx + 2] = fnz
+                flatNormals[bIdx + 3] = fnx; flatNormals[bIdx + 4] = fny; flatNormals[bIdx + 5] = fnz
+                flatNormals[bIdx + 6] = fnx; flatNormals[bIdx + 7] = fny; flatNormals[bIdx + 8] = fnz
             }
-        val normBuf = ByteBuffer.allocateDirect(mesh.normals.size * 4)
+        }
+
+        val posBuf = ByteBuffer.allocateDirect(flatPositions.size * 4)
             .order(ByteOrder.nativeOrder()).asFloatBuffer().apply {
-                put(mesh.normals); position(0)
+                put(flatPositions); position(0)
             }
-        val idxBuf = ByteBuffer.allocateDirect(mesh.indices.size * 4)
-            .order(ByteOrder.nativeOrder()).asIntBuffer().apply {
-                put(mesh.indices); position(0)
+        val normBuf = ByteBuffer.allocateDirect(flatNormals.size * 4)
+            .order(ByteOrder.nativeOrder()).asFloatBuffer().apply {
+                put(flatNormals); position(0)
             }
 
         // 解析颜色
@@ -319,7 +353,7 @@ class Gl3dRenderer {
                 GLES20.glEnableVertexAttribArray(aNorm)
                 GLES20.glVertexAttribPointer(aNorm, 3, GLES20.GL_FLOAT, false, 0, normBuf)
 
-                GLES20.glDrawElements(GLES20.GL_TRIANGLES, mesh.indices.size, GLES20.GL_UNSIGNED_INT, idxBuf)
+                GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, triCount * 3)
 
                 GLES20.glDisableVertexAttribArray(aPos)
                 GLES20.glDisableVertexAttribArray(aNorm)
@@ -346,38 +380,68 @@ class Gl3dRenderer {
                 GLES20.glEnableVertexAttribArray(aNorm)
                 GLES20.glVertexAttribPointer(aNorm, 3, GLES20.GL_FLOAT, false, 0, normBuf)
 
-                GLES20.glDrawElements(GLES20.GL_TRIANGLES, mesh.indices.size, GLES20.GL_UNSIGNED_INT, idxBuf)
+                GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, triCount * 3)
 
                 GLES20.glDisableVertexAttribArray(aPos)
                 GLES20.glDisableVertexAttribArray(aNorm)
             }
 
             RenderMode3D.WIREFRAME -> {
+                // 1. 先用带深度偏移的正面三角面写入深度缓冲，物理遮挡背面线段
+                GLES20.glUseProgram(clayProgram)
+                val uMVP = GLES20.glGetUniformLocation(clayProgram, "uMVPMatrix")
+                val uNormM = GLES20.glGetUniformLocation(clayProgram, "uNormalMatrix")
+                val uColor = GLES20.glGetUniformLocation(clayProgram, "uBaseColor")
+                val aPos = GLES20.glGetAttribLocation(clayProgram, "aPosition")
+                val aNorm = GLES20.glGetAttribLocation(clayProgram, "aNormal")
+
+                GLES20.glUniformMatrix4fv(uMVP, 1, false, mvp, 0)
+                GLES20.glUniformMatrix3fv(uNormM, 1, false, normalMatrix, 0)
+                GLES20.glUniform4f(uColor, 0.96f, 0.96f, 0.97f, 1.0f)
+
+                GLES20.glEnableVertexAttribArray(aPos)
+                GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 0, posBuf)
+                GLES20.glEnableVertexAttribArray(aNorm)
+                GLES20.glVertexAttribPointer(aNorm, 3, GLES20.GL_FLOAT, false, 0, normBuf)
+
+                GLES20.glEnable(GLES20.GL_POLYGON_OFFSET_FILL)
+                GLES20.glPolygonOffset(1.0f, 1.0f)
+                GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, triCount * 3)
+                GLES20.glDisable(GLES20.GL_POLYGON_OFFSET_FILL)
+
+                GLES20.glDisableVertexAttribArray(aPos)
+                GLES20.glDisableVertexAttribArray(aNorm)
+
+                // 2. 绘制纯净正面特征线框
+                val wirePosBuf = ByteBuffer.allocateDirect(mesh.positions.size * 4)
+                    .order(ByteOrder.nativeOrder()).asFloatBuffer().apply {
+                        put(mesh.positions); position(0)
+                    }
+                val wireBuf = ByteBuffer.allocateDirect(mesh.wireframeIndices.size * 4)
+                    .order(ByteOrder.nativeOrder()).asIntBuffer().apply {
+                        put(mesh.wireframeIndices); position(0)
+                    }
+
                 GLES20.glUseProgram(wireframeProgram)
-                val uMVP = GLES20.glGetUniformLocation(wireframeProgram, "uMVPMatrix")
-                val uColor = GLES20.glGetUniformLocation(wireframeProgram, "uColor")
-                val aPos = GLES20.glGetAttribLocation(wireframeProgram, "aPosition")
+                val wMVP = GLES20.glGetUniformLocation(wireframeProgram, "uMVPMatrix")
+                val wColor = GLES20.glGetUniformLocation(wireframeProgram, "uColor")
+                val wPos = GLES20.glGetAttribLocation(wireframeProgram, "aPosition")
 
                 val wc = state.wireframeColor
                 val wireR = ((wc shr 16) and 0xFF) / 255f
                 val wireG = ((wc shr 8) and 0xFF) / 255f
                 val wireB = (wc and 0xFF) / 255f
 
-                GLES20.glUniformMatrix4fv(uMVP, 1, false, mvp, 0)
-                GLES20.glUniform4f(uColor, wireR, wireG, wireB, 1.0f)
+                GLES20.glUniformMatrix4fv(wMVP, 1, false, mvp, 0)
+                GLES20.glUniform4f(wColor, wireR, wireG, wireB, 1.0f)
 
-                GLES20.glEnableVertexAttribArray(aPos)
-                GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 0, posBuf)
-
-                val wireBuf = ByteBuffer.allocateDirect(mesh.wireframeIndices.size * 4)
-                    .order(ByteOrder.nativeOrder()).asIntBuffer().apply {
-                        put(mesh.wireframeIndices); position(0)
-                    }
+                GLES20.glEnableVertexAttribArray(wPos)
+                GLES20.glVertexAttribPointer(wPos, 3, GLES20.GL_FLOAT, false, 0, wirePosBuf)
 
                 GLES20.glLineWidth(2.5f)
                 GLES20.glDrawElements(GLES20.GL_LINES, mesh.wireframeIndices.size, GLES20.GL_UNSIGNED_INT, wireBuf)
 
-                GLES20.glDisableVertexAttribArray(aPos)
+                GLES20.glDisableVertexAttribArray(wPos)
             }
         }
 

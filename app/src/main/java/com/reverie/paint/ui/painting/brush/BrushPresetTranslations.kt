@@ -563,8 +563,8 @@ object BrushPresetTranslations {
      */
     fun isChineseLanguage(context: Context? = null): Boolean {
         val locale = if (context != null) {
-            val locales = context.resources.configuration.locales
-            if (!locales.isEmpty) locales[0] else Locale.getDefault()
+            val config = context.resources.configuration
+            androidx.core.os.ConfigurationCompat.getLocales(config)[0] ?: Locale.getDefault()
         } else {
             Locale.getDefault()
         }

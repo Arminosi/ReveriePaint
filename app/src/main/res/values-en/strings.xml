@@ -1611,6 +1611,16 @@
     <string name="guide_symmetry_rotation">Rotation Angle</string>
     <string name="guide_symmetry_reset_center">Reset Center</string>
     <string name="guide_perspective_ray_density">Ray Density</string>
+    <string name="guide_perspective_mode_3d">3D Grid</string>
+    <string name="guide_perspective_mode_vanish">Vanishing Rays</string>
+    <string name="guide_perspective_3d_hint">Drag on canvas to rotate 3D view; close panel to lock</string>
+    <string name="guide_perspective_pitch">Pitch</string>
+    <string name="guide_perspective_yaw">Yaw</string>
+    <string name="guide_perspective_roll">Camera Roll</string>
+    <string name="guide_perspective_fov">FOV (Focal)</string>
+    <string name="guide_perspective_grid_div">Grid Density</string>
+    <string name="guide_perspective_ground">Ground</string>
+    <string name="guide_perspective_cube">Guide Cube</string>
     <string name="guide_grid_size">Grid Size</string>
     <string name="guide_line_opacity">Guide Opacity</string>
 

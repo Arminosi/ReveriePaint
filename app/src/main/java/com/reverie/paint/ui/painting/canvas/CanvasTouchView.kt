@@ -1783,6 +1783,7 @@ class CanvasTouchView(context: Context) : View(context) {
                 Offset(firstPt.x + bestDir.x * dot, firstPt.y + bestDir.y * dot)
             }
             GuideMode.PERSPECTIVE -> {
+                if (guide.perspective3d) return currentPt
                 val vps = if (guide.perspectiveVanishingPoints.isEmpty()) {
                     listOf(Point2D(v.docWidth * 0.5f, vm?.docHeight?.toFloat()?.times(0.35f) ?: 350f))
                 } else guide.perspectiveVanishingPoints
@@ -1846,13 +1847,21 @@ class CanvasTouchView(context: Context) : View(context) {
         }
     }
 
-    private var draggingGuideHandleIndex = -1 // -1: none, 100: symmetry center, 101: symmetry rotation, 0..N: VP index
+    private var draggingGuideHandleIndex = -1 // -1: none, 100: symmetry center, 101: symmetry rotation, 200: 3D orbit, 0..N: VP index
+    private var lastOrbitDocPos = Offset.Zero
 
     private fun checkHitGuideHandle(screenPos: Offset): Boolean {
         val v = vm ?: return false
         if (!drawingGuidePanelOpen && !v.drawingGuidePanelOpen) return false
         val guide = v.drawingGuide
         if (guide.mode == GuideMode.PERSPECTIVE) {
+            if (guide.perspective3d) {
+                draggingGuideHandleIndex = 200
+                lastOrbitDocPos = screenToDoc(screenPos)
+                isPendingLongPress = false
+                parent?.requestDisallowInterceptTouchEvent(true)
+                return true
+            }
             val vps = guide.perspectiveVanishingPoints
             var hitVp = -1
             for (i in vps.indices) {
@@ -1899,6 +1908,23 @@ class CanvasTouchView(context: Context) : View(context) {
         val v = vm ?: return false
         val g = v.drawingGuide
         return when (draggingGuideHandleIndex) {
+            200 -> {
+                val dx = docPos.x - lastOrbitDocPos.x
+                val dy = docPos.y - lastOrbitDocPos.y
+                lastOrbitDocPos = docPos
+                val docDim = maxOf(200f, maxOf(v.docWidth, v.docHeight).toFloat())
+                val rotSpeed = 360f / docDim
+                var newYaw = (g.perspectiveYawDeg + dx * rotSpeed) % 360f
+                if (newYaw > 180f) newYaw -= 360f
+                if (newYaw < -180f) newYaw += 360f
+                val newPitch = (g.perspectivePitchDeg - dy * rotSpeed).coerceIn(-85f, 85f)
+                v.drawingGuide = g.copy(
+                    perspectiveYawDeg = newYaw,
+                    perspectivePitchDeg = newPitch,
+                )
+                invalidate()
+                true
+            }
             100 -> {
                 val newX = if (g.symmetryType == SymmetryType.HORIZONTAL && g.symmetryRotationDeg == 0f) g.symmetryCenterX else (docPos.x / v.docWidth).coerceIn(0.05f, 0.95f)
                 val newY = if (g.symmetryType == SymmetryType.VERTICAL && g.symmetryRotationDeg == 0f) g.symmetryCenterY else (docPos.y / v.docHeight).coerceIn(0.05f, 0.95f)
@@ -2926,6 +2952,7 @@ class CanvasTouchView(context: Context) : View(context) {
             val maxExt = maxOf(v.docWidth, v.docHeight).toFloat() * 50f + 500_000f
             when (guide.mode) {
                 GuideMode.PERSPECTIVE -> {
+                    if (guide.perspective3d) return
                     val locked = assistLockedRay
                     val dx = currentStrokeDocPos.x - firstDocPos.x
                     val dy = currentStrokeDocPos.y - firstDocPos.y

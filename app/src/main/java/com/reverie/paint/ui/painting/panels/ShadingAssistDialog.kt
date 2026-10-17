@@ -68,6 +68,7 @@ fun ShadingAssistDialog(
     val coroutineScope = rememberCoroutineScope()
     val config = vm.shadingAssistConfig
     val modelStatus = ShadingModelManager.modelStatus
+    val importFailedMessage = stringResource(R.string.shading_assist_import_failed)
 
     // 本地 .onnx 模型文件选择器
     val filePickerLauncher = rememberLauncherForActivityResult(
@@ -81,7 +82,7 @@ fun ShadingAssistDialog(
                         vm.updateShadingConfig(vm.shadingAssistConfig, reloadLineart = true)
                     },
                     onFailure = {
-                        Toast.makeText(context, it.message ?: context.getString(R.string.shading_assist_import_failed), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, it.message ?: importFailedMessage, Toast.LENGTH_SHORT).show()
                     }
                 )
             }

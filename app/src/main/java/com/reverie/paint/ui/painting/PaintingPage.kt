@@ -818,6 +818,7 @@ fun PaintingPage(
         // BackHandler for Android system back button/gesture: close active panels first, then request exit
         androidx.activity.compose.BackHandler {
             when {
+                vm.shadingAssistDialogOpen -> vm.closeShadingAssist()
                 vm.isQuickShapeEditing -> vm.cancelQuickShape()
                 vm.isCanvasAdjustActive -> vm.exitCanvasAdjustMode()
                 filterController != null -> filterController.cancel()
@@ -1231,6 +1232,10 @@ fun PaintingPage(
                                     }
                                     moreToolsOpen = false
                                 }
+                                Tool.SHADING_ASSIST -> {
+                                    vm.openShadingAssist()
+                                    moreToolsOpen = false
+                                }
                                 else -> {
                                     vm.applyTool(it.id)
                                     if (it in selectionTools) {
@@ -1437,6 +1442,10 @@ fun PaintingPage(
                                         drawingGuidePanelOpen = true
                                         vm.applyTool(Tool.BRUSH.id)
                                     }
+                                    moreToolsOpen = false
+                                }
+                                Tool.SHADING_ASSIST -> {
+                                    vm.openShadingAssist()
                                     moreToolsOpen = false
                                 }
                                 else -> {
@@ -2295,6 +2304,10 @@ fun PaintingPage(
                 tool = tool,
                 onTool = {
                     when (it) {
+                        Tool.SHADING_ASSIST -> {
+                            vm.openShadingAssist()
+                            moreToolsOpen = false
+                        }
                         Tool.REFERENCE -> {
                             vm.referenceWindowOpen = !vm.referenceWindowOpen
                             vm.persistReferenceState()

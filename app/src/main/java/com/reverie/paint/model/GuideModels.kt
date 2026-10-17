@@ -87,7 +87,7 @@ data class DrawingGuideConfig(
     val symmetryCenterY: Float = 0.5f,
     val symmetryRotationDeg: Float = 0f, // 对称轴旋转角度 (度数)
     val perspectiveVanishingPoints: List<Point2D> = emptyList(), // 1~3 点透视点 (画布物理坐标)
-    val perspectiveRayCount: Int = 12, // 透视灭点放射线密度 (6~24)
+    val perspectiveRayCount: Int = 16, // 透视灭点放射线密度 (支持 2~120+ 自由定义)
 ) {
     /**
      * 计算输入点对应的对称镜像分支点列表 (支持对称轴任意角度旋转)

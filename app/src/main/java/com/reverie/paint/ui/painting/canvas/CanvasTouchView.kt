@@ -2923,7 +2923,7 @@ class CanvasTouchView(context: Context) : View(context) {
         // 合并上游 1.3.3 时曾因此产生重复声明。
         val isGuideAssistTool = tool == Tool.BRUSH || tool == Tool.ERASER || tool == Tool.SMUDGE
         if (guide.mode != GuideMode.OFF && guide.assistedDrawing && localIsTouching && strokeStarted && isGuideAssistTool) {
-            val maxExt = maxOf(v.docWidth, v.docHeight).toFloat() * 3f
+            val maxExt = maxOf(v.docWidth, v.docHeight).toFloat() * 50f + 500_000f
             when (guide.mode) {
                 GuideMode.PERSPECTIVE -> {
                     val locked = assistLockedRay

@@ -247,7 +247,7 @@ fun DrawingGuidePanel(
                     ToolFloatSlider(
                         label = androidx.compose.ui.res.stringResource(R.string.guide_perspective_ray_density),
                         valueText = "${guide.perspectiveRayCount}",
-                        range = 6f..24f,
+                        range = 2f..96f,
                         value = guide.perspectiveRayCount.toFloat(),
                         onValue = { vm.drawingGuide = guide.copy(perspectiveRayCount = it.roundToInt()) },
                     )

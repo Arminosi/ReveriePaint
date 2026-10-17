@@ -18,6 +18,7 @@ import com.reverie.paint.ui.theme.Morandi
 import com.reverie.paint.ui.theme.parseColor
 import kotlin.math.PI
 import kotlin.math.cos
+import kotlin.math.hypot
 import kotlin.math.sin
 
 internal fun DrawScope.drawDrawingGuides(
@@ -78,25 +79,39 @@ internal fun DrawScope.drawDrawingGuides(
                             val scX = bmp.width.toFloat() / maxOf(1, vm.docWidth)
                             val scY = bmp.height.toFloat() / maxOf(1, vm.docHeight)
 
-                            // Horizon line
+                            // 无穷远延伸基准距离: 保证在超大缩放或灭点远离画布时依然贯穿全视口
+                            val infiniteLen = maxOf(docW, docH) * 50f + 500_000f
+
+                            // Horizon line: 双向贯穿延伸至无穷远
                             if (pts.size >= 2) {
                                 val vp0 = Offset(pts[0].x * scX - halfW, pts[0].y * scY - halfH)
                                 val vp1 = Offset(pts[1].x * scX - halfW, pts[1].y * scY - halfH)
-                                drawLine(Morandi.accent.copy(alpha = 0.8f), vp0, vp1, strokeWidth = gStroke.width * 1.5f)
+                                val hdx = vp1.x - vp0.x
+                                val hdy = vp1.y - vp0.y
+                                val hDist = hypot(hdx, hdy)
+                                if (hDist > 0.001f) {
+                                    val dirX = hdx / hDist
+                                    val dirY = hdy / hDist
+                                    val pStart = Offset(vp0.x - dirX * infiniteLen, vp0.y - dirY * infiniteLen)
+                                    val pEnd = Offset(vp1.x + dirX * infiniteLen, vp1.y + dirY * infiniteLen)
+                                    drawLine(Morandi.accent.copy(alpha = 0.8f), pStart, pEnd, strokeWidth = gStroke.width * 1.5f)
+                                } else {
+                                    drawLine(Morandi.accent.copy(alpha = 0.8f), Offset(-infiniteLen, vp0.y), Offset(infiniteLen, vp0.y), strokeWidth = gStroke.width * 1.5f)
+                                }
                             } else if (pts.size == 1) {
                                 val vpy = pts[0].y * scY - halfH
-                                drawLine(Morandi.accent.copy(alpha = 0.5f), Offset(-halfW, vpy), Offset(halfW, vpy), strokeWidth = gStroke.width)
+                                drawLine(Morandi.accent.copy(alpha = 0.5f), Offset(-infiniteLen, vpy), Offset(infiniteLen, vpy), strokeWidth = gStroke.width)
                             }
 
+                            val rayCount = guide.perspectiveRayCount.coerceIn(2, 360)
                             for (vp in pts) {
                                 val vpx = vp.x * scX - halfW
                                 val vpy = vp.y * scY - halfH
                                 val vpOffset = Offset(vpx, vpy)
-                                val rayCount = guide.perspectiveRayCount.coerceIn(6, 24)
+                                val extLen = infiniteLen + hypot(vpx, vpy) * 2f
                                 for (ri in 0 until rayCount) {
                                     val angle = (ri.toFloat() / rayCount) * 2f * PI.toFloat()
-                                    val rayLen = maxOf(docW, docH) * 2.5f
-                                    drawLine(guideCol, vpOffset, vpOffset + Offset(cos(angle) * rayLen, sin(angle) * rayLen), strokeWidth = gStroke.width)
+                                    drawLine(guideCol, vpOffset, vpOffset + Offset(cos(angle) * extLen, sin(angle) * extLen), strokeWidth = gStroke.width)
                                 }
                                 if (vm.drawingGuidePanelOpen) {
                                     drawCircle(Morandi.accent.copy(alpha = 0.35f), radius = 12.dp.toPx() / (zoom * fitScale), center = vpOffset)

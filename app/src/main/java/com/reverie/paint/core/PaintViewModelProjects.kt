@@ -156,7 +156,11 @@ internal fun PaintViewModel.saveProject(
                 fileToSave
             }
 
-        val layers3DJson = active3DLayers.values.joinToString(",") { it.toJsonString() }
+        val layers3DJson = active3DLayers.values.joinToString(",") { st ->
+            val idx = layers.indexOfFirst { it.id == st.layerId }
+            val name = if (idx in 0 until layers.size) layers[idx].name else ""
+            st.copy(layerIndex = idx, layerName = name).toJsonString()
+        }
         val extraJson =
             """
             {
@@ -230,7 +234,11 @@ internal fun PaintViewModel.autoSaveProject(isPeriodic: Boolean = true) {
             return@runCore
         }
 
-        val layers3DJson = active3DLayers.values.joinToString(",") { it.toJsonString() }
+        val layers3DJson = active3DLayers.values.joinToString(",") { st ->
+            val idx = layers.indexOfFirst { it.id == st.layerId }
+            val name = if (idx in 0 until layers.size) layers[idx].name else ""
+            st.copy(layerIndex = idx, layerName = name).toJsonString()
+        }
         val extraJson =
             """
             {
@@ -546,15 +554,27 @@ internal fun PaintViewModel.loadProject(p: com.reverie.paint.model.Project) {
                                 }
                                 val arr3D = json.optJSONArray("active3DLayers")
                                 if (arr3D != null && arr3D.length() > 0) {
-                                    val map = HashMap<Long, com.reverie.paint.model.Model3DState>()
+                                    val parsedStates = ArrayList<com.reverie.paint.model.Model3DState>()
                                     for (k in 0 until arr3D.length()) {
                                         val obj = arr3D.optJSONObject(k)
                                         if (obj != null) {
                                             val st = com.reverie.paint.model.Model3DState.fromJson(obj.toString())
-                                            if (st != null) map[st.layerId] = st
+                                            if (st != null) parsedStates.add(st)
                                         }
                                     }
-                                    mainHandler.post { active3DLayers = map }
+                                    mainHandler.post {
+                                        val map = HashMap<Long, com.reverie.paint.model.Model3DState>()
+                                        for (st in parsedStates) {
+                                            val target = (if (st.layerIndex in 0 until layers.size) layers[st.layerIndex] else null)
+                                                ?: layers.find { it.name == st.layerName && it.name.isNotBlank() }
+                                                ?: layers.find { it.id == st.layerId }
+                                                ?: layers.find { it.name.contains("3D") }
+                                            if (target != null) {
+                                                map[target.id] = st.copy(layerId = target.id, layerIndex = target.index, layerName = target.name)
+                                            }
+                                        }
+                                        active3DLayers = map
+                                    }
                                 } else {
                                     mainHandler.post { active3DLayers = emptyMap() }
                                 }

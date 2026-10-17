@@ -241,10 +241,16 @@ internal fun PaintViewModel.commit3DLayerPixels(layerId: Long) {
         val stampBmp = ImageImportHelper.swapRedAndBlueForStamp(rendered)
 
         runCore(render = true, after = {
-            notifyLayerChanged()
+            notifyLayerChanged(forceThumbs = false)
         }) {
-            ReverieCoreBridge.clearLayer(layerIdx)
-            ReverieCoreBridge.stampBitmap(0, 0, stampBmp)
+            val targetIdx = layers.indexOfFirst { it.id == layerId }
+            if (targetIdx >= 0) {
+                val cur = ReverieCoreBridge.currentLayerIndex()
+                ReverieCoreBridge.setCurrentLayer(targetIdx)
+                ReverieCoreBridge.clearLayer(targetIdx)
+                ReverieCoreBridge.stampBitmap(0, 0, stampBmp)
+                ReverieCoreBridge.setCurrentLayer(cur)
+            }
         }
     }
 }

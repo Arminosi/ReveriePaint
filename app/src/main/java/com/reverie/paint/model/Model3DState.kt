@@ -49,6 +49,8 @@ enum class Interaction3DMode {
  */
 data class Model3DState(
     val layerId: Long = 0L,
+    val layerIndex: Int = -1,
+    val layerName: String = "",
     val modelType: String = BuiltinModel3D.CUBE.id, // "cube", "sphere", "file:/path/to/mesh.obj"
     val rotX: Float = 15f,     // 俯仰角 (Pitch)
     val rotY: Float = -30f,    // 偏航角 (Yaw)
@@ -68,7 +70,7 @@ data class Model3DState(
      * 编码为用于工程 JSON 存储的紧凑键值对字符串
      */
     fun toJsonString(): String {
-        return """{"layerId":$layerId,"modelType":"${modelType.replace("\"", "\\\"")}","rotX":$rotX,"rotY":$rotY,"rotZ":$rotZ,"panX":$panX,"panY":$panY,"zoom":$zoom,"lightYaw":$lightYaw,"lightPitch":$lightPitch,"renderMode":"${renderMode.id}","baseColor":$baseColor,"wireframeColor":$wireframeColor}"""
+        return """{"layerId":$layerId,"layerIndex":$layerIndex,"layerName":"${layerName.replace("\"", "\\\"")}","modelType":"${modelType.replace("\"", "\\\"")}","rotX":$rotX,"rotY":$rotY,"rotZ":$rotZ,"panX":$panX,"panY":$panY,"zoom":$zoom,"lightYaw":$lightYaw,"lightPitch":$lightPitch,"renderMode":"${renderMode.id}","baseColor":$baseColor,"wireframeColor":$wireframeColor}"""
     }
 
     companion object {
@@ -77,6 +79,8 @@ data class Model3DState(
                 val clean = json.trim().removeSurrounding("{", "}")
                 val pairs = clean.split(",")
                 var layerId = 0L
+                var layerIndex = -1
+                var layerName = ""
                 var modelType = BuiltinModel3D.CUBE.id
                 var rotX = 15f
                 var rotY = -30f
@@ -97,6 +101,8 @@ data class Model3DState(
                     val value = kv[1].trim().trim('"', '\'')
                     when (key) {
                         "layerId" -> layerId = value.toLongOrNull() ?: 0L
+                        "layerIndex" -> layerIndex = value.toIntOrNull() ?: -1
+                        "layerName" -> layerName = value
                         "modelType" -> modelType = value
                         "rotX" -> rotX = value.toFloatOrNull() ?: 15f
                         "rotY" -> rotY = value.toFloatOrNull() ?: -30f
@@ -113,6 +119,8 @@ data class Model3DState(
                 }
                 Model3DState(
                     layerId = layerId,
+                    layerIndex = layerIndex,
+                    layerName = layerName,
                     modelType = modelType,
                     rotX = rotX,
                     rotY = rotY,

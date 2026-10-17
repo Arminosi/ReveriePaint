@@ -307,6 +307,10 @@ internal fun PaintViewModel.addLayer() {
     if (recorder.recording) {
         recorder.layerOp(com.reverie.paint.model.RecordingEvents.L_ADD)
     }
+    val curLayer = layers.getOrNull(currentLayerIndex)
+    if (curLayer != null && active3DLayers.containsKey(curLayer.id)) {
+        commit3DLayerPixels(curLayer.id)
+    }
     val defaultName = generateDefaultLayerName()
     Breadcrumbs.record("Layer", "Add layer: $defaultName")
     runCore(after = {

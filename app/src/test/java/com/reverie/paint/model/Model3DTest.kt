@@ -16,6 +16,8 @@ class Model3DTest {
     fun `Model3DState serializes and deserializes correctly`() {
         val state = Model3DState(
             layerId = 42L,
+            layerIndex = 2,
+            layerName = "3D Reference",
             modelType = "cube",
             rotX = 25.5f,
             rotY = -40f,
@@ -35,6 +37,8 @@ class Model3DTest {
 
         assertNotNull(restored)
         assertEquals(state.layerId, restored!!.layerId)
+        assertEquals(state.layerIndex, restored.layerIndex)
+        assertEquals(state.layerName, restored.layerName)
         assertEquals(state.modelType, restored.modelType)
         assertEquals(state.rotX, restored.rotX, 0.01f)
         assertEquals(state.rotY, restored.rotY, 0.01f)

@@ -505,6 +505,13 @@ fun LayerPanel(
             onDismiss = { renameTarget = null },
         )
     }
+
+    if (vm.show3DModelPicker) {
+        Model3DPickerSheet(
+            vm = vm,
+            onDismiss = { vm.show3DModelPicker = false },
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------

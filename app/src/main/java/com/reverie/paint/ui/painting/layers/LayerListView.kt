@@ -632,6 +632,15 @@ internal fun LayerListView(
                                 }
                             },
                         )
+                        ReDropdownMenuItem(
+                            text = stringResource(R.string.layer_new_3d_reference),
+                            icon = R.drawable.ic_eye,
+                            onClick = {
+                                showNewLayerMenu = false
+                                vm.clearLayerSelection()
+                                vm.show3DModelPicker = true
+                            },
+                        )
 
                         // 柔和分割线
                         Box(

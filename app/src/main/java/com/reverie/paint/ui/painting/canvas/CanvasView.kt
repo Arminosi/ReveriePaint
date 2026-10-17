@@ -10,6 +10,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -434,6 +435,15 @@ fun CanvasView(
             liveSelectionPath = liveSelectionPath,
             checkerboardPaint = checkerboardPaint,
         )
+
+        if (vm.isCurrentLayer3D) {
+            com.reverie.paint.ui.painting.panels.Floating3DToolbar(
+                vm = vm,
+                modifier = Modifier
+                    .align(androidx.compose.ui.Alignment.BottomCenter)
+                    .padding(bottom = 24.dp),
+            )
+        }
     }
 }
 

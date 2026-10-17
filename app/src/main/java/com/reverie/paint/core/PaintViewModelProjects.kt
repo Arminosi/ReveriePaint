@@ -149,6 +149,7 @@ internal fun PaintViewModel.saveProject(
                 fileToSave
             }
 
+        val layers3DJson = active3DLayers.values.joinToString(",") { it.toJsonString() }
         val extraJson =
             """
             {
@@ -160,7 +161,8 @@ internal fun PaintViewModel.saveProject(
                 "dpi": $docDpi,
                 "selectedLayerIndex": $currentLayerIndex,
                 "activeLayerIndex": $currentLayerIndex,
-                "collapsedGroups": [${collapsedGroupNames.joinToString(",") { "\"${it.replace("\\", "\\\\").replace("\"", "\\\"")}\"" }}]
+                "collapsedGroups": [${collapsedGroupNames.joinToString(",") { "\"${it.replace("\\", "\\\\").replace("\"", "\\\"")}\"" }}],
+                "active3DLayers": [$layers3DJson]
             }
             """.trimIndent()
         // Recording blob goes straight into the .revp via the C++ store
@@ -221,6 +223,7 @@ internal fun PaintViewModel.autoSaveProject(isPeriodic: Boolean = true) {
             return@runCore
         }
 
+        val layers3DJson = active3DLayers.values.joinToString(",") { it.toJsonString() }
         val extraJson =
             """
             {
@@ -235,7 +238,8 @@ internal fun PaintViewModel.autoSaveProject(isPeriodic: Boolean = true) {
                 "dpi": $docDpi,
                 "selectedLayerIndex": $currentLayerIndex,
                 "activeLayerIndex": $currentLayerIndex,
-                "collapsedGroups": [${collapsedGroupNames.joinToString(",") { "\"${it.replace("\\", "\\\\").replace("\"", "\\\"")}\"" }}]
+                "collapsedGroups": [${collapsedGroupNames.joinToString(",") { "\"${it.replace("\\", "\\\\").replace("\"", "\\\"")}\"" }}],
+                "active3DLayers": [$layers3DJson]
             }
             """.trimIndent()
         val recBlob = recorder.serialize()
@@ -518,7 +522,7 @@ internal fun PaintViewModel.loadProject(p: com.reverie.paint.model.Project) {
                 // 恢复退出时选中的图层
                 val nLayers = ReverieCoreBridge.layerCount()
                 var targetLayer = p.selectedLayerIndex
-                if (targetLayer !in 0 until nLayers && file.extension.equals("revp", ignoreCase = true)) {
+                if (file.extension.equals("revp", ignoreCase = true)) {
                     try {
                         ZipFile(file).use { zip ->
                             val metaEntry = zip.getEntry("meta.json")
@@ -529,9 +533,25 @@ internal fun PaintViewModel.loadProject(p: com.reverie.paint.model.Project) {
                                 if (idx in 0 until nLayers) {
                                     targetLayer = idx
                                 }
+                                val arr3D = json.optJSONArray("active3DLayers")
+                                if (arr3D != null && arr3D.length() > 0) {
+                                    val map = HashMap<Long, com.reverie.paint.model.Model3DState>()
+                                    for (k in 0 until arr3D.length()) {
+                                        val obj = arr3D.optJSONObject(k)
+                                        if (obj != null) {
+                                            val st = com.reverie.paint.model.Model3DState.fromJson(obj.toString())
+                                            if (st != null) map[st.layerId] = st
+                                        }
+                                    }
+                                    mainHandler.post { active3DLayers = map }
+                                } else {
+                                    mainHandler.post { active3DLayers = emptyMap() }
+                                }
                             }
                         }
                     } catch (_: Exception) {}
+                } else {
+                    mainHandler.post { active3DLayers = emptyMap() }
                 }
                 if (targetLayer in 0 until nLayers) {
                     ReverieCoreBridge.setCurrentLayer(targetLayer)

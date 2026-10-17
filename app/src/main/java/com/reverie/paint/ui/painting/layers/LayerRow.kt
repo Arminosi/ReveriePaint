@@ -755,6 +755,21 @@ internal fun LayerRowContent(
                         modifier = Modifier.size(12.dp),
                     )
                 }
+                if (vm.active3DLayers.containsKey(layer.id)) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(3.dp))
+                            .background(Morandi.accent.copy(alpha = 0.16f))
+                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                    ) {
+                        Text(
+                            text = "3D",
+                            color = Morandi.accent,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
                 Text(
                     text = layerDisplayName(layer.name),
                     color = Morandi.text,

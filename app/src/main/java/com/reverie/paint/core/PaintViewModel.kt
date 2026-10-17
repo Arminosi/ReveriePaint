@@ -5525,6 +5525,20 @@ class PaintViewModel : ViewModel() {
     var currentLayerIndex by mutableIntStateOf(-1)
         internal set
 
+    // ---- 3D Reference Layer State ----
+    var active3DLayers by mutableStateOf<Map<Long, com.reverie.paint.model.Model3DState>>(emptyMap())
+    var active3DInteractionMode by mutableStateOf(com.reverie.paint.model.Interaction3DMode.ROTATE)
+    var live3DPreviewBitmap by mutableStateOf<android.graphics.Bitmap?>(null)
+    var isInteracting3D by mutableStateOf(false)
+    var show3DModelPicker by mutableStateOf(false)
+    val gl3dRenderer = com.reverie.paint.core.gl3d.Gl3dRenderer()
+
+    val currentLayer3DState: com.reverie.paint.model.Model3DState?
+        get() = layers.getOrNull(currentLayerIndex)?.let { active3DLayers[it.id] }
+
+    val isCurrentLayer3D: Boolean
+        get() = currentLayer3DState != null
+
     val layerCount: Int get() = layers.size
 
     /** Mirror all native layer state into [layers] / [currentLayerIndex].

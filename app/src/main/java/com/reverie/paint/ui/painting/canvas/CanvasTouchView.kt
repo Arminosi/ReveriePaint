@@ -227,6 +227,10 @@ class CanvasTouchView(context: Context) : View(context) {
 
     private val density = context.resources.displayMetrics.density
 
+    // 3D 参考图层交互状态
+    private var touch3DStartX = 0f
+    private var touch3DStartY = 0f
+
     // 触控交互锁 (手指接触期间，阻止外部 Compose 状态回冲覆盖)
     var isInteracting = false
     var isTransformActive = false
@@ -2611,6 +2615,11 @@ class CanvasTouchView(context: Context) : View(context) {
                 }
                 canvas.drawBitmap(bmp, -imgW / 2f, -imgH / 2f, directBitmapPaint)
             }
+            if (v.isCurrentLayer3D && v.isInteracting3D) {
+                v.live3DPreviewBitmap?.let { previewBmp ->
+                    canvas.drawBitmap(previewBmp, null, android.graphics.RectF(-imgW / 2f, -imgH / 2f, imgW / 2f, imgH / 2f), directBitmapPaint)
+                }
+            }
             v.onLiquifyBitmapDrawn(bmp)
 
             // 像素级网格高倍率缩放展示 (scale >= 4.0)
@@ -3886,6 +3895,44 @@ class CanvasTouchView(context: Context) : View(context) {
                             onFilterHoldingCompare?.invoke(false)
                         }
                         isFilterDragging = false
+                    }
+                }
+                return true
+            }
+        }
+
+        // =========================================================
+        // 3D 参考图层手势交互 (单指/笔拖拽调整视角/位置/打光；双指保留视口变换)
+        // =========================================================
+        if (v.isCurrentLayer3D) {
+            if (fingerCount >= 2 || isTransformActive) {
+                if (v.isInteracting3D) {
+                    v.isInteracting3D = false
+                    v.currentLayer3DState?.let { v.commit3DLayerPixels(it.layerId) }
+                }
+            } else {
+                val pIdx = if (isStylusTouch) stylusPointerIndex else (if (fingerCount > 0) fingerIndices[0] else 0)
+                val curX = event.getX(pIdx)
+                val curY = event.getY(pIdx)
+
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        touch3DStartX = curX
+                        touch3DStartY = curY
+                        v.isInteracting3D = true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val dx = curX - touch3DStartX
+                        val dy = curY - touch3DStartY
+                        touch3DStartX = curX
+                        touch3DStartY = curY
+                        v.handle3DGesture(dx, dy)
+                        invalidate()
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        v.isInteracting3D = false
+                        v.currentLayer3DState?.let { v.commit3DLayerPixels(it.layerId) }
+                        invalidate()
                     }
                 }
                 return true

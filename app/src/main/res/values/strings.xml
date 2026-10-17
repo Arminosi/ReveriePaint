@@ -2776,5 +2776,27 @@
     <string name="shading_assist_toast_need_layer">请先选择包含色彩内容的图层</string>
     <string name="shading_assist_import_failed">导入自定义模型失败</string>
     <string name="shading_assist_ai_hint">Depth Anything V2 深度神经网络，离线端侧推理</string>
+
+    <!-- 3D Reference Layer -->
+    <string name="layer_new_3d_reference">新建 3D 参考图层</string>
+    <string name="layer_3d_tag">3D 参考</string>
+    <string name="layer_3d_mode_rotate">旋转视角</string>
+    <string name="layer_3d_mode_pan">平移位置</string>
+    <string name="layer_3d_mode_light">调整打光</string>
+    <string name="layer_3d_mode_reset">复位视角</string>
+    <string name="layer_3d_style_clay">石膏素模</string>
+    <string name="layer_3d_style_shading">光影切面</string>
+    <string name="layer_3d_style_wireframe">结构线框</string>
+    <string name="layer_3d_rasterize">栅格化图层</string>
+    <string name="layer_3d_extract_outline">提取线稿</string>
+    <string name="layer_3d_picker_title">选择 3D 参考模型</string>
+    <string name="layer_3d_model_cube">透视方块</string>
+    <string name="layer_3d_model_sphere">球体</string>
+    <string name="layer_3d_model_cylinder">圆柱体</string>
+    <string name="layer_3d_model_head">头部比例素模</string>
+    <string name="layer_3d_import_obj">导入 3D 模型 (.obj)</string>
+    <string name="toast_3d_layer_created">已创建 3D 参考图层</string>
+    <string name="toast_3d_rasterized">3D 参考图层已栅格化</string>
+    <string name="toast_3d_outline_extracted">已提取 3D 线稿到新图层</string>
 </resources>
 

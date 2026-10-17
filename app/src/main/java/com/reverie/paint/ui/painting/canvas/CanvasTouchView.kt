@@ -2620,7 +2620,7 @@ class CanvasTouchView(context: Context) : View(context) {
                 }
                 canvas.drawBitmap(bmp, -imgW / 2f, -imgH / 2f, directBitmapPaint)
             }
-            if (v.isCurrentLayer3D && v.isInteracting3D) {
+            if (v.isCurrentLayer3D) {
                 val state = v.currentLayer3DState
                 if (state != null) {
                     val mesh = v.getMeshForState(state)
@@ -3974,7 +3974,6 @@ class CanvasTouchView(context: Context) : View(context) {
                     MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                         touch3DIsPinch = false
                         v.isInteracting3D = false
-                        v.commit3DLayerPixels(state.layerId)
                         invalidate()
                     }
                     MotionEvent.ACTION_POINTER_UP -> {

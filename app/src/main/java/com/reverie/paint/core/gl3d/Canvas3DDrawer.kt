@@ -80,8 +80,8 @@ class Canvas3DDrawer {
 
         var model = Math3D.identity()
         model = Math3D.translate(model, state.panX * 2f, state.panY * 2f, 0f)
-        model = Math3D.rotate(model, state.rotX, 1f, 0f, 0f)
         model = Math3D.rotate(model, state.rotY, 0f, 1f, 0f)
+        model = Math3D.rotate(model, state.rotX, 1f, 0f, 0f)
         model = Math3D.rotate(model, state.rotZ, 0f, 0f, 1f)
 
         val mv = Math3D.multiplyMM(view, model)
@@ -265,17 +265,17 @@ class Canvas3DDrawer {
                         val ambG = gndG + (skyG - gndG) * hemi
                         val ambB = gndB + (skyB - gndB) * hemi
 
-                        val keyDirX = 0.4f; val keyDirY = 0.7f; val keyDirZ = 0.6f
-                        val diff = max(nx * keyDirX + ny * keyDirY + nz * keyDirZ, 0f)
-                        val rim = (1.0f - max(nz, 0f)).coerceIn(0f, 1f).pow(2) * 0.25f
+                        // 主光使用用户的动态 lightDir
+                        val diff = max(nx * lightDir[0] + ny * lightDir[1] + nz * lightDir[2], 0f)
+                        val rim = (1.0f - max(nz, 0f)).coerceIn(0f, 1f).pow(2) * 0.22f
 
-                        val r = (baseRed * (ambR * 0.7f + diff * 0.45f) + rim * 255f).toInt().coerceIn(0, 255)
-                        val g = (baseGreen * (ambG * 0.7f + diff * 0.45f) + rim * 255f).toInt().coerceIn(0, 255)
-                        val b = (baseBlue * (ambB * 0.7f + diff * 0.45f) + rim * 255f).toInt().coerceIn(0, 255)
+                        val r = (baseRed * (ambR * 0.5f + diff * 0.55f) + rim * 255f).toInt().coerceIn(0, 255)
+                        val g = (baseGreen * (ambG * 0.5f + diff * 0.55f) + rim * 255f).toInt().coerceIn(0, 255)
+                        val b = (baseBlue * (ambB * 0.5f + diff * 0.55f) + rim * 255f).toInt().coerceIn(0, 255)
                         Color.rgb(r, g, b)
                     } else {
-                        // 光影明暗切面
-                        val ndotl = max(nx * lightDir[0] + ny * lightDir[1] + nz * lightDir[2], 0f)
+                        // 光影明暗切面 (明确受光与背光体积)
+                        val ndotl = nx * lightDir[0] + ny * lightDir[1] + nz * lightDir[2]
                         val diff = if (ndotl > 0.05f) 1.0f else 0.35f
                         val r = (baseRed * diff).toInt().coerceIn(0, 255)
                         val g = (baseGreen * diff).toInt().coerceIn(0, 255)

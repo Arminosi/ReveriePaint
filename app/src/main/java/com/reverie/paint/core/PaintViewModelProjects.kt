@@ -137,6 +137,9 @@ internal fun PaintViewModel.saveProject(
             onComplete?.invoke()
         },
     ) {
+        if (active3DLayers.isNotEmpty()) {
+            commitAllActive3DLayersSync()
+        }
         val fileToSave =
             currentProjectFile?.let { File(it) }?.takeIf { it.parentFile?.exists() == true && !it.name.contains(".autosave") }
                 ?: File(projectDir(), "$name.revp")
@@ -462,6 +465,10 @@ internal fun PaintViewModel.loadProject(p: com.reverie.paint.model.Project) {
             val targetLayer = p.selectedLayerIndex
             if (targetLayer in 0 until layers.size && currentLayerIndex != targetLayer) {
                 currentLayerIndex = targetLayer
+            }
+            val cur3DLayer = layers.getOrNull(currentLayerIndex)
+            if (cur3DLayer != null && active3DLayers.containsKey(cur3DLayer.id)) {
+                ensure3DLayerClearedInCore(cur3DLayer.id)
             }
             isBlockingLoading = false
             startPaintingTimer()
@@ -1027,6 +1034,9 @@ internal fun PaintViewModel.exportDocument(
 ) {
     val fmt = format.lowercase()
     runCore(render = false) {
+        if (active3DLayers.isNotEmpty()) {
+            commitAllActive3DLayersSync()
+        }
         if (!embedAuthor || !authorProfile.enabled) {
             ReverieCoreBridge.setAuthorProfile("")
         } else {

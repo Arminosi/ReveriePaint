@@ -73,10 +73,16 @@ class Model3DTest {
     }
 
     @Test
-    fun `Math3D light direction is normalized`() {
+    fun `Math3D light direction is normalized and maintains forward bias`() {
         val light = Math3D.calculateLightDirection(45f, 30f)
         val len = Math.sqrt((light[0] * light[0] + light[1] * light[1] + light[2] * light[2]).toDouble())
         assertEquals(1.0, len, 0.001)
+
+        // 即使在极端光照仰角/偏角下，Z 轴向前分量依然保持正数，确保正面不会陷入死黑
+        val extreme1 = Math3D.calculateLightDirection(120f, 75f)
+        assertTrue(extreme1[2] > 0f)
+        val extreme2 = Math3D.calculateLightDirection(-120f, -75f)
+        assertTrue(extreme2[2] > 0f)
     }
 
     @Test

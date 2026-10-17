@@ -48,6 +48,7 @@ class Gl3dRenderer {
             precision mediump float;
             varying vec3 vNormal;
             uniform vec4 uBaseColor;
+            uniform vec3 uLightDir;
             void main() {
                 vec3 n = normalize(vNormal);
                 // 半球环境光: 上部偏微暖天光，下部偏冷地光/阴影
@@ -56,15 +57,15 @@ class Gl3dRenderer {
                 vec3 ground = vec3(0.68, 0.70, 0.76);
                 vec3 amb = mix(ground, sky, hemi);
 
-                // 侧上方柔和主光
-                vec3 keyDir = normalize(vec3(0.4, 0.7, 0.6));
+                // 动态主光
+                vec3 keyDir = normalize(uLightDir);
                 float diff = max(dot(n, keyDir), 0.0);
 
                 // 边缘微弱轮廓反射光 (Fresnel / Rim)
                 float rim = 1.0 - max(dot(n, vec3(0.0, 0.0, 1.0)), 0.0);
-                rim = smoothstep(0.5, 0.9, rim) * 0.25;
+                rim = smoothstep(0.5, 0.9, rim) * 0.22;
 
-                vec3 rgb = uBaseColor.rgb * (amb * 0.7 + diff * 0.45) + vec3(rim);
+                vec3 rgb = uBaseColor.rgb * (amb * 0.5 + diff * 0.55) + vec3(rim);
                 gl_FragColor = vec4(rgb, uBaseColor.a);
             }
         """
@@ -266,8 +267,8 @@ class Gl3dRenderer {
         // 模型世界变换: 平移与旋转
         var model = Math3D.identity()
         model = Math3D.translate(model, state.panX * 2f, state.panY * 2f, 0f)
-        model = Math3D.rotate(model, state.rotX, 1f, 0f, 0f)
         model = Math3D.rotate(model, state.rotY, 0f, 1f, 0f)
+        model = Math3D.rotate(model, state.rotX, 1f, 0f, 0f)
         model = Math3D.rotate(model, state.rotZ, 0f, 0f, 1f)
 
         val mv = Math3D.multiplyMM(view, model)
@@ -341,12 +342,16 @@ class Gl3dRenderer {
                 val uMVP = GLES20.glGetUniformLocation(clayProgram, "uMVPMatrix")
                 val uNormM = GLES20.glGetUniformLocation(clayProgram, "uNormalMatrix")
                 val uColor = GLES20.glGetUniformLocation(clayProgram, "uBaseColor")
+                val uLight = GLES20.glGetUniformLocation(clayProgram, "uLightDir")
                 val aPos = GLES20.glGetAttribLocation(clayProgram, "aPosition")
                 val aNorm = GLES20.glGetAttribLocation(clayProgram, "aNormal")
+
+                val lightDir = Math3D.calculateLightDirection(state.lightYaw, state.lightPitch)
 
                 GLES20.glUniformMatrix4fv(uMVP, 1, false, mvp, 0)
                 GLES20.glUniformMatrix3fv(uNormM, 1, false, normalMatrix, 0)
                 GLES20.glUniform4f(uColor, baseR, baseG, baseB, baseA)
+                GLES20.glUniform3f(uLight, lightDir[0], lightDir[1], lightDir[2])
 
                 GLES20.glEnableVertexAttribArray(aPos)
                 GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 0, posBuf)

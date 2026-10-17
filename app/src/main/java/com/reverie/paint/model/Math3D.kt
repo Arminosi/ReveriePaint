@@ -224,7 +224,7 @@ object Math3D {
         val cosPitch = cos(pitchRad).toFloat()
         val x = (sin(yawRad) * cosPitch).toFloat()
         val y = sin(pitchRad).toFloat()
-        val z = (cos(yawRad) * cosPitch).toFloat()
+        val z = (cos(yawRad) * cosPitch).toFloat() * 0.7f + 0.35f
 
         val len = hypot(hypot(x, y), z).coerceAtLeast(1e-6f)
         return floatArrayOf(x / len, y / len, z / len)

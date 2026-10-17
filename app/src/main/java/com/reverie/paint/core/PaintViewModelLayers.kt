@@ -386,7 +386,21 @@ internal fun PaintViewModel.removeLayer(index: Int) {
 
 internal fun PaintViewModel.setCurrentLayer(i: Int) {
     Breadcrumbs.record("Layer", "Set current layer: $i")
+    val prevIdx = currentLayerIndex
+    val prevLayer = layers.getOrNull(prevIdx)
+    if (prevLayer != null && active3DLayers.containsKey(prevLayer.id) && prevIdx != i) {
+        // 离开 3D 参考图层时，将其烘焙写入底层引擎，使上层绘图可见其底层参考
+        commit3DLayerPixels(prevLayer.id)
+    }
+
     currentLayerIndex = i
+
+    val newLayer = layers.getOrNull(i)
+    if (newLayer != null && active3DLayers.containsKey(newLayer.id) && prevIdx != i) {
+        // 进入 3D 参考图层时，清空引擎中可能留存的静止像素，完全交由实时 120Hz Canvas3DDrawer 接管
+        ensure3DLayerClearedInCore(newLayer.id)
+    }
+
     if (recorder.recording) {
         recorder.layerOp(com.reverie.paint.model.RecordingEvents.L_SET_CURRENT, i)
     }

@@ -80,7 +80,7 @@ internal fun PaintViewModel.create3DLayer(
                 renderMode = RenderMode3D.CLAY,
             )
             active3DLayers = active3DLayers + (layer.id to initialState)
-            commit3DLayerPixels(layer.id)
+            ensure3DLayerClearedInCore(layer.id)
             showActionToast(R.string.toast_3d_layer_created, R.drawable.ic_eye)
         }
     }) {
@@ -123,11 +123,23 @@ internal fun PaintViewModel.create3DLayerFromObj(
                 renderMode = RenderMode3D.CLAY,
             )
             active3DLayers = active3DLayers + (layer.id to initialState)
-            commit3DLayerPixels(layer.id)
+            ensure3DLayerClearedInCore(layer.id)
             showActionToast(R.string.toast_3d_layer_created, R.drawable.ic_eye)
         }
     }) {
         ReverieCoreBridge.addLayer(displayName)
+    }
+}
+
+/**
+ * 确保 3D 参考图层在底层 Krita 引擎中保持清空状态 (避免图层位图与实时硬件 Canvas 投影发生重影叠画)
+ */
+internal fun PaintViewModel.ensure3DLayerClearedInCore(layerId: Long) {
+    val idx = layers.indexOfFirst { it.id == layerId }
+    if (idx >= 0) {
+        runCore(render = true, after = { notifyLayerChanged(forceThumbs = false) }) {
+            ReverieCoreBridge.clearLayer(idx)
+        }
     }
 }
 
@@ -138,7 +150,7 @@ internal fun PaintViewModel.handle3DGesture(deltaX: Float, deltaY: Float) {
     val state = currentLayer3DState ?: return
     when (active3DInteractionMode) {
         Interaction3DMode.ROTATE -> {
-            val newRotY = state.rotY + deltaX * 0.45f
+            val newRotY = (state.rotY + deltaX * 0.45f) % 360f
             val newRotX = (state.rotX + deltaY * 0.45f).coerceIn(-89f, 89f)
             val updated = state.copy(rotX = newRotX, rotY = newRotY)
             update3DState(updated)
@@ -151,8 +163,8 @@ internal fun PaintViewModel.handle3DGesture(deltaX: Float, deltaY: Float) {
             update3DState(updated)
         }
         Interaction3DMode.LIGHT -> {
-            val newYaw = (state.lightYaw + deltaX * 0.5f) % 360f
-            val newPitch = (state.lightPitch - deltaY * 0.5f).coerceIn(-89f, 89f)
+            val newYaw = (state.lightYaw + deltaX * 0.45f).coerceIn(-120f, 120f)
+            val newPitch = (state.lightPitch - deltaY * 0.45f).coerceIn(-75f, 75f)
             val updated = state.copy(lightYaw = newYaw, lightPitch = newPitch)
             update3DState(updated)
         }
@@ -245,9 +257,33 @@ internal fun PaintViewModel.commit3DLayerPixels(layerId: Long) {
  * 栅格化当前 3D 图层 (将其转化为普通光栅像素图层，解除 3D 绑定)
  */
 internal fun PaintViewModel.rasterize3DLayer(layerId: Long) {
+    commit3DLayerPixels(layerId)
     active3DLayers = active3DLayers - layerId
     live3DPreviewBitmap = null
     showActionToast(R.string.toast_3d_rasterized, R.drawable.ic_layers)
+}
+
+/**
+ * 同步将所有活跃 3D 参考图层渲染并烘焙至底层 Krita 颜料图层 (在导出与持久化前调用)
+ */
+internal fun PaintViewModel.commitAllActive3DLayersSync() {
+    for ((layerId, state) in active3DLayers) {
+        val layerIdx = layers.indexOfFirst { it.id == layerId }
+        if (layerIdx >= 0) {
+            val mesh = getMeshForState(state)
+            val w = docWidth.coerceAtLeast(1)
+            val h = docHeight.coerceAtLeast(1)
+            val rendered = gl3dRenderer.renderToBitmap(mesh, state, w, h)
+            if (rendered != null) {
+                val stampBmp = ImageImportHelper.swapRedAndBlueForStamp(rendered)
+                ReverieCoreBridge.clearLayer(layerIdx)
+                val cur = ReverieCoreBridge.currentLayerIndex()
+                ReverieCoreBridge.setCurrentLayer(layerIdx)
+                ReverieCoreBridge.stampBitmap(0, 0, stampBmp)
+                ReverieCoreBridge.setCurrentLayer(cur)
+            }
+        }
+    }
 }
 
 /**

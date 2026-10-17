@@ -53,6 +53,23 @@ class PaintModelsTest {
     }
 
     @Test
+    fun `enclose fill tool belongs to FILL group`() {
+        assertEquals(ToolGroup.FILL, Tool.ENCLOSE_FILL.group)
+        assertEquals(Tool.ENCLOSE_FILL, Tool.fromId("enclose_fill"))
+    }
+
+    @Test
+    fun `enclose fill region modes map correctly to Krita selection methods`() {
+        assertEquals(0, EncloseFillRegionMode.ALL.methodValue)
+        assertEquals(2, EncloseFillRegionMode.TRANSPARENT.methodValue)
+        assertEquals(1, EncloseFillRegionMode.SPECIFIC_COLOR.methodValue)
+        assertEquals(4, EncloseFillRegionMode.EXCEPT_SPECIFIC_COLOR.methodValue)
+        assertEquals(EncloseFillRegionMode.ALL, EncloseFillRegionMode.fromId(0))
+        assertEquals(EncloseFillRegionMode.TRANSPARENT, EncloseFillRegionMode.fromId(1))
+        assertEquals(EncloseFillRegionMode.ALL, EncloseFillRegionMode.fromId(999))
+    }
+
+    @Test
     fun `lasso segment undo pops points by segment count`() {
         val points = mutableListOf(10 to 10, 20 to 20, 21 to 21, 22 to 22, 30 to 30)
         val segmentCounts = mutableListOf(1, 3, 1) // Tap (1), Drag (3), Tap (1)

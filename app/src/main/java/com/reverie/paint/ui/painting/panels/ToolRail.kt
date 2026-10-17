@@ -818,6 +818,7 @@ fun toolIcon(tool: Tool): Int =
         Tool.ERASER -> R.drawable.ic_eraser
         Tool.PICKER -> R.drawable.ic_picker
         Tool.FILL -> R.drawable.ic_fill
+        Tool.ENCLOSE_FILL -> R.drawable.ic_enclose_fill
         Tool.LASSO -> R.drawable.ic_lasso
         Tool.MAGICWAND -> R.drawable.ic_magicwand
         Tool.SHAPES -> R.drawable.ic_shapes

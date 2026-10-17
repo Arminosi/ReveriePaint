@@ -493,6 +493,14 @@ internal fun PaintViewModel.saveToolOptions() {
         o.put("lasso_sub_mode", lassoSubMode)
         o.put("picker_sample", pickerSampleLayers)
         o.put("measure_stroke_w", measureStrokeWidth.toDouble())
+        o.put("enc_close_gap", encloseFillCloseGap)
+        o.put("enc_tol", encloseFillTolerance)
+        o.put("enc_sample", encloseFillSampleLayers)
+        o.put("enc_expand", encloseFillExpand)
+        o.put("enc_feather", encloseFillFeather)
+        o.put("enc_mode", encloseFillRegionMode.id)
+        o.put("enc_color", encloseFillSpecificColor)
+        o.put("enc_inc_contour", encloseFillIncludeContour)
         prefs().edit().putString("tool_options", o.toString()).apply()
     } catch (_: Exception) {
     }
@@ -527,6 +535,14 @@ internal fun PaintViewModel.loadToolOptions() {
         pickerSampleLayers = o.optInt("picker_sample", 1)
         pickerCurrentLayerOnly = pickerSampleLayers == 0
         measureStrokeWidth = o.optDouble("measure_stroke_w", 2.5).toFloat().coerceIn(1f, 10f)
+        encloseFillCloseGap = o.optInt("enc_close_gap", 4)
+        encloseFillTolerance = o.optInt("enc_tol", 16)
+        encloseFillSampleLayers = o.optInt("enc_sample", 1)
+        encloseFillExpand = o.optInt("enc_expand", 0)
+        encloseFillFeather = o.optInt("enc_feather", 0)
+        encloseFillRegionMode = com.reverie.paint.model.EncloseFillRegionMode.fromId(o.optInt("enc_mode", 0))
+        encloseFillSpecificColor = o.optInt("enc_color", 0xFF000000.toInt())
+        encloseFillIncludeContour = o.optBoolean("enc_inc_contour", false)
     } catch (_: Exception) {
     }
 }

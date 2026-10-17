@@ -126,6 +126,7 @@ import com.reverie.paint.model.BackKeyAction
 import com.reverie.paint.model.RotationSnap
 import com.reverie.paint.ui.painting.canvas.CanvasAdjustOverlay
 import com.reverie.paint.ui.painting.panels.CanvasAdjustPanel
+import com.reverie.paint.ui.painting.panels.EncloseFillPanel
 import com.reverie.paint.ui.painting.panels.FillPanel
 import com.reverie.paint.ui.painting.panels.GradientPanel
 import com.reverie.paint.ui.painting.panels.LiquifyPanel
@@ -1813,6 +1814,24 @@ fun PaintingPage(
                 onTolerance = { vm.updateFillTolerance(it) },
                 sampleLayers = vm.fillSampleLayers,
                 onSampleLayers = { vm.updateFillSampleLayers(it) },
+                hazeState = hazeState,
+            )
+        }
+        androidx.compose.animation.AnimatedVisibility(
+            visible = filterController == null && tool == Tool.ENCLOSE_FILL,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = bottomDockPadding),
+            enter =
+                androidx.compose.animation.fadeIn(Motion.enterSpring()),
+            exit =
+                androidx.compose.animation.fadeOut(
+                    androidx.compose.animation.core
+                        .tween(200),
+                ),
+        ) {
+            EncloseFillPanel(
+                vm = vm,
+                closeGap = vm.encloseFillCloseGap,
+                onCloseGap = { vm.updateEncloseFillCloseGap(it) },
                 hazeState = hazeState,
             )
         }

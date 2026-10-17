@@ -155,6 +155,7 @@ object RecordingEvents {
     const val T_CONTIGUOUS_V2 = 39 // x/y f32, tolerance u16, sampleMerged u8
     const val T_SIMILAR_V2 = 40 // x/y f32, tolerance u16, sampleMerged u8
     const val T_FILL_V3 = 41 // x/y f32, tolerance u16, sampleMerged u8, color str
+    const val T_ENCLOSE_FILL = 48 // count u16, points x/y f32[], tol u16, merged u8, expand i16, feather u16, closeGap u16, method u8, color u32, incContour u8
 }
 
 /** Growable byte sink with little-endian primitive writers. */
@@ -242,6 +243,8 @@ class RecordingReader(
     }
 
     fun u16(): Int = u8() or (u8() shl 8)
+
+    fun i16(): Int = u16().toShort().toInt()
 
     fun u32(): Int {
         var v = 0

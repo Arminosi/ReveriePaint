@@ -521,6 +521,16 @@ public:
 
     // Fill the current layer's region (or whole layer) with the brush color
     void floodFillAt(int x, int y, int tolerance = 16, bool sampleMerged = true, int expand = 0, int feather = 0, int closeGap = 0);
+    // Enclose and Fill: fills closed regions bounded by points (Krita KisEncloseAndFillPainter)
+    void encloseAndFill(const QVector<QPoint> &points,
+                        int tolerance = 16,
+                        bool sampleMerged = true,
+                        int expand = 0,
+                        int feather = 0,
+                        int closeGap = 4,
+                        int regionSelectionMethod = 0,
+                        quint32 regionColorArgb = 0,
+                        bool includeContourRegions = false);
 
     // Draw a shape: 0=line, 1=rect, 2=ellipse between two points
     void drawShape(int kind, int x1, int y1, int x2, int y2, bool filled = false);

@@ -4944,6 +4944,10 @@ class CanvasTouchView(context: Context) : View(context) {
                 liveShapeStart?.value = docPos
                 liveShapeEnd?.value = docPos
             }
+            Tool.ENCLOSE_FILL -> {
+                lassoPoints.clear()
+                lassoPoints.add(docPos)
+            }
             Tool.LASSO -> {
                 if (v.selectionMode == 0 && v.lassoMultiPoints.isEmpty()) {
                     v.clearSelectionOverlayLocal()
@@ -5674,6 +5678,18 @@ class CanvasTouchView(context: Context) : View(context) {
                 shapeEndDocPos = docPos
                 liveShapeEnd?.value = docPos
             }
+            Tool.ENCLOSE_FILL -> {
+                val lastPt = lassoPoints.lastOrNull()
+                val minMove = 3f
+                if (lastPt == null || hypot(docPos.x - lastPt.x, docPos.y - lastPt.y) >= minMove) {
+                    lassoPoints.add(docPos)
+                }
+                val now = System.nanoTime()
+                if (now - lastLassoPreviewNs > 16_000_000L) {
+                    lastLassoPreviewNs = now
+                    updateLiveSelectionPathFromPoints(lassoPoints, closed = true)
+                }
+            }
             Tool.LASSO -> {
                 if (justFinishedLassoInDown) return
                 val subMode = v.lassoSubMode
@@ -6381,6 +6397,18 @@ class CanvasTouchView(context: Context) : View(context) {
                 liveShapeStart?.value = null
                 liveShapeEnd?.value = null
                 v.selectShape(1, firstDocPos.x.toInt(), firstDocPos.y.toInt(), shapeEndDocPos.x.toInt(), shapeEndDocPos.y.toInt())
+            }
+            Tool.ENCLOSE_FILL -> {
+                liveSelectionPath?.value = null
+                if (isCancel || maxTouchPointers > 1) {
+                    lassoPoints.clear()
+                    return
+                }
+                if (lassoPoints.size >= 3) {
+                    val points = lassoPoints.map { it.x.toInt() to it.y.toInt() }
+                    v.encloseAndFill(points)
+                }
+                lassoPoints.clear()
             }
             Tool.LASSO -> {
                 val subMode = v.lassoSubMode

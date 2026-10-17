@@ -34,6 +34,7 @@ enum class Tool(
 
     // Fill family
     FILL("fill", "填充", ToolGroup.FILL),
+    ENCLOSE_FILL("enclose_fill", "圈涂", ToolGroup.FILL),
     GRADIENT("gradient", "渐变", ToolGroup.FILL),
 
     // Shape tools (Krita's shape tools)
@@ -207,3 +208,20 @@ data class AutoSaveSnapshot(
     val thumbPath: String,
     val isEmergency: Boolean = false,
 )
+
+/**
+ * 圈涂 (Enclose and Fill) 区域过滤模式, 映射 Krita 的 KisEncloseAndFillPainter::RegionSelectionMethod
+ */
+enum class EncloseFillRegionMode(
+    val id: Int,
+    val methodValue: Int,
+) {
+    ALL(0, 0), // SelectAllRegions (默认: 仅参考最外层闭合线条，忽略内层线条直接填充整块区域)
+    TRANSPARENT(1, 2), // SelectRegionsFilledWithTransparent (仅透明区域: 细分参考内层线条)
+    SPECIFIC_COLOR(2, 1), // SelectRegionsFilledWithSpecificColor (特定颜色)
+    EXCEPT_SPECIFIC_COLOR(3, 4); // SelectAllRegionsExceptFilledWithSpecificColor (排除特定颜色)
+
+    companion object {
+        fun fromId(id: Int): EncloseFillRegionMode = entries.find { it.id == id } ?: ALL
+    }
+}

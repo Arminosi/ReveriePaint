@@ -447,6 +447,32 @@ class PaintRecorder {
         }
     }
 
+    fun encloseFill(
+        points: List<Pair<Int, Int>>,
+        tolerance: Int,
+        sampleMerged: Boolean,
+        expand: Int,
+        feather: Int,
+        closeGap: Int,
+        regionSelectionMethod: Int,
+        regionColorArgb: Int,
+        includeContourRegions: Boolean,
+    ) = toolOp(com.reverie.paint.model.RecordingEvents.T_ENCLOSE_FILL) {
+        it.u16(points.size.coerceIn(0, 65535))
+        for ((x, y) in points) {
+            it.f32(x.toFloat())
+            it.f32(y.toFloat())
+        }
+        it.u16(tolerance.coerceIn(0, 65535))
+        it.u8(if (sampleMerged) 1 else 0)
+        it.u16(expand.toShort().toInt() and 0xFFFF)
+        it.u16(feather.coerceIn(0, 65535))
+        it.u16(closeGap.coerceIn(0, 65535))
+        it.u8(regionSelectionMethod.coerceIn(0, 255))
+        it.u32(regionColorArgb)
+        it.u8(if (includeContourRegions) 1 else 0)
+    }
+
     fun filterCommit(
         index: Int,
         filterType: Int,

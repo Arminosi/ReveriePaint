@@ -367,6 +367,7 @@
     <string name="tool_smudge">混合涂抹</string>
     <string name="tool_blur">模糊</string>
     <string name="tool_fill">填充</string>
+    <string name="tool_enclose_fill">圈涂</string>
     <string name="tool_gradient">渐变</string>
     <string name="tool_shapes">形状</string>
     <string name="tool_line">直线</string>
@@ -1694,6 +1695,22 @@
     <string name="fill_expand">拓展</string>
     <string name="fill_feather">羽化</string>
     <string name="fill_close_gap">空隙</string>
+    <string name="enclose_fill_settings">圈涂设置</string>
+    <string name="enclose_fill_mode">过滤模式</string>
+    <string name="enclose_fill_mode_all">全部区域</string>
+    <string name="enclose_fill_mode_transparent">仅透明区域</string>
+    <string name="enclose_fill_mode_specific_color">特定颜色</string>
+    <string name="enclose_fill_mode_except_specific_color">排除特定颜色</string>
+    <string name="enclose_fill_mode_all_short">全部</string>
+    <string name="enclose_fill_mode_transparent_short">透明</string>
+    <string name="enclose_fill_mode_specific_color_short">指定色</string>
+    <string name="enclose_fill_mode_except_specific_color_short">排除色</string>
+    <string name="enclose_fill_include_contour">包含边缘连通区</string>
+    <string name="enclose_fill_target_color">目标颜色</string>
+    <string name="enclose_fill_sample">采样图层</string>
+    <string name="enclose_fill_sample_current">当前图层</string>
+    <string name="enclose_fill_sample_all">所有图层</string>
+    <string name="enclose_fill_use_current_color">使用当前画笔色</string>
 
     <!-- Stylus Settings & Hardware -->
     <string name="stylus_settings_desc">手写笔硬件级适配、触感音效与高精度压感映射</string>

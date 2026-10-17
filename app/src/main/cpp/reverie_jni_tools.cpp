@@ -224,6 +224,24 @@ Java_com_reverie_paint_core_ReverieCoreBridge_floodFillAt(
     core()->floodFillAt(x, y, tolerance, sampleMerged, expand, feather, closeGap);
 }
 
+JNIEXPORT void JNICALL
+Java_com_reverie_paint_core_ReverieCoreBridge_encloseAndFill(
+    JNIEnv *env, jobject, jintArray xs, jintArray ys, jint count,
+    jint tolerance, jboolean sampleMerged, jint expand, jint feather, jint closeGap,
+    jint regionSelectionMethod, jint regionColorArgb, jboolean includeContourRegions)
+{
+    if (count < 3) return;
+    jint *px = env->GetIntArrayElements(xs, nullptr);
+    jint *py = env->GetIntArrayElements(ys, nullptr);
+    QVector<QPoint> pts;
+    pts.reserve(count);
+    for (int i = 0; i < count; ++i) pts.append(QPoint(px[i], py[i]));
+    env->ReleaseIntArrayElements(xs, px, JNI_ABORT);
+    env->ReleaseIntArrayElements(ys, py, JNI_ABORT);
+    core()->encloseAndFill(pts, tolerance, sampleMerged, expand, feather, closeGap,
+                          regionSelectionMethod, quint32(regionColorArgb), includeContourRegions);
+}
+
 JNIEXPORT jstring JNICALL
 Java_com_reverie_paint_core_ReverieCoreBridge_pickColorAt(JNIEnv *env, jobject, jint x, jint y, jboolean currentLayerOnly)
 {

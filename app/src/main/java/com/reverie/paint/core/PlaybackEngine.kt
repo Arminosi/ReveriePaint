@@ -75,6 +75,7 @@ import com.reverie.paint.model.RecordingEvents.T_FEATHER
 import com.reverie.paint.model.RecordingEvents.T_FILL
 import com.reverie.paint.model.RecordingEvents.T_FILL_V2
 import com.reverie.paint.model.RecordingEvents.T_FILL_V3
+import com.reverie.paint.model.RecordingEvents.T_ENCLOSE_FILL
 import com.reverie.paint.model.RecordingEvents.T_GRADIENT
 import com.reverie.paint.model.RecordingEvents.T_GRADIENT_V2
 import com.reverie.paint.model.RecordingEvents.T_REDO
@@ -1136,6 +1137,28 @@ private fun PaintViewModel.dispatchToolOpLocked(
                 IntArray(pts.size) { pts[it].first },
                 IntArray(pts.size) { pts[it].second },
                 pts.size,
+            )
+        }
+
+        T_ENCLOSE_FILL -> {
+            val count = r.u16()
+            val xs = IntArray(count)
+            val ys = IntArray(count)
+            for (i in 0 until count) {
+                xs[i] = r.f32().toInt()
+                ys[i] = r.f32().toInt()
+            }
+            val tol = r.u16()
+            val sampleMerged = r.u8() != 0
+            val expand = r.i16()
+            val feather = r.u16()
+            val closeGap = r.u16()
+            val regionSelectionMethod = r.u8()
+            val regionColorArgb = r.u32()
+            val includeContourRegions = r.u8() != 0
+            ReverieCoreBridge.encloseAndFill(
+                xs, ys, count, tol, sampleMerged, expand, feather, closeGap,
+                regionSelectionMethod, regionColorArgb, includeContourRegions
             )
         }
 

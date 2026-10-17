@@ -1,0 +1,35 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Enclosing Lasso Ring (Dashed/Looped boundary) -->
+    <path
+        android:pathData="M12,2 C17.523,2 22,6.029 22,11 C22,14.619 19.576,17.712 16,19.2"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.7"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M12,2 C6.477,2 2,6.029 2,11 C2,13.842 3.518,16.368 5.867,17.962"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.7"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <!-- Lasso knot loop at bottom -->
+    <path
+        android:pathData="M4.5,18.5 A1.5,1.5 0,1 0,7.5,18.5 A1.5,1.5 0,1 0,4.5,18.5"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.7"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M6,20 C6,21.1 6.5,22 7.5,22"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.7"
+        android:strokeLineCap="round" />
+    <!-- Interior Fill Drop / Bucket -->
+    <path
+        android:pathData="M12,6.5 C12,6.5 8.5,10.8 8.5,13 C8.5,14.933 10.067,16.5 12,16.5 C13.933,16.5 15.5,14.933 15.5,13 C15.5,10.8 12,6.5 12,6.5 Z"
+        android:fillColor="#FFFFFFFF" />
+</vector>

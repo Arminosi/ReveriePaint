@@ -11,6 +11,7 @@
 #include "PixelAlpha.h"
 #include "ReverieCoreFilterKernels.h"
 #include "ReverieCoreColorSpaceHook.h"
+#include <KisEncloseAndFillPainter.h>
 #include <android/log.h>
 #include <kis_image_animation_interface.h>
 
@@ -392,6 +393,135 @@ void ReverieCore::floodFillAt(int x, int y, int tolerance, bool sampleMerged, in
             "floodFillAt END: targetAfter=(%d,%d,%d,%d)",
             afterBounds.x(), afterBounds.y(), afterBounds.width(), afterBounds.height());
     }
+}
+
+void ReverieCore::encloseAndFill(const QVector<QPoint> &points,
+                                 int tolerance,
+                                 bool sampleMerged,
+                                 int expand,
+                                 int feather,
+                                 int closeGap,
+                                 int regionSelectionMethod,
+                                 quint32 regionColorArgb,
+                                 bool includeContourRegions)
+{
+    ensureRgbU8DifferenceHook();
+    KisImageSP image = m_document ? m_document : KisImageSP();
+    if (!image) return;
+    QPolygon poly;
+    poly.reserve(points.size());
+    for (const QPoint &p : points) {
+        poly << p;
+    }
+    const QRect polyBounds = poly.boundingRect();
+    if (polyBounds.isEmpty()) return;
+
+    KisPaintDeviceSP targetDevice = currentPaintDevice();
+    if (!targetDevice) return;
+
+    KisPaintDeviceSP srcDevice;
+    if (sampleMerged) {
+        const int startIdx = (!m_layers.isEmpty() && m_layers[0].background) ? 1 : 0;
+        if (startIdx < m_layers.size()) {
+            KisPaintDeviceSP compDev = new KisPaintDevice(image->colorSpace());
+            compositeLayersRange(compDev, startIdx, m_layers.size(), image->bounds());
+            srcDevice = compDev;
+        } else {
+            srcDevice = targetDevice;
+        }
+    } else {
+        srcDevice = targetDevice;
+    }
+
+    const int clampedTol = qBound(1, tolerance, 100);
+
+    const bool traceFill = true; // Log unconditionally for diagnosis
+    if (traceFill) {
+        __android_log_print(ANDROID_LOG_INFO, "RP_FILL",
+            "encloseAndFill START: pts=%d, tol=%d, exp=%d, fth=%d, gap=%d, method=%d, incContour=%d, merged=%d",
+            (int)points.size(), clampedTol, expand, feather, closeGap, regionSelectionMethod, includeContourRegions ? 1 : 0, sampleMerged ? 1 : 0);
+    }
+
+    KisTransaction txn(kundo2_i18n("Enclose and Fill"), targetDevice);
+
+    KisEncloseAndFillPainter painter(targetDevice, m_selection, image->size());
+    painter.setWidth(image->width());
+    painter.setHeight(image->height());
+    painter.setCareForSelection(true);
+    painter.setUseCompositing(true);
+    painter.setOpacitySpread(100);
+    painter.setAntiAlias(true);
+    painter.setFillThreshold(clampedTol);
+    painter.setSizemod(qBound(-32, expand, 64));
+    painter.setFeather(qBound(0, feather, 32));
+    painter.setCloseGap(qBound(0, closeGap, 64));
+
+    painter.setRegionSelectionMethod(static_cast<KisEncloseAndFillPainter::RegionSelectionMethod>(regionSelectionMethod));
+    if (regionColorArgb != 0) {
+        QColor qc = QColor::fromRgba(regionColorArgb);
+        painter.setRegionSelectionColor(KoColor(qc, image->colorSpace()));
+    }
+    painter.setRegionSelectionIncludeContourRegions(includeContourRegions);
+
+    if (m_selection) {
+        painter.setSelection(m_selection);
+    }
+
+    KisPaintLayer *pl = (m_currentLayer >= 0 && m_currentLayer < m_layers.size())
+        ? dynamic_cast<KisPaintLayer *>(m_layers[m_currentLayer].node)
+        : nullptr;
+    if (pl && pl->alphaLocked()) {
+        painter.setChannelFlags(pl->channelLockFlags());
+    } else {
+        painter.setChannelFlags(QBitArray());
+    }
+
+    QColor qColor(m_brushColor);
+    if (!qColor.isValid()) qColor = Qt::black;
+    KoColor koColor(qColor, image->colorSpace());
+    painter.setPaintColor(koColor);
+    painter.setOpacityF(m_brushOpacity);
+    painter.setCompositeOpId(COMPOSITE_OVER);
+
+    // Rasterize enclosing lasso polygon directly via QImage (Alpha8) + writeBytes,
+    // avoiding KoColor(Qt::white, enclosingMask->colorSpace()) which crashes on unmanaged AlphaCs in mobile pigment
+    KisPixelSelectionSP enclosingMask = new KisPixelSelection(new KisSelectionDefaultBounds(targetDevice));
+    const int iw = image->width();
+    const int ih = image->height();
+    {
+        QImage maskImg(iw, ih, QImage::Format_Alpha8);
+        maskImg.fill(0);
+
+        QPainter qp(&maskImg);
+        qp.setRenderHint(QPainter::Antialiasing, false);
+        qp.setBrush(Qt::white);
+        qp.setPen(Qt::NoPen);
+
+        qp.drawPolygon(poly);
+        qp.end();
+
+        const QVector<quint8> maskBytes = qimageAlpha8ToMask(maskImg);
+        enclosingMask->writeBytes(maskBytes.constData(), 0, 0, iw, ih);
+        enclosingMask->setDirty(QRect(0, 0, iw, ih));
+    }
+
+    const QRect maskRect = enclosingMask->selectedExactRect();
+    __android_log_print(ANDROID_LOG_INFO, "RP_FILL",
+        "encloseAndFill enclosingMask rect=(%d,%d,%d,%d)",
+        maskRect.x(), maskRect.y(), maskRect.width(), maskRect.height());
+
+    painter.encloseAndFillColor(enclosingMask, srcDevice);
+
+    targetDevice->setDirty();
+    recompositeProjection();
+    markDirty();
+    txn.commit(image->undoAdapter());
+    m_redoCount = 0;
+
+    const QRect afterBounds = targetDevice->exactBounds();
+    __android_log_print(ANDROID_LOG_INFO, "RP_FILL",
+        "encloseAndFill END: targetAfter=(%d,%d,%d,%d)",
+        afterBounds.x(), afterBounds.y(), afterBounds.width(), afterBounds.height());
 }
 
 

@@ -2104,6 +2104,17 @@ class PaintViewModel : ViewModel() {
     var fillCompositeOp by mutableStateOf("normal")
     internal var fillPattern by mutableStateOf<FillPattern?>(null)
 
+    // 圈涂 (Enclose and Fill) 属性状态 (持久化)
+    var encloseFillCloseGap by mutableIntStateOf(4) // 闭合空隙 (0..32 px)
+    var encloseFillTolerance by mutableIntStateOf(16) // 容差 (1..100)
+    var encloseFillSampleLayers by mutableIntStateOf(1) // 0: 当前图层, 1: 全部图层
+    var encloseFillExpand by mutableIntStateOf(0) // 拓展 (-16..32 px)
+    var encloseFillFeather by mutableIntStateOf(0) // 羽化 (0..32 px)
+    var encloseFillRegionMode by mutableStateOf(com.reverie.paint.model.EncloseFillRegionMode.ALL) // 过滤模式 (默认全部区域: 仅参考外层轮廓)
+    var encloseFillSpecificColor by mutableIntStateOf(0xFF000000.toInt()) // 特定目标颜色
+    var encloseFillIncludeContour by mutableStateOf(false) // 是否包含边缘连通区 (默认排除外部背景)
+    var encloseFillSettingsOpen by mutableStateOf(false) // 圈涂高级设置弹窗开关
+
     // 填充连击防抖追踪，防止卡顿时连点向撤销栈压入重复事务
     internal var lastFillSubmitTime = 0L
     internal var lastFillDocX = -9999f

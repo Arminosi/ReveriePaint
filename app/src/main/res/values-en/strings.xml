@@ -367,6 +367,7 @@
     <string name="tool_smudge">Smudge</string>
     <string name="tool_blur">Blur</string>
     <string name="tool_fill">Fill</string>
+    <string name="tool_enclose_fill">Enclose &amp; Fill</string>
     <string name="tool_gradient">Gradient</string>
     <string name="tool_shapes">Shapes</string>
     <string name="tool_line">Line</string>
@@ -1694,6 +1695,22 @@
     <string name="fill_expand">Expand</string>
     <string name="fill_feather">Feather</string>
     <string name="fill_close_gap">Close Gap</string>
+    <string name="enclose_fill_settings">Enclose &amp; Fill Settings</string>
+    <string name="enclose_fill_mode">Filter Mode</string>
+    <string name="enclose_fill_mode_all">All Regions</string>
+    <string name="enclose_fill_mode_transparent">Transparent Only</string>
+    <string name="enclose_fill_mode_specific_color">Specific Color</string>
+    <string name="enclose_fill_mode_except_specific_color">Exclude Specific Color</string>
+    <string name="enclose_fill_mode_all_short">All</string>
+    <string name="enclose_fill_mode_transparent_short">Transparent</string>
+    <string name="enclose_fill_mode_specific_color_short">Target Color</string>
+    <string name="enclose_fill_mode_except_specific_color_short">Exclude</string>
+    <string name="enclose_fill_include_contour">Include Edge Regions</string>
+    <string name="enclose_fill_target_color">Target Color</string>
+    <string name="enclose_fill_sample">Sample Layers</string>
+    <string name="enclose_fill_sample_current">Current Layer</string>
+    <string name="enclose_fill_sample_all">All Layers</string>
+    <string name="enclose_fill_use_current_color">Use Current Brush Color</string>
 
     <!-- Stylus Settings & Hardware -->
     <string name="stylus_settings_desc">Hardware adaptation, haptic audio and precision pressure mapping</string>

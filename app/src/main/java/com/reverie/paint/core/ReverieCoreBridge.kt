@@ -472,6 +472,20 @@ object ReverieCoreBridge {
         closeGap: Int = 4,
     )
 
+    external fun encloseAndFill(
+        xs: IntArray,
+        ys: IntArray,
+        count: Int,
+        tolerance: Int,
+        sampleMerged: Boolean = true,
+        expand: Int = 0,
+        feather: Int = 0,
+        closeGap: Int = 4,
+        regionSelectionMethod: Int = 0,
+        regionColorArgb: Int = 0,
+        includeContourRegions: Boolean = false,
+    )
+
     external fun setBrushSize(size: Double)
 
     /** 当前预设 Size 压感曲线求值：pressure(0..1) → 实际笔刷直径比例(0..1)，光标环同源缩放 */

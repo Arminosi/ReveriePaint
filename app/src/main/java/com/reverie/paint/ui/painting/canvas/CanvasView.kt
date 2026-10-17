@@ -176,6 +176,7 @@ fun CanvasView(
                 Tool.LASSO,
                 Tool.MAGICWAND,
                 Tool.SELECT_SIMILAR,
+                Tool.ENCLOSE_FILL,
             )
         if (tool !in selTools || vm.selectionOverlayBitmap != null) {
             liveSelectionPath.value = null

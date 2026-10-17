@@ -29,6 +29,7 @@ fun Tool.labelRes(): Int = when (this) {
     Tool.ERASER -> R.string.tool_eraser
     Tool.SMUDGE -> R.string.tool_smudge
     Tool.FILL -> R.string.tool_fill
+    Tool.ENCLOSE_FILL -> R.string.tool_enclose_fill
     Tool.GRADIENT -> R.string.tool_gradient
     Tool.SHAPES -> R.string.tool_shapes
     Tool.LINE -> R.string.tool_line

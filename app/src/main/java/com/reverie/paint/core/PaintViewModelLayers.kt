@@ -397,7 +397,11 @@ internal fun PaintViewModel.removeLayer(index: Int) {
 
 internal fun PaintViewModel.setCurrentLayer(i: Int) {
     Breadcrumbs.record("Layer", "Set current layer: $i")
+    val changed = currentLayerIndex != i
     currentLayerIndex = i
+    // 选中索引会写进工程 (selectedLayerIndex), 所以记一笔"只差它没落盘": 不触发自动保存,
+    // 但软件切后台时的静默保存会顺带存上。同一个图层重复点击不算变化。
+    if (changed) selectionDirty = true
     if (recorder.recording) {
         recorder.layerOp(com.reverie.paint.model.RecordingEvents.L_SET_CURRENT, i)
     }

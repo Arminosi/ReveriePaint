@@ -120,6 +120,7 @@ internal fun PaintViewModel.saveProject(
             referenceStore.bind(targetFile.absolutePath, referenceProfile)
             initialStrokeCount = totalStrokes
             isModified = false
+            selectionDirty = false
             docName = name
 
             // 显式保存成功后，才清理对应的自动保存草稿
@@ -210,6 +211,7 @@ internal fun PaintViewModel.autoSaveProject(isPeriodic: Boolean = true) {
             lastAutoSaveTimeMs = android.os.SystemClock.elapsedRealtime()
             strokesSinceLastAutoSave = 0
             hasPendingMajorOp = false
+            selectionDirty = false // 这次快照已经把 selectedLayerIndex 一起写进去了
             isAutoSaving = false
             if (isPeriodic && autoSaveToastEnabled) {
                 showActionToast(R.string.toast_project_autosaved, R.drawable.ic_save)
@@ -436,6 +438,7 @@ internal fun PaintViewModel.loadProject(p: com.reverie.paint.model.Project) {
             initialStrokeCount = p.strokeCount
             totalStrokes = p.strokeCount
             isModified = isRecovered || isHealed // 异常恢复或自愈的工程标记为未保存
+            selectionDirty = false // 刚读出来的选中层就是磁盘上的状态
             docWidth = if (coreW > 0) coreW else p.width
             docHeight = if (coreH > 0) coreH else p.height
             docDpi = if (p.dpi > 0) p.dpi else 300
@@ -1233,6 +1236,7 @@ internal fun PaintViewModel.goHome() {
     currentProjectFile = null
     docName = ""
     isModified = false
+    selectionDirty = false
     initialStrokeCount = 0
     totalStrokes = 0
     lastAutoSaveTimeMs = 0L
@@ -1299,6 +1303,7 @@ internal fun PaintViewModel.startPainting(
     currentProjectFile = null // Reset so new artwork won't overwrite previous project file
     docName = actualName
     isModified = false
+    selectionDirty = false
     lastAutoSaveTimeMs = 0L
     totalStrokes = 0
     elapsedSeconds = 0L

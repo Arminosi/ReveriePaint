@@ -208,7 +208,11 @@ class PaintViewModel : ViewModel() {
         maybeExitBackup()
         if (!autoSaveEnabled || isAutoSaving || isBlockingLoading) return
         if (currentPage != Page.PAINTING) return
-        if (!hasUnsavedChanges()) return
+        // 只切过图层 (contentChanged=false) 也算"有东西没落盘": 这里静默存一次, 否则
+        // "切到第 12 层 → 切后台/被杀"下次打开还停在第 5 层。刻意不把它并入
+        // hasUnsavedChanges(): 那会让退出重新弹"未保存", 也会让 checkAutoSave 每点一次
+        // 图层就拉响自动保存 —— 正是本 PR 要修的问题。
+        if (!hasUnsavedChanges() && !selectionDirty) return
 
         // 软件切入后台时，立即触发后台静默自动保存
         autoSaveProject(isPeriodic = false)
@@ -244,6 +248,20 @@ class PaintViewModel : ViewModel() {
     var autoSaveToastEnabled by mutableStateOf(true)
     var strokesSinceLastAutoSave by mutableIntStateOf(0)
     var hasPendingMajorOp by mutableStateOf(false)
+
+    /**
+     * 只改了"选中图层"、没改内容 (见 [notifyLayerChanged] 的 contentChanged)。
+     *
+     * `selectedLayerIndex` 会写进工程 (Kotlin 工程 JSON + 原生 `.revp` meta), 所以只切层的
+     * 结果也该落盘; 但它不值得**触发**自动保存 (那是"点图层就卡一下"的来源), 也不该让退出
+     * 弹"未保存"。
+     *
+     * 折中: 不参与 [hasUnsavedChanges] (退出不误报), 只作为"软件切后台时静默存一次"的理由
+     * (见 [onAppBackgrounded]) —— 那本来就是既有的保存时机, 用户也预期此时会存。
+     * 任何一次真实保存完成后清掉。
+     */
+    @Volatile
+    internal var selectionDirty = false
 
     /**
      * 性能标尺 (画布左上角实时显示渲染路径/纹理重传/保存阶段耗时)。见 [PerfTrace]。

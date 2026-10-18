@@ -134,6 +134,19 @@ import kotlinx.coroutines.withContext
         saveBrushOrder()
     }
 
+    internal fun PaintViewModel.reorderBrushInView(fromName: String, toName: String) {
+        if (fromName == toName) return
+        val curList = brushPresets.toMutableList()
+        val fromIdx = curList.indexOfFirst { it.name == fromName }
+        val toIdx = curList.indexOfFirst { it.name == toName }
+        if (fromIdx < 0 || toIdx < 0) return
+        val item = curList.removeAt(fromIdx)
+        curList.add(toIdx, item)
+        brushPresets = curList
+        brushOrder = curList.map { it.name }
+        saveBrushOrder()
+    }
+
     internal fun PaintViewModel.saveCategoryOrder() {
         try {
             val arr = org.json.JSONArray()
@@ -157,18 +170,38 @@ import kotlinx.coroutines.withContext
         if (from == to || from !in list.indices || to !in list.indices) return
         val item = list.removeAt(from)
         list.add(to, item)
-        categoryOrder = list
+        val pinned = listOf("全部", "常用", "最近")
+        categoryOrder = list.filter { it !in pinned }
+        saveCategoryOrder()
+    }
+
+    internal fun PaintViewModel.reorderCategoryByName(fromCat: String, toCat: String, allCategories: List<String>) {
+        if (fromCat == toCat) return
+        val pinned = listOf("全部", "常用", "最近")
+        if (fromCat in pinned || toCat in pinned) return
+        val list = allCategories.toMutableList()
+        val fromIdx = list.indexOf(fromCat)
+        val toIdx = list.indexOf(toCat)
+        if (fromIdx < 0 || toIdx < 0) return
+        val item = list.removeAt(fromIdx)
+        list.add(toIdx, item)
+        categoryOrder = list.filter { it !in pinned }
         saveCategoryOrder()
     }
 
     internal fun PaintViewModel.moveCategoryUp(cat: String, allCategories: List<String>) {
+        val pinned = listOf("全部", "常用", "最近")
+        if (cat in pinned) return
         val idx = allCategories.indexOf(cat)
-        if (idx > 0) {
+        val minIdx = allCategories.indexOfFirst { it !in pinned }
+        if (idx > minIdx && minIdx >= 0) {
             reorderCategory(idx, idx - 1, allCategories)
         }
     }
 
     internal fun PaintViewModel.moveCategoryDown(cat: String, allCategories: List<String>) {
+        val pinned = listOf("全部", "常用", "最近")
+        if (cat in pinned) return
         val idx = allCategories.indexOf(cat)
         if (idx >= 0 && idx < allCategories.size - 1) {
             reorderCategory(idx, idx + 1, allCategories)

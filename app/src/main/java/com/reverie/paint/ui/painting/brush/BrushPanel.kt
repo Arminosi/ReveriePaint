@@ -95,6 +95,13 @@ import kotlin.math.roundToInt
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.runtime.mutableFloatStateOf
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 
 /**
  * Brush library panel with Krita's real bundled presets (.kpp).
@@ -299,6 +306,137 @@ fun BrushPanel(
     val panelShape = RoundedCornerShape(16.dp)
     val density = LocalDensity.current
     val baseStartOffsetPx = remember(density) { with(density) { 48.dp.roundToPx() } }
+    val haptic = LocalHapticFeedback.current
+    val pinnedCategories = remember { listOf("全部", "常用", "最近") }
+    val maxScrollSpeed = with(density) { 12.dp.toPx() }
+    val autoScrollThreshold = with(density) { 40.dp.toPx() }
+
+    // Category drag state
+    var draggingCategory by remember { mutableStateOf<String?>(null) }
+    var categoryFloatingY by remember { mutableFloatStateOf(0f) }
+    var categoryDragYOffsetInItem by remember { mutableFloatStateOf(0f) }
+    var categoryFingerYInViewport by remember { mutableFloatStateOf(0f) }
+    var categoryViewportHeightPx by remember { mutableFloatStateOf(0f) }
+    var categoryAutoScrollSpeed by remember { mutableFloatStateOf(0f) }
+    val categoryItemHeightPx = with(density) { 38.dp.toPx() }
+
+    fun checkAndPerformCategoryReorder() {
+        val draggedCat = draggingCategory ?: return
+        val visibleItems = categoryScrollState.layoutInfo.visibleItemsInfo
+        if (visibleItems.isEmpty()) return
+
+        val centerY = categoryFloatingY + categoryItemHeightPx / 2f
+        val targetItem = visibleItems.firstOrNull { item ->
+            centerY >= item.offset && centerY < item.offset + item.size
+        }
+        val targetCat = targetItem?.key as? String ?: return
+        if (targetCat !in pinnedCategories && targetCat != draggedCat) {
+            vm.reorderCategoryByName(draggedCat, targetCat, categories)
+            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        }
+    }
+
+    LaunchedEffect(draggingCategory) {
+        if (draggingCategory == null) return@LaunchedEffect
+        while (isActive && draggingCategory != null) {
+            val speed = categoryAutoScrollSpeed
+            if (speed != 0f) {
+                val scrolled = categoryScrollState.scrollBy(speed)
+                if (scrolled != 0f) {
+                    checkAndPerformCategoryReorder()
+                }
+            }
+            delay(16)
+        }
+    }
+
+    // Preset list drag state
+    var draggingPresetName by remember { mutableStateOf<String?>(null) }
+    var presetListFloatingY by remember { mutableFloatStateOf(0f) }
+    var presetListDragYOffsetInItem by remember { mutableFloatStateOf(0f) }
+    var presetListFingerYInViewport by remember { mutableFloatStateOf(0f) }
+    var presetListViewportHeightPx by remember { mutableFloatStateOf(0f) }
+    var presetListAutoScrollSpeed by remember { mutableFloatStateOf(0f) }
+    val presetRowHeightPx = with(density) { 48.dp.toPx() }
+
+    fun checkAndPerformPresetListReorder() {
+        val dragged = draggingPresetName ?: return
+        val visibleItems = presetScrollState.layoutInfo.visibleItemsInfo
+        if (visibleItems.isEmpty()) return
+
+        val centerY = presetListFloatingY + presetRowHeightPx / 2f
+        val targetItem = visibleItems.firstOrNull { item ->
+            centerY >= item.offset && centerY < item.offset + item.size
+        }
+        val targetName = targetItem?.key as? String ?: return
+        if (targetName != dragged) {
+            vm.reorderBrushInView(dragged, targetName)
+            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        }
+    }
+
+    LaunchedEffect(draggingPresetName) {
+        if (draggingPresetName == null) return@LaunchedEffect
+        while (isActive && draggingPresetName != null) {
+            val speed = presetListAutoScrollSpeed
+            if (speed != 0f) {
+                val scrolled = presetScrollState.scrollBy(speed)
+                if (scrolled != 0f) {
+                    checkAndPerformPresetListReorder()
+                }
+            }
+            delay(16)
+        }
+    }
+
+    // Preset grid drag state
+    var draggingPresetGridName by remember { mutableStateOf<String?>(null) }
+    var presetGridFloatingX by remember { mutableFloatStateOf(0f) }
+    var presetGridFloatingY by remember { mutableFloatStateOf(0f) }
+    var presetGridDragXOffsetInItem by remember { mutableFloatStateOf(0f) }
+    var presetGridDragYOffsetInItem by remember { mutableFloatStateOf(0f) }
+    var presetGridFingerXInViewport by remember { mutableFloatStateOf(0f) }
+    var presetGridFingerYInViewport by remember { mutableFloatStateOf(0f) }
+    var presetGridViewportWidthPx by remember { mutableFloatStateOf(0f) }
+    var presetGridViewportHeightPx by remember { mutableFloatStateOf(0f) }
+    var presetGridAutoScrollSpeed by remember { mutableFloatStateOf(0f) }
+    var presetGridCardWidthPx by remember { mutableFloatStateOf(0f) }
+    var presetGridCardHeightPx by remember { mutableFloatStateOf(0f) }
+
+    fun checkAndPerformPresetGridReorder() {
+        val dragged = draggingPresetGridName ?: return
+        val visibleItems = presetGridScrollState.layoutInfo.visibleItemsInfo
+        if (visibleItems.isEmpty()) return
+
+        val cw = presetGridCardWidthPx.takeIf { it > 0f } ?: 80f
+        val ch = presetGridCardHeightPx.takeIf { it > 0f } ?: 80f
+        val centerX = presetGridFloatingX + cw / 2f
+        val centerY = presetGridFloatingY + ch / 2f
+
+        val targetItem = visibleItems.firstOrNull { item ->
+            centerX >= item.offset.x && centerX < item.offset.x + item.size.width &&
+            centerY >= item.offset.y && centerY < item.offset.y + item.size.height
+        }
+        val targetName = targetItem?.key as? String ?: return
+        if (targetName != dragged) {
+            vm.reorderBrushInView(dragged, targetName)
+            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        }
+    }
+
+    LaunchedEffect(draggingPresetGridName) {
+        if (draggingPresetGridName == null) return@LaunchedEffect
+        while (isActive && draggingPresetGridName != null) {
+            val speed = presetGridAutoScrollSpeed
+            if (speed != 0f) {
+                val scrolled = presetGridScrollState.scrollBy(speed)
+                if (scrolled != 0f) {
+                    checkAndPerformPresetGridReorder()
+                }
+            }
+            delay(16)
+        }
+    }
 
     val cardContent: @Composable (Modifier) -> Unit = { cardModifier ->
         Column(
@@ -382,28 +520,82 @@ fun BrushPanel(
                         Column(Modifier.fillMaxSize()) {
                             Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
                                 // Left categories
-                                LazyColumn(
-                                    state = categoryScrollState,
+                                Box(
                                     modifier = Modifier
                                         .width(88.dp)
                                         .fillMaxHeight()
-                                        .background(Morandi.panelHi.copy(alpha = 0.35f))
-                                ) {
-                                    items(categories, key = { it }) { cat ->
-                                        val sel = cat == selectedCategory
-                                        val iconRes = when (cat) {
-                                            "常用" -> R.drawable.ic_star
-                                            "最近" -> R.drawable.ic_clock
-                                            else -> null
+                                        .onGloballyPositioned { coordinates ->
+                                            categoryViewportHeightPx = coordinates.size.height.toFloat()
                                         }
-                                        Box(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(horizontal = 5.dp, vertical = 2.dp)
-                                                .height(38.dp)
-                                                .clip(RoundedCornerShape(8.dp))
-                                                .background(if (sel) Morandi.accent.copy(alpha = 0.16f) else Color.Transparent)
-                                                .combinedClickable(
+                                ) {
+                                    LazyColumn(
+                                        state = categoryScrollState,
+                                        userScrollEnabled = draggingCategory == null,
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .background(Morandi.panelHi.copy(alpha = 0.35f))
+                                    ) {
+                                        items(categories, key = { it }) { cat ->
+                                            val isDraggingThis = draggingCategory == cat
+                                            val sel = cat == selectedCategory
+                                            val iconRes = when (cat) {
+                                                "常用" -> R.drawable.ic_star
+                                                "最近" -> R.drawable.ic_clock
+                                                else -> null
+                                            }
+                                            val canDrag = cat !in pinnedCategories
+                                            val catGestureModifier = if (canDrag) {
+                                                Modifier.reorderDragGesture(
+                                                    key = cat,
+                                                    onTap = {
+                                                        if (selectedCategory != cat) {
+                                                            selectedCategory = cat
+                                                            vm.updateBrushPanelCategory(cat)
+                                                            isBatchMode = false
+                                                            selectedPresets = emptySet()
+                                                        }
+                                                    },
+                                                    onLongPressOnly = {
+                                                        categoryMenuTarget = cat
+                                                    },
+                                                    onDragStart = { offset ->
+                                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                        val itemInfo = categoryScrollState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == cat }
+                                                        val itemTop = itemInfo?.offset?.toFloat()
+                                                            ?: (categories.indexOf(cat) * categoryItemHeightPx)
+                                                        categoryDragYOffsetInItem = offset.y
+                                                        categoryFloatingY = itemTop
+                                                        categoryFingerYInViewport = itemTop + offset.y
+                                                        draggingCategory = cat
+                                                    },
+                                                    onDrag = { change, dragAmount ->
+                                                        categoryFingerYInViewport += dragAmount.y
+                                                        val minY = 0f
+                                                        val maxY = (categoryViewportHeightPx - categoryItemHeightPx).coerceAtLeast(0f)
+                                                        categoryFloatingY = (categoryFingerYInViewport - categoryDragYOffsetInItem).coerceIn(minY, maxY)
+
+                                                        val topDist = autoScrollThreshold - categoryFloatingY
+                                                        val bottomDist = if (categoryViewportHeightPx > 0f) {
+                                                            (categoryFloatingY + categoryItemHeightPx) - (categoryViewportHeightPx - autoScrollThreshold)
+                                                        } else 0f
+                                                        categoryAutoScrollSpeed = when {
+                                                            topDist > 0 -> -((topDist / autoScrollThreshold).coerceIn(0f, 1f) * maxScrollSpeed)
+                                                            bottomDist > 0 -> ((bottomDist / autoScrollThreshold).coerceIn(0f, 1f) * maxScrollSpeed)
+                                                            else -> 0f
+                                                        }
+                                                        checkAndPerformCategoryReorder()
+                                                    },
+                                                    onDragEnd = {
+                                                        draggingCategory = null
+                                                        categoryAutoScrollSpeed = 0f
+                                                    },
+                                                    onDragCancel = {
+                                                        draggingCategory = null
+                                                        categoryAutoScrollSpeed = 0f
+                                                    }
+                                                )
+                                            } else {
+                                                Modifier.combinedClickable(
                                                     onClick = {
                                                         if (selectedCategory != cat) {
                                                             selectedCategory = cat
@@ -412,33 +604,60 @@ fun BrushPanel(
                                                             selectedPresets = emptySet()
                                                         }
                                                     },
-                                                    onLongClick = { categoryMenuTarget = cat },
-                                                ),
-                                            contentAlignment = Alignment.CenterStart
-                                        ) {
-                                            Row(
-                                                modifier = Modifier.padding(start = 12.dp, end = 6.dp),
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                if (iconRes != null) {
-                                                    Icon(
-                                                        painter = painterResource(iconRes),
-                                                        contentDescription = null,
-                                                        tint = if (sel) Morandi.accent else Morandi.subText,
-                                                        modifier = Modifier.size(14.dp)
-                                                    )
-                                                    Spacer(Modifier.width(6.dp))
-                                                }
-                                                val catDisplayName = brushCategoryDisplayName(cat)
-                                                Text(
-                                                    text = catDisplayName,
-                                                    color = if (sel) Morandi.accent else Morandi.subText,
-                                                    fontSize = 13.sp,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis
+                                                    onLongClick = { categoryMenuTarget = cat }
                                                 )
                                             }
+
+                                            Box(
+                                                modifier = Modifier
+                                                    .animateItem(
+                                                        fadeInSpec = null,
+                                                        fadeOutSpec = null,
+                                                        placementSpec = tween(180)
+                                                    )
+                                                    .fillMaxWidth()
+                                                    .padding(horizontal = 5.dp, vertical = 2.dp)
+                                                    .height(38.dp)
+                                                    .graphicsLayer {
+                                                        if (isDraggingThis) alpha = 0.25f
+                                                    }
+                                                    .clip(RoundedCornerShape(8.dp))
+                                                    .background(if (sel) Morandi.accent.copy(alpha = 0.16f) else Color.Transparent)
+                                                    .then(catGestureModifier),
+                                                contentAlignment = Alignment.CenterStart
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.padding(start = 12.dp, end = 6.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    if (iconRes != null) {
+                                                        Icon(
+                                                            painter = painterResource(iconRes),
+                                                            contentDescription = null,
+                                                            tint = if (sel) Morandi.accent else Morandi.subText,
+                                                            modifier = Modifier.size(14.dp)
+                                                        )
+                                                        Spacer(Modifier.width(6.dp))
+                                                    }
+                                                    val catDisplayName = brushCategoryDisplayName(cat)
+                                                    Text(
+                                                        text = catDisplayName,
+                                                        color = if (sel) Morandi.accent else Morandi.subText,
+                                                        fontSize = 13.sp,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                }
+                                            }
                                         }
+                                    }
+
+                                    // Floating category overlay
+                                    if (draggingCategory != null) {
+                                        CategoryDragOverlay(
+                                            category = draggingCategory!!,
+                                            offsetY = categoryFloatingY
+                                        )
                                     }
                                 }
 
@@ -829,88 +1048,271 @@ fun BrushPanel(
                                             modifier = Modifier.fillMaxWidth().weight(1f)
                                         ) { isGrid ->
                                             if (isGrid) {
-                                                LazyVerticalGrid(
-                                                    columns = GridCells.Fixed(3),
-                                                    state = presetGridScrollState,
+                                                Box(
                                                     modifier = Modifier
                                                         .fillMaxSize()
-                                                        .padding(horizontal = 8.dp),
-                                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                                        .onGloballyPositioned { coordinates ->
+                                                            presetGridViewportWidthPx = coordinates.size.width.toFloat()
+                                                            presetGridViewportHeightPx = coordinates.size.height.toFloat()
+                                                        }
                                                 ) {
-                                                    items(filtered, key = { it.name }, contentType = { "preset_grid" }) { preset ->
-                                                        val isSelected = preset.index == vm.brushPresetIndex
-                                                        PresetGridCard(
-                                                            preset = preset,
-                                                            isSelected = isSelected,
-                                                            isModified = vm.isBrushModified(preset.name),
-                                                            isBatchMode = isBatchMode,
-                                                            isChecked = preset.name in selectedPresets,
-                                                            onClick = {
-                                                                if (isBatchMode) {
-                                                                    selectedPresets = if (preset.name in selectedPresets) {
-                                                                        selectedPresets - preset.name
-                                                                    } else {
-                                                                        selectedPresets + preset.name
+                                                    LazyVerticalGrid(
+                                                        columns = GridCells.Fixed(3),
+                                                        state = presetGridScrollState,
+                                                        userScrollEnabled = draggingPresetGridName == null,
+                                                        modifier = Modifier
+                                                            .fillMaxSize()
+                                                            .padding(horizontal = 8.dp),
+                                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                                    ) {
+                                                        items(filtered, key = { it.name }, contentType = { "preset_grid" }) { preset ->
+                                                            val isSelected = preset.index == vm.brushPresetIndex
+                                                            val isDraggingThis = draggingPresetGridName == preset.name
+                                                            val canReorder = !isBatchMode && !isSearchActive && selectedCategory != "最近"
+
+                                                            val itemGesture = if (canReorder) {
+                                                                Modifier.reorderDragGesture(
+                                                                    key = preset.name,
+                                                                    onTap = {
+                                                                        if (isSelected) view = BrushView.Detail(preset.index)
+                                                                        else vm.selectBrushPreset(preset.index)
+                                                                    },
+                                                                    onLongPressOnly = {
+                                                                        reorderPresetName = preset.name
+                                                                    },
+                                                                    onDragStart = { offset ->
+                                                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                                        val itemInfo = presetGridScrollState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == preset.name }
+                                                                        val itemLeft = itemInfo?.offset?.x?.toFloat() ?: 0f
+                                                                        val itemTop = itemInfo?.offset?.y?.toFloat() ?: 0f
+                                                                        if (itemInfo != null) {
+                                                                            presetGridCardWidthPx = itemInfo.size.width.toFloat()
+                                                                            presetGridCardHeightPx = itemInfo.size.height.toFloat()
+                                                                        }
+                                                                        presetGridDragXOffsetInItem = offset.x
+                                                                        presetGridDragYOffsetInItem = offset.y
+                                                                        presetGridFloatingX = itemLeft
+                                                                        presetGridFloatingY = itemTop
+                                                                        presetGridFingerXInViewport = itemLeft + offset.x
+                                                                        presetGridFingerYInViewport = itemTop + offset.y
+                                                                        draggingPresetGridName = preset.name
+                                                                    },
+                                                                    onDrag = { change, dragAmount ->
+                                                                        presetGridFingerXInViewport += dragAmount.x
+                                                                        presetGridFingerYInViewport += dragAmount.y
+                                                                        val minX = 0f
+                                                                        val minY = 0f
+                                                                        val cw = presetGridCardWidthPx.takeIf { it > 0f } ?: 80f
+                                                                        val ch = presetGridCardHeightPx.takeIf { it > 0f } ?: 80f
+                                                                        val maxX = (presetGridViewportWidthPx - cw).coerceAtLeast(0f)
+                                                                        val maxY = (presetGridViewportHeightPx - ch).coerceAtLeast(0f)
+                                                                        presetGridFloatingX = (presetGridFingerXInViewport - presetGridDragXOffsetInItem).coerceIn(minX, maxX)
+                                                                        presetGridFloatingY = (presetGridFingerYInViewport - presetGridDragYOffsetInItem).coerceIn(minY, maxY)
+
+                                                                        val topDist = autoScrollThreshold - presetGridFloatingY
+                                                                        val bottomDist = if (presetGridViewportHeightPx > 0f) {
+                                                                            (presetGridFloatingY + ch) - (presetGridViewportHeightPx - autoScrollThreshold)
+                                                                        } else 0f
+                                                                        presetGridAutoScrollSpeed = when {
+                                                                            topDist > 0 -> -((topDist / autoScrollThreshold).coerceIn(0f, 1f) * maxScrollSpeed)
+                                                                            bottomDist > 0 -> ((bottomDist / autoScrollThreshold).coerceIn(0f, 1f) * maxScrollSpeed)
+                                                                            else -> 0f
+                                                                        }
+                                                                        checkAndPerformPresetGridReorder()
+                                                                    },
+                                                                    onDragEnd = {
+                                                                        draggingPresetGridName = null
+                                                                        presetGridAutoScrollSpeed = 0f
+                                                                    },
+                                                                    onDragCancel = {
+                                                                        draggingPresetGridName = null
+                                                                        presetGridAutoScrollSpeed = 0f
                                                                     }
-                                                                } else {
-                                                                    if (isSelected) view = BrushView.Detail(preset.index)
-                                                                    else vm.selectBrushPreset(preset.index)
-                                                                }
-                                                            },
-                                                            onLongClick = {
-                                                                if (!isBatchMode) {
-                                                                    reorderPresetName = preset.name
-                                                                }
-                                                            },
-                                                            modifier = Modifier.animateItem()
-                                                        )
+                                                                )
+                                                            } else null
+
+                                                            PresetGridCard(
+                                                                preset = preset,
+                                                                isSelected = isSelected,
+                                                                isModified = vm.isBrushModified(preset.name),
+                                                                isBatchMode = isBatchMode,
+                                                                isChecked = preset.name in selectedPresets,
+                                                                onClick = {
+                                                                    if (isBatchMode) {
+                                                                        selectedPresets = if (preset.name in selectedPresets) {
+                                                                            selectedPresets - preset.name
+                                                                        } else {
+                                                                            selectedPresets + preset.name
+                                                                        }
+                                                                    } else {
+                                                                        if (isSelected) view = BrushView.Detail(preset.index)
+                                                                        else vm.selectBrushPreset(preset.index)
+                                                                    }
+                                                                },
+                                                                onLongClick = {
+                                                                    if (!isBatchMode) {
+                                                                        reorderPresetName = preset.name
+                                                                    }
+                                                                },
+                                                                itemGestureModifier = itemGesture,
+                                                                modifier = Modifier
+                                                                    .animateItem(
+                                                                        fadeInSpec = null,
+                                                                        fadeOutSpec = null,
+                                                                        placementSpec = tween(180)
+                                                                    )
+                                                                    .graphicsLayer {
+                                                                        if (isDraggingThis) alpha = 0.25f
+                                                                    }
+                                                            )
+                                                        }
+                                                    }
+
+                                                    // Floating grid card overlay
+                                                    if (draggingPresetGridName != null) {
+                                                        val draggedPreset = vm.brushPresets.firstOrNull { it.name == draggingPresetGridName }
+                                                        if (draggedPreset != null) {
+                                                            val cardWidthDp = with(density) { (presetGridCardWidthPx.takeIf { it > 0f } ?: 80f).toDp() }
+                                                            val cardHeightDp = with(density) { (presetGridCardHeightPx.takeIf { it > 0f } ?: 80f).toDp() }
+                                                            PresetGridDragOverlay(
+                                                                preset = draggedPreset,
+                                                                offsetX = presetGridFloatingX,
+                                                                offsetY = presetGridFloatingY,
+                                                                cardWidthDp = if (cardWidthDp > 0.dp) cardWidthDp else 80.dp,
+                                                                cardHeightDp = if (cardHeightDp > 0.dp) cardHeightDp else 96.dp,
+                                                                isModified = vm.isBrushModified(draggedPreset.name)
+                                                            )
+                                                        }
                                                     }
                                                 }
                                             } else {
-                                                LazyColumn(
-                                                    state = presetScrollState,
+                                                Box(
                                                     modifier = Modifier
                                                         .fillMaxSize()
-                                                        .padding(horizontal = 12.dp),
-                                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                                        .onGloballyPositioned { coordinates ->
+                                                            presetListViewportHeightPx = coordinates.size.height.toFloat()
+                                                        }
                                                 ) {
-                                                    items(filtered, key = { it.name }, contentType = { "preset_list" }) { preset ->
-                                                        val isSelected = preset.index == vm.brushPresetIndex
-                                                        val isFav = vm.isFavoriteBrush(preset.name)
-                                                        val subtitleText = if (isSearchActive && searchQuery.isNotBlank() && selectedCategory == "全部") {
-                                                            brushCategoryDisplayName(context, preset.group)
-                                                        } else null
-                                                        PresetListRow(
-                                                            preset = preset,
-                                                            isSelected = isSelected,
-                                                            isFav = isFav,
-                                                            isModified = vm.isBrushModified(preset.name),
-                                                            isBatchMode = isBatchMode,
-                                                            isChecked = preset.name in selectedPresets,
-                                                            subtitleText = subtitleText,
-                                                            onClick = {
-                                                                if (isBatchMode) {
-                                                                    selectedPresets = if (preset.name in selectedPresets) {
-                                                                        selectedPresets - preset.name
-                                                                    } else {
-                                                                        selectedPresets + preset.name
+                                                    LazyColumn(
+                                                        state = presetScrollState,
+                                                        userScrollEnabled = draggingPresetName == null,
+                                                        modifier = Modifier
+                                                            .fillMaxSize()
+                                                            .padding(horizontal = 12.dp),
+                                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                                    ) {
+                                                        items(filtered, key = { it.name }, contentType = { "preset_list" }) { preset ->
+                                                            val isSelected = preset.index == vm.brushPresetIndex
+                                                            val isFav = vm.isFavoriteBrush(preset.name)
+                                                            val isDraggingThis = draggingPresetName == preset.name
+                                                            val canReorder = !isBatchMode && !isSearchActive && selectedCategory != "最近"
+                                                            val subtitleText = if (isSearchActive && searchQuery.isNotBlank() && selectedCategory == "全部") {
+                                                                brushCategoryDisplayName(context, preset.group)
+                                                            } else null
+
+                                                            val itemGesture = if (canReorder) {
+                                                                Modifier.reorderDragGesture(
+                                                                    key = preset.name,
+                                                                    onTap = {
+                                                                        if (isSelected) view = BrushView.Detail(preset.index)
+                                                                        else vm.selectBrushPreset(preset.index)
+                                                                    },
+                                                                    onLongPressOnly = {
+                                                                        reorderPresetName = preset.name
+                                                                    },
+                                                                    onDragStart = { offset ->
+                                                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                                        val itemInfo = presetScrollState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == preset.name }
+                                                                        val itemTop = itemInfo?.offset?.toFloat()
+                                                                            ?: (filtered.indexOfFirst { it.name == preset.name } * presetRowHeightPx)
+                                                                        presetListDragYOffsetInItem = offset.y
+                                                                        presetListFloatingY = itemTop
+                                                                        presetListFingerYInViewport = itemTop + offset.y
+                                                                        draggingPresetName = preset.name
+                                                                    },
+                                                                    onDrag = { change, dragAmount ->
+                                                                        presetListFingerYInViewport += dragAmount.y
+                                                                        val minY = 0f
+                                                                        val maxY = (presetListViewportHeightPx - presetRowHeightPx).coerceAtLeast(0f)
+                                                                        presetListFloatingY = (presetListFingerYInViewport - presetListDragYOffsetInItem).coerceIn(minY, maxY)
+
+                                                                        val topDist = autoScrollThreshold - presetListFloatingY
+                                                                        val bottomDist = if (presetListViewportHeightPx > 0f) {
+                                                                            (presetListFloatingY + presetRowHeightPx) - (presetListViewportHeightPx - autoScrollThreshold)
+                                                                        } else 0f
+                                                                        presetListAutoScrollSpeed = when {
+                                                                            topDist > 0 -> -((topDist / autoScrollThreshold).coerceIn(0f, 1f) * maxScrollSpeed)
+                                                                            bottomDist > 0 -> ((bottomDist / autoScrollThreshold).coerceIn(0f, 1f) * maxScrollSpeed)
+                                                                            else -> 0f
+                                                                        }
+                                                                        checkAndPerformPresetListReorder()
+                                                                    },
+                                                                    onDragEnd = {
+                                                                        draggingPresetName = null
+                                                                        presetListAutoScrollSpeed = 0f
+                                                                    },
+                                                                    onDragCancel = {
+                                                                        draggingPresetName = null
+                                                                        presetListAutoScrollSpeed = 0f
                                                                     }
-                                                                } else {
-                                                                    if (isSelected) view = BrushView.Detail(preset.index)
-                                                                    else vm.selectBrushPreset(preset.index)
-                                                                }
-                                                            },
-                                                            onLongClick = {
-                                                                if (!isBatchMode) {
-                                                                    reorderPresetName = preset.name
-                                                                }
-                                                            },
-                                                            onToggleFav = {
-                                                                vm.toggleFavoriteBrush(preset.name)
-                                                            },
-                                                            modifier = Modifier.animateItem()
-                                                        )
+                                                                )
+                                                            } else null
+
+                                                            PresetListRow(
+                                                                preset = preset,
+                                                                isSelected = isSelected,
+                                                                isFav = isFav,
+                                                                isModified = vm.isBrushModified(preset.name),
+                                                                isBatchMode = isBatchMode,
+                                                                isChecked = preset.name in selectedPresets,
+                                                                subtitleText = subtitleText,
+                                                                onClick = {
+                                                                    if (isBatchMode) {
+                                                                        selectedPresets = if (preset.name in selectedPresets) {
+                                                                            selectedPresets - preset.name
+                                                                        } else {
+                                                                            selectedPresets + preset.name
+                                                                        }
+                                                                    } else {
+                                                                        if (isSelected) view = BrushView.Detail(preset.index)
+                                                                        else vm.selectBrushPreset(preset.index)
+                                                                    }
+                                                                },
+                                                                onLongClick = {
+                                                                    if (!isBatchMode) {
+                                                                        reorderPresetName = preset.name
+                                                                    }
+                                                                },
+                                                                onToggleFav = {
+                                                                    vm.toggleFavoriteBrush(preset.name)
+                                                                },
+                                                                itemGestureModifier = itemGesture,
+                                                                modifier = Modifier
+                                                                    .animateItem(
+                                                                        fadeInSpec = null,
+                                                                        fadeOutSpec = null,
+                                                                        placementSpec = tween(180)
+                                                                    )
+                                                                    .graphicsLayer {
+                                                                        if (isDraggingThis) alpha = 0.25f
+                                                                    }
+                                                            )
+                                                        }
+                                                    }
+
+                                                    // Floating list row overlay
+                                                    if (draggingPresetName != null) {
+                                                        val draggedPreset = vm.brushPresets.firstOrNull { it.name == draggingPresetName }
+                                                        if (draggedPreset != null) {
+                                                            PresetListDragOverlay(
+                                                                preset = draggedPreset,
+                                                                offsetY = presetListFloatingY,
+                                                                isFav = vm.isFavoriteBrush(draggedPreset.name),
+                                                                isModified = vm.isBrushModified(draggedPreset.name),
+                                                                modifier = Modifier.padding(horizontal = 12.dp)
+                                                            )
+                                                        }
                                                     }
                                                 }
                                             }
@@ -1385,8 +1787,9 @@ private fun PresetGridCard(
     isModified: Boolean = false,
     isBatchMode: Boolean = false,
     isChecked: Boolean = false,
-    onClick: () -> Unit,
-    onLongClick: () -> Unit,
+    onClick: () -> Unit = {},
+    onLongClick: () -> Unit = {},
+    itemGestureModifier: Modifier? = null,
     modifier: Modifier = Modifier,
 ) {
     val cellBg = when {
@@ -1400,9 +1803,11 @@ private fun PresetGridCard(
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
             .background(cellBg)
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = onLongClick,
+            .then(
+                itemGestureModifier ?: Modifier.combinedClickable(
+                    onClick = onClick,
+                    onLongClick = onLongClick,
+                )
             )
             .padding(4.dp),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -1486,9 +1891,10 @@ private fun PresetListRow(
     isBatchMode: Boolean = false,
     isChecked: Boolean = false,
     subtitleText: String? = null,
-    onClick: () -> Unit,
-    onLongClick: () -> Unit,
+    onClick: () -> Unit = {},
+    onLongClick: () -> Unit = {},
     onToggleFav: () -> Unit,
+    itemGestureModifier: Modifier? = null,
     modifier: Modifier = Modifier,
 ) {
     val cellBg = when {
@@ -1503,9 +1909,11 @@ private fun PresetListRow(
             .height(48.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(cellBg)
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = onLongClick,
+            .then(
+                itemGestureModifier ?: Modifier.combinedClickable(
+                    onClick = onClick,
+                    onLongClick = onLongClick,
+                )
             )
             .padding(start = 8.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically

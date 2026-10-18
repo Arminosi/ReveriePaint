@@ -215,6 +215,7 @@ internal fun BrushStudioScratchpadPanel(
     isExpanded: Boolean = true,
     onToggleExpanded: () -> Unit = {},
     onClose: () -> Unit = {},
+    onImportThumbnail: () -> Unit = {},
 ) {
     val context = LocalContext.current
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
@@ -356,6 +357,36 @@ internal fun BrushStudioScratchpadPanel(
                     Text(
                         stringResource(R.string.brush_studio_scratchpad_set_icon),
                         color = Morandi.accent,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+            }
+
+            Spacer(Modifier.width(4.dp))
+
+            // 导入自定义图标
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(Morandi.panel.copy(alpha = 0.85f))
+                    .clickable { onImportThumbnail() }
+                    .padding(horizontal = 8.dp, vertical = 5.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Icon(
+                        painterResource(R.drawable.ic_image),
+                        contentDescription = null,
+                        tint = Morandi.text,
+                        modifier = Modifier.size(12.dp),
+                    )
+                    Text(
+                        stringResource(R.string.brush_studio_import_thumbnail),
+                        color = Morandi.text,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Medium,
                     )

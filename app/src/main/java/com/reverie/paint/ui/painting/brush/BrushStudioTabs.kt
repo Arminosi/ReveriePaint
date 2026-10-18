@@ -751,7 +751,82 @@ internal fun PresetTabContent(
     onDuplicate: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
+    onImportThumbnail: () -> Unit = {},
 ) {
+    // 预设图标与缩略图管理
+    StudioGroupCard(stringResource(R.string.brush_studio_thumbnail_title)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            val bmp = rememberPresetThumb(preset?.name ?: "", preset?.thumbBytes)
+            Box(
+                modifier = Modifier
+                    .size(64.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Morandi.panel.copy(alpha = 0.6f))
+                    .border(1.dp, Morandi.border.copy(alpha = 0.25f), RoundedCornerShape(10.dp))
+                    .clickable { onImportThumbnail() },
+                contentAlignment = Alignment.Center,
+            ) {
+                if (bmp != null) {
+                    Image(
+                        bitmap = bmp.asImageBitmap(),
+                        contentDescription = preset?.name,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clip(RoundedCornerShape(10.dp))
+                    )
+                } else {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_brush),
+                        contentDescription = null,
+                        tint = textSub.copy(alpha = 0.5f),
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(3.dp)
+                        .size(16.dp)
+                        .clip(CircleShape)
+                        .background(Morandi.accent),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_image),
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(10.dp)
+                    )
+                }
+            }
+
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    stringResource(R.string.brush_studio_thumbnail_desc),
+                    color = textSub,
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ReTextButton(
+                        text = stringResource(R.string.brush_studio_import_thumbnail),
+                        onClick = onImportThumbnail,
+                        containerColor = Morandi.accent,
+                        contentColor = Morandi.onAccent,
+                        fontSize = 12.sp
+                    )
+                }
+            }
+        }
+    }
+
     // 引擎切换
     StudioGroupCard(stringResource(R.string.brush_studio_engine_title)) {
         val engines = listOf(

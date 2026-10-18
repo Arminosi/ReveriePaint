@@ -1465,7 +1465,11 @@
     <string name="brush_studio_masking_fade">实心率 (Solid Core)</string>
     <string name="brush_studio_masking_softness">柔和度 (Softness)</string>
     <string name="brush_studio_scratchpad_set_icon">设为预设图标</string>
+    <string name="brush_studio_import_thumbnail">导入图标</string>
+    <string name="brush_studio_thumbnail_title">预设图标</string>
+    <string name="brush_studio_thumbnail_desc">支持导入自定义图片并自动居中裁剪为 256×256 笔刷图标</string>
     <string name="brush_studio_toast_thumbnail_updated">预设图标已更新</string>
+    <string name="brush_studio_toast_thumbnail_import_failed">图标导入失败，请检查图片格式</string>
     <string name="brush_studio_sensor_title">驱动传感器 (Sensor)</string>
     <string name="brush_studio_sensor_pressure">压力 (Pressure)</string>
     <string name="brush_studio_sensor_speed">速度 (Speed)</string>

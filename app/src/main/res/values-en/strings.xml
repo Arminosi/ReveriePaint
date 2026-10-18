@@ -1465,7 +1465,11 @@
     <string name="brush_studio_masking_fade">Solid Core</string>
     <string name="brush_studio_masking_softness">Softness</string>
     <string name="brush_studio_scratchpad_set_icon">Set as Preset Icon</string>
+    <string name="brush_studio_import_thumbnail">Import Icon</string>
+    <string name="brush_studio_thumbnail_title">Preset Icon</string>
+    <string name="brush_studio_thumbnail_desc">Import custom image and auto-crop as 256×256 brush icon</string>
     <string name="brush_studio_toast_thumbnail_updated">Preset icon updated</string>
+    <string name="brush_studio_toast_thumbnail_import_failed">Failed to import icon, please check image format</string>
     <string name="brush_studio_sensor_title">Driver Sensor</string>
     <string name="brush_studio_sensor_pressure">Pressure</string>
     <string name="brush_studio_sensor_speed">Speed</string>

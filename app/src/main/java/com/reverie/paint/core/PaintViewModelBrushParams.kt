@@ -381,18 +381,27 @@ import kotlinx.coroutines.launch
     }
 
     /** Capture scratchpad raster as the preset's official PNG thumbnail */
-    fun PaintViewModel.capturePresetThumbnail(bitmap: Bitmap): Boolean {
-        val preset = brushPresets.firstOrNull { it.index == brushPresetIndex } ?: return false
+    fun PaintViewModel.capturePresetThumbnail(bitmap: Bitmap, targetPresetIndex: Int = brushPresetIndex): Boolean {
+        val preset = brushPresets.firstOrNull { it.index == targetPresetIndex } ?: run {
+            android.util.Log.e("ReveriePaint", "capturePresetThumbnail: preset not found for index $targetPresetIndex")
+            return false
+        }
         val dir = File(appContext.filesDir, "paintoppresets")
+        if (!dir.exists()) dir.mkdirs()
         val kppFile = File(dir, "${preset.name}.kpp")
         if (!kppFile.exists()) {
             try {
                 appContext.assets.open("paintoppresets/${preset.name}.kpp").use { input ->
                     kppFile.outputStream().use { output -> input.copyTo(output) }
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                android.util.Log.w("ReveriePaint", "Failed to copy kpp from assets for ${preset.name}", e)
+            }
         }
-        if (!kppFile.exists()) return false
+        if (!kppFile.exists()) {
+            android.util.Log.e("ReveriePaint", "capturePresetThumbnail: kppFile not found: ${kppFile.absolutePath}")
+            return false
+        }
 
         val targetSize = 256
         val thumbBmp = if (bitmap.width == targetSize && bitmap.height == targetSize) {
@@ -415,6 +424,8 @@ import kotlinx.coroutines.launch
                 appContext.getString(R.string.brush_studio_toast_thumbnail_updated),
                 android.widget.Toast.LENGTH_SHORT
             ).show()
+        } else {
+            android.util.Log.e("ReveriePaint", "capturePresetThumbnail: KppHelper.updateKppThumbnail failed for ${kppFile.name}")
         }
         return success
     }

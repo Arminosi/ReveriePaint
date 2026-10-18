@@ -384,5 +384,38 @@ import kotlinx.coroutines.withContext
         }
     }
 
+    /** 导入用户自定义图片作为指定笔刷的缩略图并保存 */
+    internal fun PaintViewModel.importPresetThumbnail(uri: android.net.Uri, targetPresetIndex: Int = brushPresetIndex): Boolean {
+        return try {
+            val bmp = ImageImportHelper.decodeUriSafely(appContext, uri, maxDimension = 512)
+            if (bmp == null) {
+                android.util.Log.e("ReveriePaint", "importPresetThumbnail: failed to decode image from uri=$uri")
+                return false
+            }
+
+            val targetSize = 256
+            val srcW = bmp.width
+            val srcH = bmp.height
+            val minDim = minOf(srcW, srcH)
+            val left = (srcW - minDim) / 2
+            val top = (srcH - minDim) / 2
+            val cropped = Bitmap.createBitmap(bmp, left, top, minDim, minDim)
+            val squareBmp = if (minDim == targetSize) {
+                cropped
+            } else {
+                val scaled = Bitmap.createScaledBitmap(cropped, targetSize, targetSize, true)
+                if (scaled != cropped) cropped.recycle()
+                scaled
+            }
+            if (bmp != squareBmp && !bmp.isRecycled && bmp != cropped) {
+                bmp.recycle()
+            }
+            capturePresetThumbnail(squareBmp, targetPresetIndex)
+        } catch (e: Exception) {
+            android.util.Log.e("ReveriePaint", "importPresetThumbnail failed", e)
+            false
+        }
+    }
+
 
 

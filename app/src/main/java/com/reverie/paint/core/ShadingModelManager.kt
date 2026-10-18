@@ -31,7 +31,7 @@ object ShadingModelManager {
     private const val CUSTOM_MODEL_NAME = "custom_shading.onnx"
     private const val PREFS_NAME = "shading_model_prefs"
     private const val KEY_USER_UNINSTALLED = "user_uninstalled"
-    const val DEFAULT_MODEL_SIZE_BYTES = 27_258_801L // 26MB
+    const val DEFAULT_MODEL_SIZE_BYTES = 35_615_956L // 34MB
 
     var modelStatus: ModelStatus by mutableStateOf(ModelStatus.NotDownloaded)
         private set
@@ -82,7 +82,7 @@ object ShadingModelManager {
             modelStatus = ModelStatus.Ready(
                 defaultFile.absolutePath,
                 isCustom = false,
-                fileName = "Depth Anything V2 (26MB)"
+                fileName = "Depth Anything V2 (34MB)"
             )
             return
         }
@@ -242,7 +242,7 @@ object ShadingModelManager {
                             modelStatus = ModelStatus.Ready(
                                 modelPath = targetFile.absolutePath,
                                 isCustom = false,
-                                fileName = "Depth Anything V2 (26MB)"
+                                fileName = "Depth Anything V2 (34MB)"
                             )
                             onSuccess()
                         }

@@ -866,7 +866,8 @@ import kotlinx.coroutines.withContext
                 applySensorXmlToDynamicOptions(parsed.sensorXml)
                 brushRatio = parsed.ratio ?: d.getOrNull(11) ?: 1.0
                 brushSharpness = d.getOrNull(12) ?: 0.0
-                brushRotation = d.getOrNull(13) ?: 0.0
+                // 附加旋转偏角默认初始为 0.0 度，不读取 Krita 的 RotationValue 强度乘数 (1.0)
+                brushRotation = 0.0
                 brushPressureSize = parsed.pressureSize ?: d.getOrNull(14) ?: 1.0
                 brushPressureOpacity = parsed.pressureOpacity ?: d.getOrNull(15) ?: 0.0
                 brushPressureFlow = parsed.pressureFlow ?: d.getOrNull(16) ?: 0.0
@@ -948,7 +949,8 @@ import kotlinx.coroutines.withContext
                 if (saved.spacingCustomized) {
                     ReverieCoreBridge.setBrushSpacing(saved.spacing)
                 }
-                ReverieCoreBridge.setBrushAngle(saved.angle)
+                val effAngle = ((saved.angle + saved.rotation) % 360.0).let { if (it < 0.0) it + 360.0 else it }
+                ReverieCoreBridge.setBrushAngle(effAngle)
                 if (saved.dynamicsCustomized) {
                     ReverieCoreBridge.setBrushScatter(saved.scatter)
                 }
@@ -993,7 +995,11 @@ import kotlinx.coroutines.withContext
                         )
                     }
                 }
-                ReverieCoreBridge.setBrushFollowDirection(saved.followDirection)
+                if (saved.followDirection) {
+                    ReverieCoreBridge.setBrushFollowDirection(true)
+                } else if (saved.dynamicsCustomized && brushRotationSensor.isBlank()) {
+                    ReverieCoreBridge.setBrushFollowDirection(false)
+                }
                 ReverieCoreBridge.setBrushJitter(saved.jitterAngle, saved.jitterSize)
                 ReverieCoreBridge.setBrushMirror(saved.randomFlipX, saved.randomFlipY)
                 ReverieCoreBridge.setBrushAntiAliasing(saved.antiAliasing)
@@ -1071,7 +1077,8 @@ import kotlinx.coroutines.withContext
                 if (saved.spacingCustomized) {
                     ReverieCoreBridge.setBrushSpacing(saved.spacing)
                 }
-                ReverieCoreBridge.setBrushAngle(saved.angle)
+                val effAngle = ((saved.angle + saved.rotation) % 360.0).let { if (it < 0.0) it + 360.0 else it }
+                ReverieCoreBridge.setBrushAngle(effAngle)
                 if (saved.dynamicsCustomized) {
                     ReverieCoreBridge.setBrushScatter(saved.scatter)
                 }
@@ -1116,7 +1123,11 @@ import kotlinx.coroutines.withContext
                         )
                     }
                 }
-                ReverieCoreBridge.setBrushFollowDirection(saved.followDirection)
+                if (saved.followDirection) {
+                    ReverieCoreBridge.setBrushFollowDirection(true)
+                } else if (saved.dynamicsCustomized && brushRotationSensor.isBlank()) {
+                    ReverieCoreBridge.setBrushFollowDirection(false)
+                }
                 ReverieCoreBridge.setBrushJitter(saved.jitterAngle, saved.jitterSize)
                 ReverieCoreBridge.setBrushMirror(saved.randomFlipX, saved.randomFlipY)
                 ReverieCoreBridge.setBrushAntiAliasing(saved.antiAliasing)

@@ -614,6 +614,7 @@ object KppHelper {
         val maskingSpacing: Double? = null,
         val maskingTipAsset: String? = null,
         val rotationSensor: String? = null,
+        val rotation: Double? = null,
         val scatterSensor: String? = null,
         val sizeSensor: String? = null,
         val opacitySensor: String? = null,
@@ -734,6 +735,7 @@ object KppHelper {
 
         // Sensor attributes
         val rotationSensor = Regex("""<param[^>]*name="RotationSensor"[^>]*>.*?<params\b[^>]*\bid="([^"]+)"""", RegexOption.DOT_MATCHES_ALL).find(xml)?.groupValues?.getOrNull(1)
+        val reverieRotation = Regex("""<param[^>]*name="ReverieRotation"[^>]*>(?:<!\[CDATA\[)?([^<\]]+)""").find(xml)?.groupValues?.getOrNull(1)?.toDoubleOrNull()
         val scatterSensor = Regex("""<param[^>]*name="ScatterSensor"[^>]*>.*?<params\b[^>]*\bid="([^"]+)"""", RegexOption.DOT_MATCHES_ALL).find(xml)?.groupValues?.getOrNull(1)
         val sizeSensor = Regex("""<param[^>]*name="SizeSensor"[^>]*>.*?<params\b[^>]*\bid="([^"]+)"""", RegexOption.DOT_MATCHES_ALL).find(xml)?.groupValues?.getOrNull(1)
         val opacitySensor = Regex("""<param[^>]*name="OpacitySensor"[^>]*>.*?<params\b[^>]*\bid="([^"]+)"""", RegexOption.DOT_MATCHES_ALL).find(xml)?.groupValues?.getOrNull(1)
@@ -800,6 +802,7 @@ object KppHelper {
             maskingSpacing = maskingSpacing,
             maskingTipAsset = maskingTipAsset,
             rotationSensor = rotationSensor,
+            rotation = reverieRotation,
             scatterSensor = scatterSensor,
             sizeSensor = sizeSensor,
             opacitySensor = opacitySensor,
@@ -847,8 +850,9 @@ object KppHelper {
         // 与 ReverieCore::setBrushSpacing 的同一约束保持一致。
 
         // 5. Update Angle & Scatter
-        xml = updateParam(xml, "paintopAngle", params.angle.toString())
-        xml = updateParam(xml, "AngleValue", params.angle.toString())
+        val effectiveAngle = ((params.angle + params.rotation) % 360.0).let { if (it < 0.0) it + 360.0 else it }
+        xml = updateParam(xml, "paintopAngle", effectiveAngle.toString())
+        xml = updateParam(xml, "AngleValue", effectiveAngle.toString())
         xml = updateParam(xml, "ScatterValue", params.scatter.toString())
         xml = updateParam(xml, "Scatter/strengthValue", params.scatter.toString())
         val hasScatter = params.dynamicsCustomized && params.scatter > 0.001
@@ -864,7 +868,8 @@ object KppHelper {
         xml = updateParam(xml, "PressureSoftness", (softness < SOFTNESS_NEUTRAL - 0.001).toString())
         xml = updateParam(xml, "RatioValue", params.ratio.toString())
         xml = updateParam(xml, "SharpnessValue", params.sharpness.toString())
-        xml = updateParam(xml, "RotationValue", params.rotation.toString())
+        xml = updateParam(xml, "RotationValue", "1")
+        xml = updateParam(xml, "ReverieRotation", params.rotation.toString())
 
         // 7. Update AntiAliasing
         val aa = params.antiAliasing > 0
@@ -1030,8 +1035,7 @@ object KppHelper {
         val fadeVal = params.fade.coerceIn(0.0, 1.0)
         val aaVal = if (params.antiAliasing > 0) 1 else 0
         val spikesVal = params.spikes.coerceAtLeast(2)
-
-        val brushAngleRad = String.format(java.util.Locale.US, "%.5f", Math.toRadians(params.angle))
+        val brushAngleRad = String.format(java.util.Locale.US, "%.5f", Math.toRadians(effectiveAngle))
         if (params.tipAsset.isNotBlank()) {
             val tipFile = params.tipAsset
             val ext = tipFile.substringAfterLast(".").lowercase()
@@ -1207,7 +1211,8 @@ object KppHelper {
         val aaVal = if (params.antiAliasing > 0) 1 else 0
         val spikesVal = params.spikes.coerceAtLeast(2)
 
-        val brushAngleRad = String.format(java.util.Locale.US, "%.5f", Math.toRadians(params.angle))
+        val effectiveAngle = ((params.angle + params.rotation) % 360.0).let { if (it < 0.0) it + 360.0 else it }
+        val brushAngleRad = String.format(java.util.Locale.US, "%.5f", Math.toRadians(effectiveAngle))
         val tipDef = if (params.tipAsset.isNotBlank()) {
             val ext = params.tipAsset.substringAfterLast(".").lowercase()
             val tipType = if (ext == "gbr") "gbr_brush" else "png_brush"
@@ -1232,14 +1237,15 @@ object KppHelper {
   <param type="string" name="OpacityValue"><![CDATA[${params.opacity}]]></param>
   <param type="string" name="FlowValue"><![CDATA[${params.flow}]]></param>
   <param type="string" name="Spacing"><![CDATA[${params.spacing}]]></param>
-  <param type="string" name="paintopAngle"><![CDATA[${params.angle}]]></param>
-  <param type="string" name="AngleValue"><![CDATA[${params.angle}]]></param>
+  <param type="string" name="paintopAngle"><![CDATA[$effectiveAngle]]></param>
+  <param type="string" name="AngleValue"><![CDATA[$effectiveAngle]]></param>
   <param type="string" name="ScatterValue"><![CDATA[${params.scatter}]]></param>
   <param type="string" name="SoftnessValue"><![CDATA[${params.softness.coerceIn(SOFTNESS_MIN, SOFTNESS_NEUTRAL)}]]></param>
   <param type="string" name="PressureSoftness"><![CDATA[${params.softness.coerceIn(SOFTNESS_MIN, SOFTNESS_NEUTRAL) < SOFTNESS_NEUTRAL - 0.001}]]></param>
   <param type="string" name="RatioValue"><![CDATA[${params.ratio}]]></param>
   <param type="string" name="SharpnessValue"><![CDATA[${params.sharpness}]]></param>
-  <param type="string" name="RotationValue"><![CDATA[${params.rotation}]]></param>
+  <param type="string" name="RotationValue"><![CDATA[1]]></param>
+  <param type="string" name="ReverieRotation"><![CDATA[${params.rotation}]]></param>
   <param type="string" name="CompositeOp"><![CDATA[${params.compositeOp}]]></param>
   <param type="string" name="AirbrushOption/isAirbrushing"><![CDATA[${params.airbrush}]]></param>
   <param type="string" name="AirbrushOption/rate"><![CDATA[${params.airbrushRate}]]></param>

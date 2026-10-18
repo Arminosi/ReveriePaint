@@ -1164,6 +1164,8 @@ private:
     qreal m_brushOpacity = 1.0;
     qreal m_brushFlow = 1.0;
     qreal m_brushSpacing = 0.1;
+    qreal m_brushAngle = 0.0;
+    qreal m_brushRotation = 0.0;
     QString m_brushTipAsset;
     ToolMode m_toolMode = ToolBrush;
 

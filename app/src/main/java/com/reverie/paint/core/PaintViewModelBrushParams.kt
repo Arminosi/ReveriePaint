@@ -31,7 +31,8 @@ import kotlinx.coroutines.launch
     internal fun PaintViewModel.updateBrushAngle(v: Double) {
         brushAngle = v
         saveBrushParam()
-        runCore(render = false) { ReverieCoreBridge.setBrushAngle(v) }
+        val effAngle = ((brushAngle + brushRotation) % 360.0).let { if (it < 0.0) it + 360.0 else it }
+        runCore(render = false) { ReverieCoreBridge.setBrushAngle(effAngle) }
     }
 
     internal fun PaintViewModel.updateBrushScatter(v: Double) {
@@ -67,7 +68,11 @@ import kotlinx.coroutines.launch
     internal fun PaintViewModel.updateBrushRotation(v: Double) {
         brushRotation = v
         saveBrushParam(reloadEngine = true)
-        runCore(render = false) { ReverieCoreBridge.setBrushRotation(v) }
+        val effAngle = ((brushAngle + brushRotation) % 360.0).let { if (it < 0.0) it + 360.0 else it }
+        runCore(render = false) {
+            ReverieCoreBridge.setBrushRotation(v)
+            ReverieCoreBridge.setBrushAngle(effAngle)
+        }
     }
 
     internal fun PaintViewModel.updateBrushCompositeOp(op: String) {
@@ -101,7 +106,14 @@ import kotlinx.coroutines.launch
 
     internal fun PaintViewModel.updateBrushFollowDirection(v: Boolean) {
         brushFollowDirection = v
-        saveBrushParam(reloadEngine = true, immediateReload = true)
+        if (v) {
+            brushRotationSensor = "drawingangle"
+            val opt = brushDynamicOptions["Rotation"]
+            if (opt != null) {
+                brushDynamicOptions["Rotation"] = opt.copy(sensorId = "drawingangle", enabled = true)
+            }
+        }
+        saveBrushParam(dynamicsChanged = true, reloadEngine = true, immediateReload = true)
         runCore(render = false) { ReverieCoreBridge.setBrushFollowDirection(v) }
     }
 
@@ -336,7 +348,11 @@ import kotlinx.coroutines.launch
 
     internal fun PaintViewModel.updateBrushRotationSensor(v: String) {
         brushRotationSensor = v
-        saveBrushParam(reloadEngine = true, immediateReload = true)
+        val opt = brushDynamicOptions["Rotation"]
+        if (opt != null) {
+            brushDynamicOptions["Rotation"] = opt.copy(sensorId = v, enabled = v.isNotBlank())
+        }
+        saveBrushParam(dynamicsChanged = true, reloadEngine = true, immediateReload = true)
     }
 
     internal fun PaintViewModel.updateBrushSizeSensor(v: String) {
@@ -583,7 +599,8 @@ import kotlinx.coroutines.launch
                             if (pSnapshot.spacingCustomized) {
                                 ReverieCoreBridge.setBrushSpacing(pSnapshot.spacing)
                             }
-                            ReverieCoreBridge.setBrushAngle(pSnapshot.angle)
+                            val effAngle = ((pSnapshot.angle + pSnapshot.rotation) % 360.0).let { if (it < 0.0) it + 360.0 else it }
+                            ReverieCoreBridge.setBrushAngle(effAngle)
                             if (pSnapshot.dynamicsCustomized) {
                                 ReverieCoreBridge.setBrushScatter(pSnapshot.scatter)
                             }
@@ -635,7 +652,11 @@ import kotlinx.coroutines.launch
                                 pSnapshot.textureMode,
                                 pSnapshot.texturePattern,
                             )
-                            ReverieCoreBridge.setBrushFollowDirection(pSnapshot.followDirection)
+                            if (pSnapshot.followDirection) {
+                                ReverieCoreBridge.setBrushFollowDirection(true)
+                            } else if (pSnapshot.dynamicsCustomized && brushRotationSensor.isBlank()) {
+                                ReverieCoreBridge.setBrushFollowDirection(false)
+                            }
                             ReverieCoreBridge.setBrushMirror(pSnapshot.randomFlipX, pSnapshot.randomFlipY)
                             ReverieCoreBridge.setBrushAntiAliasing(pSnapshot.antiAliasing)
                             ReverieCoreBridge.setBrushJitter(pSnapshot.jitterAngle, pSnapshot.jitterSize)

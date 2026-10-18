@@ -927,6 +927,8 @@ bool ReverieCore::loadBrushPreset(int index)
         }
         m_brushOpacity = qBound(0.0, s->getDouble("OpacityValue", 1.0), 1.0);
         m_brushFlow = qBound(0.0, s->getDouble("FlowValue", 1.0), 1.0);
+        m_brushAngle = s->paintOpAngle();
+        m_brushRotation = 0.0;
         KisBrushBasedPaintOpSettings *bs = dynamic_cast<KisBrushBasedPaintOpSettings *>(s.data());
         if (bs) {
             if (bs->autoSpacingActive()) {
@@ -1131,7 +1133,8 @@ bool ReverieCore::ensurePresetInfo(int index, CachedPresetInfo &out)
     const double softness = s->getDouble("SoftnessValue", s->getDouble("Softness", 0.5));
     const double ratio = s->getDouble("RatioValue", s->getDouble("Ratio", 1.0));
     const double sharpness = s->getDouble("SharpnessValue", s->getDouble("Sharpness", 0.0));
-    const double rotation = s->getDouble("RotationValue", s->getDouble("Rotation", 0.0));
+    // 附加旋转偏角默认初始为 0.0, 绝不可读取 Krita 的 RotationValue(曲线强度乘数 1.0)
+    const double rotation = 0.0;
 
     // Dynamics
     bool hasPressureSize = true;
@@ -1392,8 +1395,10 @@ void ReverieCore::setBrushSpacing(qreal v)
 
 void ReverieCore::setBrushAngle(qreal v)
 {
+    m_brushAngle = v;
     if (m_brushPreset && m_brushPreset->settings()) {
-        m_brushPreset->settings()->setPaintOpAngle(v);
+        const qreal effective = std::fmod(m_brushAngle + m_brushRotation, 360.0);
+        m_brushPreset->settings()->setPaintOpAngle(effective < 0.0 ? effective + 360.0 : effective);
     }
 }
 
@@ -1445,8 +1450,10 @@ void ReverieCore::setBrushSharpness(qreal v)
 
 void ReverieCore::setBrushRotation(qreal v)
 {
+    m_brushRotation = v;
     if (m_brushPreset && m_brushPreset->settings()) {
-        m_brushPreset->settings()->setProperty("RotationValue", v);
+        const qreal effective = std::fmod(m_brushAngle + m_brushRotation, 360.0);
+        m_brushPreset->settings()->setPaintOpAngle(effective < 0.0 ? effective + 360.0 : effective);
     }
 }
 
@@ -1662,11 +1669,17 @@ void ReverieCore::setBrushFollowDirection(bool enabled)
 {
     if (!m_brushPreset || !m_brushPreset->settings()) return;
     KisPaintOpSettingsSP s = m_brushPreset->settings();
-    s->setProperty("PressureRotation", enabled);
-    s->setProperty("RotationUseCurve", enabled);
     if (enabled) {
+        s->setProperty("PressureRotation", true);
+        s->setProperty("RotationUseCurve", true);
         s->setProperty("RotationSensor", QStringLiteral("<!DOCTYPE params><params fanCornersStep=\"30\" fanCornersEnabled=\"0\" angleOffset=\"0\" id=\"drawingangle\"><curve>0,0;1,1;</curve></params>"));
         s->setProperty("RotationValue", 1.0);
+    } else {
+        const QString sensorXml = s->getString("RotationSensor");
+        if (sensorXml.contains(QStringLiteral("id=\"drawingangle\""))) {
+            s->setProperty("PressureRotation", false);
+            s->setProperty("RotationUseCurve", false);
+        }
     }
 }
 

@@ -116,6 +116,11 @@ internal fun PaintViewModel.touchStart(
     val safeTiltY = if (tiltY.isNaN()) 0.0 else tiltY.coerceIn(-60.0, 60.0)
     val safeRotation = 0.0
 
+    // s12-F1: 每次落笔分配新笔画号, 并先把镜像门关成 OFF。落笔被下面的图层检查拒绝时
+    // 镜像点不会入队 (CanvasTouchView 即使 strokeStarted=false 也会追加镜像点)。
+    val mirrorSeq = ++mirrorStrokeSeqCounter
+    mirrorGate.begin(mirrorSeq, false)
+
     onPaintingActivity()
     smoothedStrokeX = x
     smoothedStrokeY = y
@@ -287,6 +292,9 @@ internal fun PaintViewModel.touchStart(
         } catch (_: UnsatisfiedLinkError) {
             ReverieCoreBridge.touchStrokeStart(x.toDouble(), y.toDouble(), effPressure)
         }
+        // s12-F1: 引擎现在打开的就是这一笔; 镜像批带笔画号, 引擎拒绝不属于本笔的点
+        ReverieCoreBridge.setMirrorStrokeSeq(mirrorSeq)
+        engineMirrorSeq = mirrorSeq
     }
     quickShapeCapture?.append(x, y, effPressure.toFloat(), safeTiltX.toFloat(), safeTiltY.toFloat())
     updateRenderedFrontier(x, y, lastStrokeTimeMs)
@@ -298,6 +306,11 @@ internal fun PaintViewModel.touchStart(
     // queued (FIFO keeps the first tick behind touchStrokeStart). Hold-still
     // ticks ARE recorded as same-point STROKE_MOVE samples for replay.
     startAirbrushIfNeeded(x, y, effPressure)
+    // s12: 对称辅助开启时镜像点从落笔起就入队 (PENDING), 渲染线程送进引擎; 引擎为每个镜像
+    // 分支建独立 paintop 并接受后转 LIVE (矢量预览关闭, 抬笔不重放)。被拒 (快速路径 / 双笔刷
+    // 蒙版 / 引擎绕过选区) 或抬笔时还没确认才走旧的预览 + 抬笔重放。
+    // 必须在 CanvasTouchView 追加第一个镜像点之前调用 (touchStart 先于 appendSymmetricSamplePair)。
+    mirrorGate.begin(mirrorSeq, drawingGuide.mode == GuideMode.SYMMETRY && drawingGuide.assistedDrawing)
     return true
 }
 
@@ -591,9 +604,11 @@ internal fun PaintViewModel.touchEnd(render: Boolean = true, deferOverrideRestor
             refreshLayerThumbs()
         }) {
             drainPendingStrokeBatchOnRenderThread()
+            drainMirrorBatchesOnRenderThread()
             ReverieCoreBridge.touchStrokeEnd()
             // 收尾点已全部交给引擎: 松开前缓冲, 接下来的帧照常失效主画布追平。
             realInkSink?.onStrokeCommitted()
+            engineMirrorSeq = 0
             if (hadOverride && !deferOverrideRestore) {
                 restoreCurrentBrushToNative(reloadPreset = presetSwitched)
             }
@@ -601,9 +616,11 @@ internal fun PaintViewModel.touchEnd(render: Boolean = true, deferOverrideRestor
     } else {
         runCore(render = false) {
             drainPendingStrokeBatchOnRenderThread()
+            drainMirrorBatchesOnRenderThread()
             ReverieCoreBridge.touchStrokeEnd()
             // 收尾点已全部交给引擎: 松开前缓冲, 接下来的帧照常失效主画布追平。
             realInkSink?.onStrokeCommitted()
+            engineMirrorSeq = 0
             if (hadOverride && !deferOverrideRestore) {
                 restoreCurrentBrushToNative(reloadPreset = presetSwitched)
             }
@@ -617,6 +634,7 @@ internal fun PaintViewModel.touchCancel() {
     disarmStrokeStartKick()
     // Drop undelivered samples so the queued drain cannot append to a stroke
     // whose cancel (transaction revert) is already in flight behind it.
+    mirrorGate.cancel()
     clearPendingStrokeSamples()
     if (recorder.recording) {
         recorder.strokeCancel()
@@ -633,6 +651,7 @@ internal fun PaintViewModel.touchCancel() {
         refreshLayerThumbs()
     }) {
         ReverieCoreBridge.touchStrokeCancel()
+        engineMirrorSeq = 0
         if (hadOverride) {
             restoreCurrentBrushToNative(reloadPreset = presetSwitched)
         }
@@ -679,16 +698,21 @@ internal fun PaintViewModel.replaySymmetricBranches(
         return
     }
 
-    // Snapshot branch slices on the calling thread so subsequent touches never race
+    // Snapshot branch slices on the calling thread so subsequent touches never race.
+    // 每个采样点 7 个 float: [x, y, pressure, tiltX, tiltY, rotation, timeSeconds]。
+    // 注意: 7 维仅是镜像缓冲的存储格式。JNI `touchStrokeMoveBatch` 只认 stride 6/3,
+    // 重放须重打包为 6 维并丢弃 timeSeconds; 仅 `touchStrokeMirrorBatch`
+    // -> `paintMirrorPolyline(..., 7, ...)` 接受 7 维。
+    val stride = PaintViewModel.STROKE_SAMPLE_STRIDE_WITH_TIME
     val activeBranches = ArrayList<FloatArray>(branchCount)
     val activeCounts = IntArray(branchCount)
     var totalActive = 0
     for (b in 0 until branchCount) {
         val count = mirroredSizes.getOrNull(b) ?: 0
         val buf = mirroredSamples.getOrNull(b)
-        if (count >= 1 && buf != null && buf.size >= count * 3) {
-            val slice = FloatArray(count * 3)
-            System.arraycopy(buf, 0, slice, 0, count * 3)
+        if (count >= 1 && buf != null && buf.size >= count * stride) {
+            val slice = FloatArray(count * stride)
+            System.arraycopy(buf, 0, slice, 0, count * stride)
             activeBranches.add(slice)
             activeCounts[totalActive] = count
             totalActive++
@@ -709,55 +733,9 @@ internal fun PaintViewModel.replaySymmetricBranches(
     isModified = true
     onPaintingActivity()
 
-    // 录制器时间线录制 (与主笔画保持完全一致的图层/笔刷上下文)
-    if (recorder.recording) {
-        val toolMode = if (isEraser) 1 else when (currentToolId) {
-            "brush" -> 0
-            "eraser" -> 1
-            "smudge" -> 3
-            else -> -1
-        }
-        for (b in 0 until totalActive) {
-            val buf = activeBranches[b]
-            val count = activeCounts[b]
-            recorder.captureContext(
-                toolMode = toolMode,
-                preset = brushPresetIndex,
-                size = brushSize,
-                opacity = brushOpacity,
-                flow = brushFlow,
-                compositeOp = if (isEraser) "erase" else brushCompositeOp,
-                color = brushColor,
-                layer = currentLayerIndex,
-            )
-            val strokeParams = brushPresets.firstOrNull { it.index == brushPresetIndex }?.let { brushParams[it.name] }
-            recorder.captureContextExt(
-                softness = brushSoftness,
-                spacing = brushSpacing,
-                angle = brushAngle,
-                scatter = brushScatter,
-                rotation = brushRotation,
-                ratio = brushRatio,
-                sharpness = brushSharpness,
-                smudgeRate = brushSmudgeRate,
-                smudgeLength = brushSmudgeLength,
-                secondaryColor = brushSecondaryColor,
-                airbrushEnabled = brushAirbrush,
-                airbrushRate = brushAirbrushRate,
-                isCustomized = strokeParams != null,
-                spacingCustomized = strokeParams?.spacingCustomized == true,
-            )
-            recorder.captureBrushFade(brushFade)
-            val effStartP = buf[2].coerceIn(0f, 1f)
-            recorder.strokeStart(buf[0], buf[1], effStartP)
-            for (i in 1 until count) {
-                val base = i * 3
-                val effP = buf[base + 2].coerceIn(0f, 1f)
-                recorder.strokeMove(buf[base], buf[base + 1], effP)
-            }
-            recorder.strokeEnd()
-        }
-    }
+    // 录制器时间线录制 (与主笔画保持完全一致的图层/笔刷上下文)。
+    // 与 recordMirroredBranchesOnly 共享同一份写入逻辑, 避免两处格式漂移。
+    recordMirroredBranchesToRecorder(activeBranches, activeCounts, totalActive, isEraser)
 
     val mode = if (isEraser) 1 else when (currentToolId) {
         "brush" -> 0
@@ -770,7 +748,9 @@ internal fun PaintViewModel.replaySymmetricBranches(
     h.post {
         pendingCoreOps.decrementPositive()
         try {
-            val chunkBuffer = FloatArray(PaintViewModel.STROKE_BATCH_CAPACITY * PaintViewModel.STROKE_SAMPLE_STRIDE)
+            // P0: touchStrokeMoveBatch 只认 stride 6/3, 重放须重打包为 6 维。
+            // 镜像缓冲的第 7 维 timeSeconds 在此丢弃 (该 JNI 入口从未消费时间)。
+            val chunkStride = PaintViewModel.STROKE_SAMPLE_STRIDE
             for (b in 0 until totalActive) {
                 val buf = activeBranches[b]
                 val count = activeCounts[b]
@@ -783,27 +763,40 @@ internal fun PaintViewModel.replaySymmetricBranches(
                     ReverieCoreBridge.setBrushCompositeOp("erase")
                 }
                 val startP = buf[2].toDouble().coerceIn(0.0, 1.0)
-                ReverieCoreBridge.touchStrokeStart(startX.toDouble(), startY.toDouble(), startP)
+                val startTiltX = buf[3].toDouble()
+                val startTiltY = buf[4].toDouble()
+                val startRot = buf[5].toDouble()
+                ReverieCoreBridge.touchStrokeStartWithSensors(startX.toDouble(), startY.toDouble(), startP, startTiltX, startTiltY, startRot)
 
                 var sampleIdx = 1
                 while (sampleIdx < count) {
                     val batchCount = minOf(PaintViewModel.STROKE_BATCH_CAPACITY, count - sampleIdx)
                     var validCount = 0
                     for (i in 0 until batchCount) {
-                        val base = (sampleIdx + i) * 3
+                        val base = (sampleIdx + i) * stride
                         val px = buf[base]
                         val py = buf[base + 1]
                         if (!px.isFinite() || !py.isFinite()) continue
-                        val offset = validCount * PaintViewModel.STROKE_SAMPLE_STRIDE
-                        chunkBuffer[offset] = px
-                        chunkBuffer[offset + 1] = py
-                        chunkBuffer[offset + 2] = buf[base + 2].coerceIn(0f, 1f)
-                        chunkBuffer[offset + 3] = 0f
-                        chunkBuffer[offset + 4] = 0f
-                        chunkBuffer[offset + 5] = 0f
                         validCount++
                     }
                     if (validCount > 0) {
+                        val chunkBuffer = FloatArray(validCount * chunkStride)
+                        var w = 0
+                        for (i in 0 until batchCount) {
+                            val base = (sampleIdx + i) * stride
+                            val px = buf[base]
+                            val py = buf[base + 1]
+                            if (!px.isFinite() || !py.isFinite()) continue
+                            val offset = w * chunkStride
+                            chunkBuffer[offset] = px
+                            chunkBuffer[offset + 1] = py
+                            chunkBuffer[offset + 2] = buf[base + 2].coerceIn(0f, 1f)
+                            chunkBuffer[offset + 3] = buf[base + 3]
+                            chunkBuffer[offset + 4] = buf[base + 4]
+                            chunkBuffer[offset + 5] = buf[base + 5]
+                            // 第 7 维 timeSeconds 不拷: chunkBuffer 为 6 维, 写 offset+6 会串到下一点。
+                            w++
+                        }
                         ReverieCoreBridge.touchStrokeMoveBatch(chunkBuffer, validCount)
                     }
                     sampleIdx += batchCount
@@ -825,6 +818,103 @@ internal fun PaintViewModel.replaySymmetricBranches(
             }
         }
     }
+}
+
+/**
+ * 仅把已快照的镜像分支写入录制流 (P1 共享实现)。
+ * 只做 recorder.captureContext/captureContextExt/captureBrushFade/
+ * strokeStart/strokeMove/strokeEnd, 不发引擎、不 endUndoMacro、不渲染。
+ * 调用方保证 activeBranches 是 stride 7 的镜像缓冲快照。
+ */
+private fun PaintViewModel.recordMirroredBranchesToRecorder(
+    activeBranches: List<FloatArray>,
+    activeCounts: IntArray,
+    totalActive: Int,
+    isEraser: Boolean,
+) {
+    if (!recorder.recording) return
+    val stride = PaintViewModel.STROKE_SAMPLE_STRIDE_WITH_TIME
+    val toolMode = if (isEraser) 1 else when (currentToolId) {
+        "brush" -> 0
+        "eraser" -> 1
+        "smudge" -> 3
+        else -> -1
+    }
+    for (b in 0 until totalActive) {
+        val buf = activeBranches[b]
+        val count = activeCounts[b]
+        recorder.captureContext(
+            toolMode = toolMode,
+            preset = brushPresetIndex,
+            size = brushSize,
+            opacity = brushOpacity,
+            flow = brushFlow,
+            compositeOp = if (isEraser) "erase" else brushCompositeOp,
+            color = brushColor,
+            layer = currentLayerIndex,
+        )
+        val strokeParams = brushPresets.firstOrNull { it.index == brushPresetIndex }?.let { brushParams[it.name] }
+        recorder.captureContextExt(
+            softness = brushSoftness,
+            spacing = brushSpacing,
+            angle = brushAngle,
+            scatter = brushScatter,
+            rotation = brushRotation,
+            ratio = brushRatio,
+            sharpness = brushSharpness,
+            smudgeRate = brushSmudgeRate,
+            smudgeLength = brushSmudgeLength,
+            secondaryColor = brushSecondaryColor,
+            airbrushEnabled = brushAirbrush,
+            airbrushRate = brushAirbrushRate,
+            isCustomized = strokeParams != null,
+            spacingCustomized = strokeParams?.spacingCustomized == true,
+        )
+        recorder.captureBrushFade(brushFade)
+        val effStartP = buf[2].coerceIn(0f, 1f)
+        recorder.strokeStart(buf[0], buf[1], effStartP)
+        for (i in 1 until count) {
+            val base = i * stride
+            val effP = buf[base + 2].coerceIn(0f, 1f)
+            recorder.strokeMove(buf[base], buf[base + 1], effP)
+        }
+        recorder.strokeEnd()
+    }
+}
+
+/**
+ * P1: 实时对称 (liveMirror) 时仅补录镜像分支。
+ * 抬笔已跳过 replaySymmetricBranches, 镜像墨已实时入图层, 这里只把
+ * mirroredSamples 写进 recorder, 不发引擎、不碰撤销宏、不渲染。
+ * 必须在 CanvasTouchView 清缓冲 (resetMirrorBranches) 之前调用,
+ * 且须在 touchEnd 之后调用 (主笔 strokeEnd 已落盘, 顺序与重放路径一致)。
+ * liveMirror==false 时走 replay 已录制, 不要重复调用。
+ */
+internal fun PaintViewModel.recordMirroredBranchesOnly(
+    mirroredSamples: List<FloatArray>,
+    mirroredSizes: IntArray,
+    branchCount: Int = mirroredSamples.size,
+    isEraser: Boolean = false,
+) {
+    if (!recorder.recording) return
+    if (branchCount <= 0) return
+    val stride = PaintViewModel.STROKE_SAMPLE_STRIDE_WITH_TIME
+    val activeBranches = ArrayList<FloatArray>(branchCount)
+    val activeCounts = IntArray(branchCount)
+    var totalActive = 0
+    for (b in 0 until branchCount) {
+        val count = mirroredSizes.getOrNull(b) ?: 0
+        val buf = mirroredSamples.getOrNull(b)
+        if (count >= 1 && buf != null && buf.size >= count * stride) {
+            val slice = FloatArray(count * stride)
+            System.arraycopy(buf, 0, slice, 0, count * stride)
+            activeBranches.add(slice)
+            activeCounts[totalActive] = count
+            totalActive++
+        }
+    }
+    if (totalActive == 0) return
+    recordMirroredBranchesToRecorder(activeBranches, activeCounts, totalActive, isEraser)
 }
 
 internal fun PaintViewModel.applyTool(toolId: String) {
@@ -1384,6 +1474,10 @@ internal fun PaintViewModel.undo() {
         return
     }
     if (pendingHistoryOps.get() >= 1) return
+    // s13-C5: 笔画进行中点了撤销 —— 先按"取消当前笔画"收掉这一笔 (主笔 + 镜像一起回滚、关对称
+    // 撤销宏), 再照常撤销上一步, 与双指撤销手势在笔画中的行为一致。不收的话对称模式下撤销宏还开着,
+    // 引擎 canUndo()=false 什么都不做, 主笔继续画而镜像在抬笔时被整笔重放。
+    com.reverie.paint.ui.painting.canvas.CanvasTouchView.activeTouchView?.abortActiveStrokeForHistory()
     pendingHistoryOps.incrementAndGet()
     stopAirbrush()
     disarmStrokeStartKick()
@@ -1423,6 +1517,8 @@ internal fun PaintViewModel.undo() {
 internal fun PaintViewModel.redo() {
     if (isQuickShapeEditing) return
     if (pendingHistoryOps.get() >= 1) return
+    // s13-C5: 同 undo(): 笔画进行中点重做先取消当前笔画
+    com.reverie.paint.ui.painting.canvas.CanvasTouchView.activeTouchView?.abortActiveStrokeForHistory()
     pendingHistoryOps.incrementAndGet()
     stopAirbrush()
     disarmStrokeStartKick()

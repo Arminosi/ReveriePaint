@@ -14,10 +14,13 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -152,7 +155,13 @@ fun QuickOklchWindow(
     // 与 vm.brushColor 双向同步 (非自身拖拽交互态下由外界取色管驱动更新)
     LaunchedEffect(vm.brushColor) {
         if (!isInteracting && !vm.brushColor.equals(lastSelfHex, ignoreCase = true)) {
-            currentOklch = OklchColor.fromHex(vm.brushColor)
+            val fromBrush = OklchColor.fromHex(vm.brushColor)
+            // 若外界传入的是近灰/黑白，保留当前已选的色相角，防止色相跳变归零 (0° 红色)
+            currentOklch = if (fromBrush.c < 0.005f && currentOklch.c >= 0.005f) {
+                fromBrush.copy(h = currentOklch.h)
+            } else {
+                fromBrush
+            }
             lastSelfHex = ""
         }
     }
@@ -548,18 +557,20 @@ private fun OklchLCSlicePlaneView(
     val pixelBuffer = remember { IntArray(bmpWidth * bmpHeight) }
     var lastHueForBmp by remember { mutableFloatStateOf(-999f) }
 
-    // 仅在 Hue 变化时重新生成切片像素
+    // 仅在 Hue 变化时重新生成切片像素 (后台异步计算, 杜绝主线程卡顿)
     LaunchedEffect(oklch.h) {
         if (abs(oklch.h - lastHueForBmp) >= 0.5f) {
             val h = oklch.h
-            for (y in 0 until bmpHeight) {
-                val l = 1f - (y.toFloat() / (bmpHeight - 1).toFloat())
-                val rowOffset = y * bmpWidth
-                val maxCInGamut = OklchColor.findMaxChromaInGamut(l, h)
-                for (x in 0 until bmpWidth) {
-                    val c = (x.toFloat() / (bmpWidth - 1).toFloat()) * maxChroma
-                    val effectiveC = c.coerceAtMost(maxCInGamut)
-                    pixelBuffer[rowOffset + x] = OklchColor.toRgbInt(l, effectiveC, h, clip = false)
+            withContext(Dispatchers.Default) {
+                for (y in 0 until bmpHeight) {
+                    val l = 1f - (y.toFloat() / (bmpHeight - 1).toFloat())
+                    val rowOffset = y * bmpWidth
+                    val maxCInGamut = OklchColor.findMaxChromaInGamut(l, h)
+                    for (x in 0 until bmpWidth) {
+                        val c = (x.toFloat() / (bmpWidth - 1).toFloat()) * maxChroma
+                        val effectiveC = c.coerceAtMost(maxCInGamut)
+                        pixelBuffer[rowOffset + x] = OklchColor.toRgbInt(l, effectiveC, h, clip = false)
+                    }
                 }
             }
             bitmap.setPixels(pixelBuffer, 0, bmpWidth, 0, 0, bmpWidth, bmpHeight)
@@ -585,7 +596,7 @@ private fun OklchLCSlicePlaneView(
             Canvas(
                 modifier = Modifier
                     .matchParentSize()
-                    .pointerInput(oklch.h) {
+                    .pointerInput(Unit) {
                         val handleTouch = { pos: Offset ->
                             val w = size.width.toFloat()
                             val h = size.height.toFloat()
@@ -598,42 +609,18 @@ private fun OklchLCSlicePlaneView(
                             }
                         }
 
-                        detectTapGestures(
-                            onPress = { offset ->
-                                onInteractionStart()
-                                handleTouch(offset)
-                                tryAwaitRelease()
-                                onInteractionEnd()
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false).also { it.consume() }
+                            onInteractionStart()
+                            handleTouch(down.position)
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                if (!change.pressed) break
+                                handleTouch(change.position)
+                                change.consume()
                             }
-                        )
-                    }
-                    .pointerInput(oklch.h) {
-                        detectDragGestures(
-                            onDragStart = { offset ->
-                                onInteractionStart()
-                                val w = size.width.toFloat()
-                                val h = size.height.toFloat()
-                                if (w > 0f && h > 0f) {
-                                    val newL = (1f - (offset.y / h)).coerceIn(0f, 1f)
-                                    val rawC = (offset.x / w * maxChroma).coerceIn(0f, maxChroma)
-                                    val maxCInGamut = OklchColor.findMaxChromaInGamut(newL, oklch.h)
-                                    val finalC = rawC.coerceAtMost(maxCInGamut)
-                                    onColorChange(OklchColor(newL, finalC, oklch.h))
-                                }
-                            },
-                            onDragEnd = { onInteractionEnd() },
-                            onDragCancel = { onInteractionEnd() },
-                        ) { change, _ ->
-                            change.consume()
-                            val w = size.width.toFloat()
-                            val h = size.height.toFloat()
-                            if (w > 0f && h > 0f) {
-                                val newL = (1f - (change.position.y / h)).coerceIn(0f, 1f)
-                                val rawC = (change.position.x / w * maxChroma).coerceIn(0f, maxChroma)
-                                val maxCInGamut = OklchColor.findMaxChromaInGamut(newL, oklch.h)
-                                val finalC = rawC.coerceAtMost(maxCInGamut)
-                                onColorChange(OklchColor(newL, finalC, oklch.h))
-                            }
+                            onInteractionEnd()
                         }
                     }
             ) {
@@ -710,18 +697,15 @@ private fun OklchLCSlicePlaneView(
             trackBrush = Brush.horizontalGradient(hColors),
             onValueChange = { frac ->
                 val newH = (frac * 360f) % 360f
-                val maxC = OklchColor.findMaxChromaInGamut(oklch.l, newH)
-                onColorChange(OklchColor(oklch.l, oklch.c.coerceAtMost(maxC), newH))
+                onColorChange(OklchColor(oklch.l, oklch.c, newH))
             },
             onStepDown = {
                 val newH = ((oklch.h - 5f) % 360f + 360f) % 360f
-                val maxC = OklchColor.findMaxChromaInGamut(oklch.l, newH)
-                onColorChange(OklchColor(oklch.l, oklch.c.coerceAtMost(maxC), newH))
+                onColorChange(OklchColor(oklch.l, oklch.c, newH))
             },
             onStepUp = {
                 val newH = (oklch.h + 5f) % 360f
-                val maxC = OklchColor.findMaxChromaInGamut(oklch.l, newH)
-                onColorChange(OklchColor(oklch.l, oklch.c.coerceAtMost(maxC), newH))
+                onColorChange(OklchColor(oklch.l, oklch.c, newH))
             },
             onClickValue = { onEditNumeric(DirectInputTarget.HUE) },
             onInteractionStart = onInteractionStart,
@@ -747,34 +731,54 @@ private fun OklchLightnessWheelView(
     onEditNumeric: (DirectInputTarget) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val wheelBmpSize = 360
+    val wheelBmpSize = 160
     val wheelBitmap = remember { Bitmap.createBitmap(wheelBmpSize, wheelBmpSize, Bitmap.Config.ARGB_8888) }
     val wheelPixels = remember { IntArray(wheelBmpSize * wheelBmpSize) }
+    val precomputedAngles = remember {
+        val arr = FloatArray(wheelBmpSize * wheelBmpSize)
+        val center = wheelBmpSize / 2f
+        for (y in 0 until wheelBmpSize) {
+            val dy = y - center
+            val rowOffset = y * wheelBmpSize
+            for (x in 0 until wheelBmpSize) {
+                val dx = x - center
+                var angleDeg = (atan2(dy, dx) * (180f / PI.toFloat()))
+                if (angleDeg < 0f) angleDeg += 360f
+                arr[rowOffset + x] = angleDeg
+            }
+        }
+        arr
+    }
+    val precomputedDists = remember {
+        val arr = FloatArray(wheelBmpSize * wheelBmpSize)
+        val center = wheelBmpSize / 2f
+        val radius = center
+        for (y in 0 until wheelBmpSize) {
+            val dy = y - center
+            val rowOffset = y * wheelBmpSize
+            for (x in 0 until wheelBmpSize) {
+                val dx = x - center
+                val dist = sqrt(dx * dx + dy * dy)
+                arr[rowOffset + x] = (dist / radius).coerceIn(0f, 1f)
+            }
+        }
+        arr
+    }
     var lastLightnessForBmp by remember { mutableFloatStateOf(-999f) }
 
-    // 当 L 发生实质变化时重新计算色轮
+    // 当 L 发生实质变化时重新计算色轮 (后台异步计算, 预计算几何网格, 零卡顿)
     LaunchedEffect(oklch.l) {
         if (abs(oklch.l - lastLightnessForBmp) >= 0.005f) {
             val l = oklch.l
-            // 720 采样点 (每 0.5 度一个精确值)
-            val lut = OklchColor.computeMaxChromaLUT(l, 720)
-            val center = wheelBmpSize / 2f
-            val radius = center
-
-            for (y in 0 until wheelBmpSize) {
-                val dy = y - center
-                val rowOffset = y * wheelBmpSize
-                for (x in 0 until wheelBmpSize) {
-                    val dx = x - center
-                    val dist = sqrt(dx * dx + dy * dy)
-                    val normDist = (dist / radius).coerceIn(0f, 1f)
-                    var angleDeg = (atan2(dy, dx) * (180f / PI.toFloat()))
-                    if (angleDeg < 0f) angleDeg += 360f
-
+            withContext(Dispatchers.Default) {
+                val lut = OklchColor.computeMaxChromaLUT(l, 360)
+                val total = wheelBmpSize * wheelBmpSize
+                for (i in 0 until total) {
+                    val angleDeg = precomputedAngles[i]
+                    val normDist = precomputedDists[i]
                     val maxC = OklchColor.sampleMaxChromaFromLUT(lut, angleDeg)
                     val c = normDist * maxC
-                    // 填充满所有像素 (包括圆外边缘也连续延伸最饱和色彩, 绝不在此处引入栅格阶梯透明裁切)
-                    wheelPixels[rowOffset + x] = OklchColor.toRgbInt(l, c, angleDeg, clip = false)
+                    wheelPixels[i] = OklchColor.toRgbInt(l, c, angleDeg, clip = false)
                 }
             }
             wheelBitmap.setPixels(wheelPixels, 0, wheelBmpSize, 0, 0, wheelBmpSize, wheelBmpSize)
@@ -787,23 +791,22 @@ private fun OklchLightnessWheelView(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        // 圆形色轮
+        // 圆形色轮 (尺寸 152.dp，内部预留 8.dp 边距以使边缘准星完整展示)
         Box(
-            modifier = Modifier
-                .size(150.dp)
-                .clip(CircleShape)
+            modifier = Modifier.size(152.dp)
         ) {
             Canvas(
                 modifier = Modifier
                     .matchParentSize()
-                    .pointerInput(oklch.l) {
+                    .pointerInput(Unit) {
                         val handleTouch = { pos: Offset ->
+                            val margin = 8.dp.toPx()
                             val cx = size.width / 2f
                             val cy = size.height / 2f
+                            val radius = (size.width - margin * 2) / 2f
                             val dx = pos.x - cx
                             val dy = pos.y - cy
                             val dist = sqrt(dx * dx + dy * dy)
-                            val radius = size.width / 2f
                             val normDist = (dist / radius).coerceIn(0f, 1f)
 
                             var angleDeg = (atan2(dy, dx) * (180f / PI.toFloat()))
@@ -814,77 +817,43 @@ private fun OklchLightnessWheelView(
                             onColorChange(OklchColor(oklch.l, finalC, angleDeg))
                         }
 
-                        detectTapGestures(
-                            onPress = { offset ->
-                                onInteractionStart()
-                                handleTouch(offset)
-                                tryAwaitRelease()
-                                onInteractionEnd()
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false).also { it.consume() }
+                            onInteractionStart()
+                            handleTouch(down.position)
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                if (!change.pressed) break
+                                handleTouch(change.position)
+                                change.consume()
                             }
-                        )
-                    }
-                    .pointerInput(oklch.l) {
-                        detectDragGestures(
-                            onDragStart = { offset ->
-                                onInteractionStart()
-                                val cx = size.width / 2f
-                                val cy = size.height / 2f
-                                val dx = offset.x - cx
-                                val dy = offset.y - cy
-                                val dist = sqrt(dx * dx + dy * dy)
-                                val radius = size.width / 2f
-                                val normDist = (dist / radius).coerceIn(0f, 1f)
-
-                                var angleDeg = (atan2(dy, dx) * (180f / PI.toFloat()))
-                                if (angleDeg < 0f) angleDeg += 360f
-
-                                val maxC = OklchColor.findMaxChromaInGamut(oklch.l, angleDeg)
-                                val finalC = normDist * maxC
-                                onColorChange(OklchColor(oklch.l, finalC, angleDeg))
-                            },
-                            onDragEnd = { onInteractionEnd() },
-                            onDragCancel = { onInteractionEnd() },
-                        ) { change, _ ->
-                            change.consume()
-                            val cx = size.width / 2f
-                            val cy = size.height / 2f
-                            val dx = change.position.x - cx
-                            val dy = change.position.y - cy
-                            val dist = sqrt(dx * dx + dy * dy)
-                            val radius = size.width / 2f
-                            val normDist = (dist / radius).coerceIn(0f, 1f)
-
-                            var angleDeg = (atan2(dy, dx) * (180f / PI.toFloat()))
-                            if (angleDeg < 0f) angleDeg += 360f
-
-                            val maxC = OklchColor.findMaxChromaInGamut(oklch.l, angleDeg)
-                            val finalC = normDist * maxC
-                            onColorChange(OklchColor(oklch.l, finalC, angleDeg))
+                            onInteractionEnd()
                         }
                     }
             ) {
-                val w = size.width
-                val h = size.height
-                val cx = w / 2f
-                val cy = h / 2f
-                val radius = w / 2f
+                val margin = 8.dp.toPx()
+                val cx = size.width / 2f
+                val cy = size.height / 2f
+                val radius = (size.width - margin * 2) / 2f
 
-                // 硬件级矢量圆形裁切, 杜绝任何边缘锯齿
+                // 矢量圆形裁剪贴图
                 val circlePath = Path().apply {
-                    addOval(Rect(0f, 0f, w, h))
+                    addOval(Rect(cx - radius, cy - radius, cx + radius, cy + radius))
                 }
                 clipPath(circlePath) {
                     drawImage(
                         image = wheelBitmap.asImageBitmap(),
-                        dstSize = IntSize(w.roundToInt(), h.roundToInt()),
+                        dstOffset = IntOffset((cx - radius).roundToInt(), (cy - radius).roundToInt()),
+                        dstSize = IntSize((radius * 2).roundToInt(), (radius * 2).roundToInt()),
                         filterQuality = FilterQuality.Medium,
                     )
                 }
 
-                // 矢量抗锯齿外圆环描边
+                // 矢量外轮廓圆环描边
                 drawCircle(
                     color = Morandi.border,
-                    radius = radius - 0.75.dp.toPx(),
+                    radius = radius,
                     center = Offset(cx, cy),
                     style = Stroke(width = 1.5.dp.toPx()),
                 )
@@ -924,6 +893,9 @@ private fun OklchLightnessWheelView(
                 Color.White,
             )
         }
+        val maxCForH = OklchColor.findMaxChromaInGamut(oklch.l, oklch.h)
+        val currentSatRatio = if (maxCForH > 0.001f) (oklch.c / maxCForH).coerceIn(0f, 1f) else 0f
+
         OklchSteppedSlider(
             label = "L",
             displayValue = "${(oklch.l * 100f).roundToInt()}%",
@@ -931,18 +903,18 @@ private fun OklchLightnessWheelView(
             trackBrush = Brush.horizontalGradient(lColors),
             onValueChange = { frac ->
                 val newL = frac.coerceIn(0f, 1f)
-                val maxC = OklchColor.findMaxChromaInGamut(newL, oklch.h)
-                onColorChange(OklchColor(newL, oklch.c.coerceAtMost(maxC), oklch.h))
+                val newMaxC = OklchColor.findMaxChromaInGamut(newL, oklch.h)
+                onColorChange(OklchColor(newL, currentSatRatio * newMaxC, oklch.h))
             },
             onStepDown = {
                 val newL = (oklch.l - 0.02f).coerceIn(0f, 1f)
-                val maxC = OklchColor.findMaxChromaInGamut(newL, oklch.h)
-                onColorChange(OklchColor(newL, oklch.c.coerceAtMost(maxC), oklch.h))
+                val newMaxC = OklchColor.findMaxChromaInGamut(newL, oklch.h)
+                onColorChange(OklchColor(newL, currentSatRatio * newMaxC, oklch.h))
             },
             onStepUp = {
                 val newL = (oklch.l + 0.02f).coerceIn(0f, 1f)
-                val maxC = OklchColor.findMaxChromaInGamut(newL, oklch.h)
-                onColorChange(OklchColor(newL, oklch.c.coerceAtMost(maxC), oklch.h))
+                val newMaxC = OklchColor.findMaxChromaInGamut(newL, oklch.h)
+                onColorChange(OklchColor(newL, currentSatRatio * newMaxC, oklch.h))
             },
             onClickValue = { onEditNumeric(DirectInputTarget.LIGHTNESS) },
             onInteractionStart = onInteractionStart,
@@ -982,18 +954,15 @@ private fun OklchPrecisionSlidersView(
             trackBrush = Brush.horizontalGradient(lColors),
             onValueChange = { frac ->
                 val newL = frac.coerceIn(0f, 1f)
-                val maxC = OklchColor.findMaxChromaInGamut(newL, oklch.h)
-                onColorChange(OklchColor(newL, oklch.c.coerceAtMost(maxC), oklch.h))
+                onColorChange(OklchColor(newL, oklch.c, oklch.h))
             },
             onStepDown = {
                 val newL = (oklch.l - 0.01f).coerceIn(0f, 1f)
-                val maxC = OklchColor.findMaxChromaInGamut(newL, oklch.h)
-                onColorChange(OklchColor(newL, oklch.c.coerceAtMost(maxC), oklch.h))
+                onColorChange(OklchColor(newL, oklch.c, oklch.h))
             },
             onStepUp = {
                 val newL = (oklch.l + 0.01f).coerceIn(0f, 1f)
-                val maxC = OklchColor.findMaxChromaInGamut(newL, oklch.h)
-                onColorChange(OklchColor(newL, oklch.c.coerceAtMost(maxC), oklch.h))
+                onColorChange(OklchColor(newL, oklch.c, oklch.h))
             },
             onClickValue = { onEditNumeric(DirectInputTarget.LIGHTNESS) },
             onInteractionStart = onInteractionStart,
@@ -1017,18 +986,15 @@ private fun OklchPrecisionSlidersView(
             trackBrush = Brush.horizontalGradient(cColors),
             onValueChange = { frac ->
                 val rawC = (frac * maxC).coerceIn(0f, maxC)
-                val maxCInGamut = OklchColor.findMaxChromaInGamut(oklch.l, oklch.h)
-                onColorChange(OklchColor(oklch.l, rawC.coerceAtMost(maxCInGamut), oklch.h))
+                onColorChange(OklchColor(oklch.l, rawC, oklch.h))
             },
             onStepDown = {
                 val rawC = (oklch.c - 0.01f).coerceIn(0f, maxC)
-                val maxCInGamut = OklchColor.findMaxChromaInGamut(oklch.l, oklch.h)
-                onColorChange(OklchColor(oklch.l, rawC.coerceAtMost(maxCInGamut), oklch.h))
+                onColorChange(OklchColor(oklch.l, rawC, oklch.h))
             },
             onStepUp = {
                 val rawC = (oklch.c + 0.01f).coerceIn(0f, maxC)
-                val maxCInGamut = OklchColor.findMaxChromaInGamut(oklch.l, oklch.h)
-                onColorChange(OklchColor(oklch.l, rawC.coerceAtMost(maxCInGamut), oklch.h))
+                onColorChange(OklchColor(oklch.l, rawC, oklch.h))
             },
             onClickValue = { onEditNumeric(DirectInputTarget.CHROMA) },
             onInteractionStart = onInteractionStart,
@@ -1049,18 +1015,15 @@ private fun OklchPrecisionSlidersView(
             trackBrush = Brush.horizontalGradient(hColors),
             onValueChange = { frac ->
                 val newH = (frac * 360f) % 360f
-                val maxCInGamut = OklchColor.findMaxChromaInGamut(oklch.l, newH)
-                onColorChange(OklchColor(oklch.l, oklch.c.coerceAtMost(maxCInGamut), newH))
+                onColorChange(OklchColor(oklch.l, oklch.c, newH))
             },
             onStepDown = {
                 val newH = ((oklch.h - 1f) % 360f + 360f) % 360f
-                val maxCInGamut = OklchColor.findMaxChromaInGamut(oklch.l, newH)
-                onColorChange(OklchColor(oklch.l, oklch.c.coerceAtMost(maxCInGamut), newH))
+                onColorChange(OklchColor(oklch.l, oklch.c, newH))
             },
             onStepUp = {
                 val newH = (oklch.h + 1f) % 360f
-                val maxCInGamut = OklchColor.findMaxChromaInGamut(oklch.l, newH)
-                onColorChange(OklchColor(oklch.l, oklch.c.coerceAtMost(maxCInGamut), newH))
+                onColorChange(OklchColor(oklch.l, oklch.c, newH))
             },
             onClickValue = { onEditNumeric(DirectInputTarget.HUE) },
             onInteractionStart = onInteractionStart,
@@ -1134,32 +1097,23 @@ private fun OklchSteppedSlider(
                 .border(1.dp, Morandi.border, RoundedCornerShape(9.dp))
                 .background(trackBrush)
                 .pointerInput(Unit) {
-                    val updateFraction = { x: Float ->
-                        val frac = (x / size.width.toFloat()).coerceIn(0f, 1f)
-                        onValueChange(frac)
-                    }
-                    detectTapGestures(
-                        onPress = { offset ->
-                            onInteractionStart()
-                            updateFraction(offset.x)
-                            tryAwaitRelease()
-                            onInteractionEnd()
-                        }
-                    )
-                }
-                .pointerInput(Unit) {
-                    detectDragGestures(
-                        onDragStart = { offset ->
-                            onInteractionStart()
-                            val frac = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false).also { it.consume() }
+                        onInteractionStart()
+                        val updateFraction = { x: Float ->
+                            val frac = (x / size.width.toFloat()).coerceIn(0f, 1f)
                             onValueChange(frac)
-                        },
-                        onDragEnd = { onInteractionEnd() },
-                        onDragCancel = { onInteractionEnd() },
-                    ) { change, _ ->
-                        change.consume()
-                        val frac = (change.position.x / size.width.toFloat()).coerceIn(0f, 1f)
-                        onValueChange(frac)
+                        }
+                        updateFraction(down.position.x)
+
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (!change.pressed) break
+                            updateFraction(change.position.x)
+                            change.consume()
+                        }
+                        onInteractionEnd()
                     }
                 }
         ) {
@@ -1311,18 +1265,15 @@ private fun OklchValueInputDialog(
                                 val newColor = when (target) {
                                     DirectInputTarget.LIGHTNESS -> {
                                         val l = (num / 100f).coerceIn(0f, 1f)
-                                        val maxC = OklchColor.findMaxChromaInGamut(l, currentOklch.h)
-                                        OklchColor(l, currentOklch.c.coerceAtMost(maxC), currentOklch.h)
+                                        OklchColor(l, currentOklch.c, currentOklch.h)
                                     }
                                     DirectInputTarget.CHROMA -> {
                                         val c = num.coerceIn(0f, OklchColor.MAX_CHROMA)
-                                        val maxC = OklchColor.findMaxChromaInGamut(currentOklch.l, currentOklch.h)
-                                        OklchColor(currentOklch.l, c.coerceAtMost(maxC), currentOklch.h)
+                                        OklchColor(currentOklch.l, c, currentOklch.h)
                                     }
                                     DirectInputTarget.HUE -> {
                                         val h = ((num % 360f) + 360f) % 360f
-                                        val maxC = OklchColor.findMaxChromaInGamut(currentOklch.l, h)
-                                        OklchColor(currentOklch.l, currentOklch.c.coerceAtMost(maxC), h)
+                                        OklchColor(currentOklch.l, currentOklch.c, h)
                                     }
                                 }
                                 onConfirm(newColor)
@@ -1371,18 +1322,15 @@ private fun OklchValueInputDialog(
                                     val newColor = when (target) {
                                         DirectInputTarget.LIGHTNESS -> {
                                             val l = (num / 100f).coerceIn(0f, 1f)
-                                            val maxC = OklchColor.findMaxChromaInGamut(l, currentOklch.h)
-                                            OklchColor(l, currentOklch.c.coerceAtMost(maxC), currentOklch.h)
+                                            OklchColor(l, currentOklch.c, currentOklch.h)
                                         }
                                         DirectInputTarget.CHROMA -> {
                                             val c = num.coerceIn(0f, OklchColor.MAX_CHROMA)
-                                            val maxC = OklchColor.findMaxChromaInGamut(currentOklch.l, currentOklch.h)
-                                            OklchColor(currentOklch.l, c.coerceAtMost(maxC), currentOklch.h)
+                                            OklchColor(currentOklch.l, c, currentOklch.h)
                                         }
                                         DirectInputTarget.HUE -> {
                                             val h = ((num % 360f) + 360f) % 360f
-                                            val maxC = OklchColor.findMaxChromaInGamut(currentOklch.l, h)
-                                            OklchColor(currentOklch.l, currentOklch.c.coerceAtMost(maxC), h)
+                                            OklchColor(currentOklch.l, currentOklch.c, h)
                                         }
                                     }
                                     onConfirm(newColor)

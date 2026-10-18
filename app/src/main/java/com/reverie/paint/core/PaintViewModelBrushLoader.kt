@@ -23,7 +23,9 @@ private var cachedBuiltInNames: Set<String>? = null
 internal fun PaintViewModel.getBuiltInBrushNames(): Set<String> {
     cachedBuiltInNames?.let { return it }
     val names = try {
-        appContext.assets.list("paintoppresets")?.map { it.removeSuffix(".kpp") }?.toSet() ?: emptySet()
+        appContext.assets.list("paintoppresets")
+            ?.filter { it.endsWith(".kpp", ignoreCase = true) || it.endsWith(".myb", ignoreCase = true) }
+            ?.map { it.removeSuffix(".kpp").removeSuffix(".myb") }?.toSet() ?: emptySet()
     } catch (_: Throwable) {
         emptySet()
     }
@@ -71,7 +73,7 @@ private fun PaintViewModel.copyBundledBrushAssets(): Pair<File, File> {
     val dir = java.io.File(appContext.filesDir, "paintoppresets")
     val brushDir = java.io.File(appContext.filesDir, "brushes")
     val prefs = appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
-    val needsFactoryRestore = !prefs.getBoolean("brush_kpp_factory_restored_v7", false)
+    val needsFactoryRestore = !prefs.getBoolean("brush_kpp_factory_restored_v8", false)
     val lastInstalledVersion = prefs.getInt("brush_assets_installed_version", -1)
     val isVersionMatched = lastInstalledVersion == com.reverie.paint.BuildConfig.VERSION_CODE
 
@@ -96,7 +98,7 @@ private fun PaintViewModel.copyBundledBrushAssets(): Pair<File, File> {
             }
         }
         if (needsFactoryRestore) {
-            prefs.edit().putBoolean("brush_kpp_factory_restored_v7", true).apply()
+            prefs.edit().putBoolean("brush_kpp_factory_restored_v8", true).apply()
         }
     } catch (e: Exception) {
         android.util.Log.e("ReveriePaint", "preset copy failed", e)
@@ -473,7 +475,7 @@ internal fun queryFileName(context: android.content.Context, uri: android.net.Ur
 fun isBrushUri(context: android.content.Context, uri: android.net.Uri): Boolean {
     val name = queryFileName(context, uri) ?: uri.path ?: ""
     val ext = name.substringAfterLast('.', "").substringBefore('?').lowercase()
-    if (ext in listOf("kpp", "bundle", "abr", "gbr", "gih")) return true
+    if (ext in listOf("kpp", "myb", "bundle", "abr", "gbr", "gih")) return true
     if (ext == "zip") {
         try {
             openStreamSafely(context, uri)?.use { inStream ->
@@ -485,6 +487,7 @@ fun isBrushUri(context: android.content.Context, uri: android.net.Uri): Boolean 
                         if (eName.contains("paintoppresets/") ||
                             eName.contains("brushes/") ||
                             eName.endsWith(".kpp", ignoreCase = true) ||
+                            eName.endsWith(".myb", ignoreCase = true) ||
                             eName.endsWith(".gbr", ignoreCase = true) ||
                             eName.endsWith(".abr", ignoreCase = true) ||
                             eName.endsWith(".bundle", ignoreCase = true) ||
@@ -499,7 +502,7 @@ fun isBrushUri(context: android.content.Context, uri: android.net.Uri): Boolean 
         } catch (_: Exception) {}
     }
     val mime = try { context.contentResolver.getType(uri) } catch (_: Exception) { null }
-    if (mime != null && (mime.contains("kpp") || mime.contains("bundle") || mime.contains("photoshop-brush") || mime.contains("paintoppreset"))) {
+    if (mime != null && (mime.contains("kpp") || mime.contains("myb") || mime.contains("bundle") || mime.contains("photoshop-brush") || mime.contains("paintoppreset"))) {
         return true
     }
     return false

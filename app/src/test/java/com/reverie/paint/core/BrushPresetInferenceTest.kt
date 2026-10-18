@@ -41,5 +41,14 @@ class BrushPresetInferenceTest {
         assertEquals("绘画", inferBrushGroup("m)_RGBA_04_Impasto"))
         assertEquals("绘画", inferBrushGroup("m)_RGBA_05_Impasto-details"))
         assertEquals("绘画", inferBrushGroup("m)_RGBA_06_Rock"))
+
+        // MyPaint 预设分组验证
+        assertEquals("铅笔", inferBrushGroup("c)_Pencil_1_Sketch_(mypaint)"))
+        assertEquals("铅笔", inferBrushGroup("c)_Pencil_2b_(mypaint)"))
+        assertEquals("勾线", inferBrushGroup("d)_Ink_pen_(mypaint)"))
+        assertEquals("马克笔", inferBrushGroup("e)_Marker_Medium_(mypaint)"))
+        assertEquals("马克笔", inferBrushGroup("e)_Marker_Plain_(mypaint)"))
+        assertEquals("水彩", inferBrushGroup("i)_Wet_Knife_Plus_(mypaint)"))
+        assertEquals("水彩", inferBrushGroup("i)_Wet_Paint_Plus_(mypaint)"))
     }
 }

@@ -555,11 +555,13 @@ import kotlinx.coroutines.withContext
         val preset = brushPresets.firstOrNull { it.index == index }
         if (preset != null) {
             val dir = File(appContext.filesDir, "paintoppresets")
-            val target = File(dir, "${preset.name}.kpp")
+            val isMyb = File(dir, "${preset.name}.myb").exists() || (appContext.assets.list("paintoppresets")?.contains("${preset.name}.myb") == true)
+            val ext = if (isMyb) "myb" else "kpp"
+            val target = File(dir, "${preset.name}.$ext")
             try {
                 val assetNames = appContext.assets.list("paintoppresets") ?: emptyArray()
-                if (assetNames.contains("${preset.name}.kpp")) {
-                    appContext.assets.open("paintoppresets/${preset.name}.kpp").use { input ->
+                if (assetNames.contains("${preset.name}.$ext")) {
+                    appContext.assets.open("paintoppresets/${preset.name}.$ext").use { input ->
                         target.outputStream().use { output -> input.copyTo(output) }
                     }
                 }
@@ -637,11 +639,13 @@ import kotlinx.coroutines.withContext
     /** Reset a brush preset back to factory default parameters */
     internal fun PaintViewModel.resetBrushPresetToDefault(presetName: String) {
         val dir = File(appContext.filesDir, "paintoppresets")
-        val target = File(dir, "$presetName.kpp")
+        val isMyb = File(dir, "$presetName.myb").exists() || (appContext.assets.list("paintoppresets")?.contains("$presetName.myb") == true)
+        val ext = if (isMyb) "myb" else "kpp"
+        val target = File(dir, "$presetName.$ext")
         try {
             val assetNames = appContext.assets.list("paintoppresets") ?: emptyArray()
-            if (assetNames.contains("$presetName.kpp")) {
-                appContext.assets.open("paintoppresets/$presetName.kpp").use { input ->
+            if (assetNames.contains("$presetName.$ext")) {
+                appContext.assets.open("paintoppresets/$presetName.$ext").use { input ->
                     target.outputStream().use { output -> input.copyTo(output) }
                 }
             }
@@ -1332,25 +1336,36 @@ import kotlinx.coroutines.withContext
         val src = brushPresets.firstOrNull { it.index == presetIndex } ?: return false
         val cleanName = newName?.trim()?.ifEmpty { null } ?: "${src.name} 副本"
         val dir = File(appContext.filesDir, "paintoppresets")
-        val srcFile = File(dir, "${src.name}.kpp")
-        val dstFile = File(dir, "$cleanName.kpp")
-        if (srcFile.exists()) {
-            srcFile.copyTo(dstFile, overwrite = true)
-        }
-        val srcCustomized = brushParams[src.name]
-        if (srcCustomized != null) {
-            val cleanParams = srcCustomized.copy(
-                author = if (src.isBuiltIn) "Krita (副本)" else srcCustomized.author,
-                isAuthorLocked = false,
-            )
-            brushParams[cleanName] = cleanParams
-            if (dstFile.exists()) {
-                KppHelper.updateKppFile(dstFile, cleanName, cleanParams)
+        val srcMyb = File(dir, "${src.name}.myb")
+        val isMyb = srcMyb.exists()
+        if (isMyb) {
+            val dstMyb = File(dir, "$cleanName.myb")
+            srcMyb.copyTo(dstMyb, overwrite = true)
+            val srcPrev = File(dir, "${src.name}_prev.png")
+            if (srcPrev.exists()) {
+                srcPrev.copyTo(File(dir, "${cleanName}_prev.png"), overwrite = true)
             }
         } else {
-            // 源笔刷未自定义: 仅更新 XML 内预设名称, 绝不拿空默认参数覆写破坏原预设内容 (引擎类型/笔尖/纹理/蒙版/动态等)
-            if (dstFile.exists()) {
-                KppHelper.updatePresetName(dstFile, cleanName)
+            val srcFile = File(dir, "${src.name}.kpp")
+            val dstFile = File(dir, "$cleanName.kpp")
+            if (srcFile.exists()) {
+                srcFile.copyTo(dstFile, overwrite = true)
+            }
+            val srcCustomized = brushParams[src.name]
+            if (srcCustomized != null) {
+                val cleanParams = srcCustomized.copy(
+                    author = if (src.isBuiltIn) "Krita (副本)" else srcCustomized.author,
+                    isAuthorLocked = false,
+                )
+                brushParams[cleanName] = cleanParams
+                if (dstFile.exists()) {
+                    KppHelper.updateKppFile(dstFile, cleanName, cleanParams)
+                }
+            } else {
+                // 源笔刷未自定义: 仅更新 XML 内预设名称, 绝不拿空默认参数覆写破坏原预设内容 (引擎类型/笔尖/纹理/蒙版/动态等)
+                if (dstFile.exists()) {
+                    KppHelper.updatePresetName(dstFile, cleanName)
+                }
             }
         }
         persistBrushParams()
@@ -1372,6 +1387,10 @@ import kotlinx.coroutines.withContext
         val dir = File(appContext.filesDir, "paintoppresets")
         val file = File(dir, "${preset.name}.kpp")
         if (file.exists()) file.delete()
+        val mybFile = File(dir, "${preset.name}.myb")
+        if (mybFile.exists()) mybFile.delete()
+        val prevFile = File(dir, "${preset.name}_prev.png")
+        if (prevFile.exists()) prevFile.delete()
         brushParams.remove(preset.name)
         persistBrushParams()
         userBrushGroups = userBrushGroups - preset.name
@@ -1397,6 +1416,10 @@ import kotlinx.coroutines.withContext
             for (p in customPresets) {
                 val file = File(dir, "${p.name}.kpp")
                 if (file.exists()) file.delete()
+                val mybFile = File(dir, "${p.name}.myb")
+                if (mybFile.exists()) mybFile.delete()
+                val prevFile = File(dir, "${p.name}_prev.png")
+                if (prevFile.exists()) prevFile.delete()
                 brushParams.remove(p.name)
             }
             if (deletedNames.isNotEmpty()) {
@@ -1550,7 +1573,7 @@ import kotlinx.coroutines.withContext
 
             val chosenGroup = targetGroup?.trim()?.takeIf { it.isNotEmpty() }
 
-            if (filename.endsWith(".kpp", ignoreCase = true)) {
+            if (filename.endsWith(".kpp", ignoreCase = true) || filename.endsWith(".myb", ignoreCase = true)) {
                 val target = File(presetDir, filename)
                 resolver.openInputStream(uri)?.use { input ->
                     target.outputStream().use { output -> input.copyTo(output) }

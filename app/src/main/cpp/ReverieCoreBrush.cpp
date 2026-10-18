@@ -156,6 +156,7 @@ void ReverieCore::registerPaintOps()
         krita_register_tangentnormal_paintop();
         krita_register_hairy_paintop();
         krita_register_hatching_paintop();
+        krita_register_mypaint_paintop();
         registerCoreFilters();
 
         const KoColorSpace *cs16 = KoColorSpaceRegistry::instance()->colorSpace(
@@ -171,12 +172,15 @@ int ReverieCore::loadBrushPresetsFromDir(const QString &dirPath)
 {
     registerPaintOps();
     QDir dir(dirPath);
-    const QStringList kpps = dir.entryList(QStringList() << QStringLiteral("*.kpp"),
-                                           QDir::Files, QDir::Name);
+    const QStringList files = dir.entryList(QStringList() << QStringLiteral("*.kpp") << QStringLiteral("*.myb"),
+                                            QDir::Files, QDir::Name);
     m_presets.clear();
-    for (const QString &f : kpps) {
+    for (const QString &f : files) {
         QString name = f;
-        name.chop(4);  // strip ".kpp"
+        if (name.endsWith(QLatin1String(".kpp"), Qt::CaseInsensitive) ||
+            name.endsWith(QLatin1String(".myb"), Qt::CaseInsensitive)) {
+            name.chop(4);  // strip extension (.kpp or .myb)
+        }
         m_presets.append(qMakePair(name, dir.filePath(f)));
     }
     // 预设列表重建后索引全部位移, 元数据缓存按 index 键存, 必须整体失效
@@ -827,7 +831,12 @@ bool ReverieCore::loadBrushPreset(int index)
     if (!f.open(QIODevice::ReadOnly)) {
         return false;
     }
-    KisPaintOpPresetSP preset(new KisPaintOpPreset(m_presets[index].first));
+    KisPaintOpPresetSP preset;
+    if (path.endsWith(QLatin1String(".myb"), Qt::CaseInsensitive)) {
+        preset = KisPaintOpPresetSP(krita_create_mypaint_preset(path));
+    } else {
+        preset = KisPaintOpPresetSP(new KisPaintOpPreset(m_presets[index].first));
+    }
     bool ok = preset->loadFromDevice(&f, m_brushResources);
     f.close();
     if (ok) {
@@ -993,7 +1002,12 @@ bool ReverieCore::ensurePresetInfo(int index, CachedPresetInfo &out)
     if (!f.open(QIODevice::ReadOnly)) {
         return false;
     }
-    KisPaintOpPresetSP preset(new KisPaintOpPreset(m_presets[index].first));
+    KisPaintOpPresetSP preset;
+    if (path.endsWith(QLatin1String(".myb"), Qt::CaseInsensitive)) {
+        preset = KisPaintOpPresetSP(krita_create_mypaint_preset(path));
+    } else {
+        preset = KisPaintOpPresetSP(new KisPaintOpPreset(m_presets[index].first));
+    }
     bool ok = preset->loadFromDevice(&f, m_brushResources);
     f.close();
     if (ok) {
@@ -1258,7 +1272,17 @@ QByteArray ReverieCore::brushPresetThumbData(int index) const
     if (index < 0 || index >= m_presets.size()) {
         return QByteArray();
     }
-    QFile f(m_presets[index].second);
+    const QString &path = m_presets[index].second;
+    if (path.endsWith(QLatin1String(".myb"), Qt::CaseInsensitive)) {
+        QString prevPath = path;
+        prevPath.chop(4);
+        prevPath += QStringLiteral("_prev.png");
+        QFile prevFile(prevPath);
+        if (prevFile.open(QIODevice::ReadOnly)) {
+            return prevFile.readAll();
+        }
+    }
+    QFile f(path);
     if (!f.open(QIODevice::ReadOnly)) {
         return QByteArray();
     }

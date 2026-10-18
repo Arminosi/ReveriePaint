@@ -481,3 +481,20 @@ private suspend fun PaintViewModel.renderLayerPixels(layerIndex: Int, bitmap: Bi
             }
         }
     }
+
+/**
+ * 切换选中的神经网络预设模型
+ */
+internal fun PaintViewModel.switchShadingModelPreset(preset: com.reverie.paint.model.ShadingModelPreset) {
+    ShadingModelManager.selectPreset(preset, appContext)
+    updateShadingConfig(shadingAssistConfig, reloadLineart = true)
+}
+
+/**
+ * 切换为已导入的自定义模型
+ */
+internal fun PaintViewModel.switchShadingCustomModel() {
+    ShadingModelManager.selectCustomModel(appContext)
+    updateShadingConfig(shadingAssistConfig, reloadLineart = true)
+}
+

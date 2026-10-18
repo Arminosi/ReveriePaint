@@ -10,10 +10,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.reverie.paint.model.ModelStatus
+import com.reverie.paint.model.ShadingModelPreset
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -23,15 +23,21 @@ import java.io.InputStream
 
 /**
  * 智能阴影辅助 ONNX 神经网络模型管理器。
- * 负责模型的本地存储、官方推荐模型下载流转、自定义模型从系统 SAF 导入、随时卸载与状态查询。
+ * 负责模型的本地存储、预设模型 (AnimeNormal / Depth Anything V2) 下载流转、
+ * 自定义模型从系统 SAF 导入、随时卸载与状态查询。
  */
 object ShadingModelManager {
 
-    private const val DEFAULT_MODEL_NAME = "depth_anything_v2_small.onnx"
     private const val CUSTOM_MODEL_NAME = "custom_shading.onnx"
     private const val PREFS_NAME = "shading_model_prefs"
-    private const val KEY_USER_UNINSTALLED = "user_uninstalled"
-    const val DEFAULT_MODEL_SIZE_BYTES = 35_615_956L // 34MB
+    private const val KEY_SELECTED_PRESET = "selected_preset"
+    private const val KEY_USE_CUSTOM = "use_custom"
+
+    var currentPreset: ShadingModelPreset by mutableStateOf(ShadingModelPreset.ANIME_NORMAL)
+        private set
+
+    var isCustomActive: Boolean by mutableStateOf(false)
+        private set
 
     var modelStatus: ModelStatus by mutableStateOf(ModelStatus.NotDownloaded)
         private set
@@ -49,7 +55,7 @@ object ShadingModelManager {
     /** 检查并刷新当前模型就绪状态 */
     fun checkStatus(context: Context) {
         val dir = getModelDir(context)
-        // 清理过时的旧模型
+        // 清理过时的旧实验模型
         val oldV1 = File(dir, "anime_normal_v1.onnx")
         if (oldV1.exists()) oldV1.delete()
         val oldV2 = File(dir, "anime_normal_v2.onnx")
@@ -61,28 +67,30 @@ object ShadingModelManager {
         val oldSpriteData = File(dir, "sprite2normal.onnx.data")
         if (oldSpriteData.exists()) oldSpriteData.delete()
 
-        val custom = File(dir, CUSTOM_MODEL_NAME)
-        if (custom.exists() && custom.length() > 0) {
-            modelStatus = ModelStatus.Ready(custom.absolutePath, isCustom = true, fileName = custom.name)
-            return
-        }
-
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val uninstalled = prefs.getBoolean(KEY_USER_UNINSTALLED, false)
+        val savedPresetId = prefs.getString(KEY_SELECTED_PRESET, ShadingModelPreset.ANIME_NORMAL.id)
+            ?: ShadingModelPreset.ANIME_NORMAL.id
+        currentPreset = ShadingModelPreset.fromId(savedPresetId)
+        isCustomActive = prefs.getBoolean(KEY_USE_CUSTOM, false)
 
-        val defaultFile = File(dir, DEFAULT_MODEL_NAME)
-        if (uninstalled) {
-            if (modelStatus !is ModelStatus.Downloading) {
-                modelStatus = ModelStatus.NotDownloaded
-            }
+        val custom = File(dir, CUSTOM_MODEL_NAME)
+        if (isCustomActive && custom.exists() && custom.length() > 0) {
+            modelStatus = ModelStatus.Ready(custom.absolutePath, isCustom = true, fileName = custom.name, preset = null)
             return
         }
 
-        if (defaultFile.exists() && defaultFile.length() > 1024 * 1024) {
+        val targetFile = File(dir, currentPreset.fileName)
+        val minSize = if (currentPreset == ShadingModelPreset.ANIME_NORMAL) 500 * 1024L else 5 * 1024 * 1024L
+        if (targetFile.exists() && targetFile.length() > minSize) {
+            val displayName = when (currentPreset) {
+                ShadingModelPreset.ANIME_NORMAL -> "AnimeNormal (1.6MB)"
+                ShadingModelPreset.DEPTH_ANYTHING -> "Depth Anything V2 (34MB)"
+            }
             modelStatus = ModelStatus.Ready(
-                defaultFile.absolutePath,
+                modelPath = targetFile.absolutePath,
                 isCustom = false,
-                fileName = "Depth Anything V2 (34MB)"
+                fileName = displayName,
+                preset = currentPreset
             )
             return
         }
@@ -92,37 +100,79 @@ object ShadingModelManager {
         }
     }
 
+    /** 切换选中的预设模型 */
+    fun selectPreset(preset: ShadingModelPreset, context: Context) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit()
+            .putString(KEY_SELECTED_PRESET, preset.id)
+            .putBoolean(KEY_USE_CUSTOM, false)
+            .apply()
+        currentPreset = preset
+        isCustomActive = false
+        checkStatus(context)
+    }
+
+    /** 检查指定预设是否已下载在本地 */
+    fun isPresetDownloaded(preset: ShadingModelPreset, context: Context): Boolean {
+        val dir = getModelDir(context)
+        val file = File(dir, preset.fileName)
+        val minSize = if (preset == ShadingModelPreset.ANIME_NORMAL) 500 * 1024L else 5 * 1024 * 1024L
+        return file.exists() && file.length() > minSize
+    }
+
+    /** 检查是否存在已导入的自定义模型 */
+    fun hasCustomModel(context: Context): Boolean {
+        val dir = getModelDir(context)
+        val custom = File(dir, CUSTOM_MODEL_NAME)
+        return custom.exists() && custom.length() > 0
+    }
+
+    /** 切换为已导入的自定义模型 */
+    fun selectCustomModel(context: Context) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putBoolean(KEY_USE_CUSTOM, true).apply()
+        isCustomActive = true
+        checkStatus(context)
+    }
+
     /** 获取当前可用模型文件路径 (若无任何就绪模型返回 null) */
     fun getActiveModelFile(context: Context): File? {
         val dir = getModelDir(context)
-        val custom = File(dir, CUSTOM_MODEL_NAME)
-        if (custom.exists() && custom.length() > 0) return custom
-        val defaultFile = File(dir, DEFAULT_MODEL_NAME)
-        if (defaultFile.exists() && defaultFile.length() > 1024 * 1024) return defaultFile
+        if (isCustomActive) {
+            val custom = File(dir, CUSTOM_MODEL_NAME)
+            if (custom.exists() && custom.length() > 0) return custom
+        }
+        val targetFile = File(dir, currentPreset.fileName)
+        val minSize = if (currentPreset == ShadingModelPreset.ANIME_NORMAL) 500 * 1024L else 5 * 1024 * 1024L
+        if (targetFile.exists() && targetFile.length() > minSize) return targetFile
         return null
     }
 
-    /** 卸载模型：删除已下载或导入的模型文件，释放存储空间 */
+    /** 卸载当前选中的模型文件，释放存储空间 */
     fun uninstallModel(context: Context) {
         downloadJob?.cancel()
         downloadJob = null
         val dir = getModelDir(context)
-        val defaultFile = File(dir, DEFAULT_MODEL_NAME)
-        if (defaultFile.exists()) defaultFile.delete()
-        val custom = File(dir, CUSTOM_MODEL_NAME)
-        if (custom.exists()) custom.delete()
-        val tmpDownload = File(dir, "$DEFAULT_MODEL_NAME.download")
-        if (tmpDownload.exists()) tmpDownload.delete()
 
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().putBoolean(KEY_USER_UNINSTALLED, true).apply()
+        if (isCustomActive) {
+            val custom = File(dir, CUSTOM_MODEL_NAME)
+            if (custom.exists()) custom.delete()
+            isCustomActive = false
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            prefs.edit().putBoolean(KEY_USE_CUSTOM, false).apply()
+        } else {
+            val targetFile = File(dir, currentPreset.fileName)
+            if (targetFile.exists()) targetFile.delete()
+            val tmpDownload = File(dir, "${currentPreset.fileName}.download")
+            if (tmpDownload.exists()) tmpDownload.delete()
+        }
 
-        modelStatus = ModelStatus.NotDownloaded
+        checkStatus(context)
     }
 
-    private val DOWNLOAD_MIRRORS = listOf(
-        "https://github.com/LanRhyme/ReveriePaint/releases/download/v1.5.0/depth_anything_v2_small.onnx",
-        "https://ghfast.top/https://github.com/LanRhyme/ReveriePaint/releases/download/v1.5.0/depth_anything_v2_small.onnx"
+    private fun getMirrorsForPreset(preset: ShadingModelPreset): List<String> = listOf(
+        "https://github.com/LanRhyme/ReveriePaint/releases/download/v1.5.0/${preset.fileName}",
+        "https://ghfast.top/https://github.com/LanRhyme/ReveriePaint/releases/download/v1.5.0/${preset.fileName}"
     )
 
     private val okHttpClient: okhttp3.OkHttpClient by lazy {
@@ -134,31 +184,34 @@ object ShadingModelManager {
             .build()
     }
 
-    /** 启动下载/解压推荐模型 */
+    /** 启动下载选中的预设模型 */
     fun startDownload(
         context: Context,
         scope: CoroutineScope,
+        preset: ShadingModelPreset = currentPreset,
         onSuccess: () -> Unit = {},
         onError: (String) -> Unit = {}
     ) {
         downloadJob?.cancel()
+        currentPreset = preset
         val dir = getModelDir(context)
-        val targetFile = File(dir, DEFAULT_MODEL_NAME)
-        val tempFile = File(dir, "$DEFAULT_MODEL_NAME.download")
+        val targetFile = File(dir, preset.fileName)
+        val tempFile = File(dir, "${preset.fileName}.download")
+        val expectedSize = preset.defaultSizeBytes
 
-        modelStatus = ModelStatus.Downloading(0, 0L, DEFAULT_MODEL_SIZE_BYTES)
+        modelStatus = ModelStatus.Downloading(0, 0L, expectedSize)
 
         downloadJob = scope.launch(Dispatchers.IO) {
             try {
                 val hasAsset = try {
-                    context.assets.list("models")?.contains(DEFAULT_MODEL_NAME) == true
+                    context.assets.list("models")?.contains(preset.fileName) == true
                 } catch (_: Exception) {
                     false
                 }
 
                 if (hasAsset) {
-                    context.assets.open("models/$DEFAULT_MODEL_NAME").use { input ->
-                        val total = DEFAULT_MODEL_SIZE_BYTES
+                    context.assets.open("models/${preset.fileName}").use { input ->
+                        val total = expectedSize
                         FileOutputStream(tempFile).use { output ->
                             val buffer = ByteArray(128 * 1024)
                             var readTotal = 0L
@@ -178,8 +231,9 @@ object ShadingModelManager {
                 } else {
                     var downloadedOk = false
                     var lastException: Exception? = null
+                    val mirrors = getMirrorsForPreset(preset)
 
-                    for (url in DOWNLOAD_MIRRORS) {
+                    for (url in mirrors) {
                         if (!isActive) break
                         try {
                             val request = okhttp3.Request.Builder().url(url).build()
@@ -189,7 +243,7 @@ object ShadingModelManager {
                                     throw IllegalStateException("HTTP ${res.code}")
                                 }
                                 val body = res.body ?: throw IllegalStateException("Empty response body")
-                                val total = body.contentLength().let { if (it > 0) it else DEFAULT_MODEL_SIZE_BYTES }
+                                val total = body.contentLength().let { if (it > 0) it else expectedSize }
                                 body.byteStream().use { input ->
                                     FileOutputStream(tempFile).use { output ->
                                         val buffer = ByteArray(64 * 1024)
@@ -208,7 +262,8 @@ object ShadingModelManager {
                                     }
                                 }
                             }
-                            if (isActive && tempFile.exists() && tempFile.length() > 1024 * 1024) {
+                            val minSize = if (preset == ShadingModelPreset.ANIME_NORMAL) 500 * 1024L else 5 * 1024 * 1024L
+                            if (isActive && tempFile.exists() && tempFile.length() > minSize) {
                                 downloadedOk = true
                                 break
                             }
@@ -232,17 +287,29 @@ object ShadingModelManager {
                     return@launch
                 }
 
-                if (tempFile.exists() && tempFile.length() > 1024 * 1024) {
+                val minSize = if (preset == ShadingModelPreset.ANIME_NORMAL) 500 * 1024L else 5 * 1024 * 1024L
+                if (tempFile.exists() && tempFile.length() > minSize) {
                     if (targetFile.exists()) targetFile.delete()
                     if (tempFile.renameTo(targetFile)) {
                         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                        prefs.edit().putBoolean(KEY_USER_UNINSTALLED, false).apply()
+                        prefs.edit()
+                            .putString(KEY_SELECTED_PRESET, preset.id)
+                            .putBoolean(KEY_USE_CUSTOM, false)
+                            .apply()
+                        currentPreset = preset
+                        isCustomActive = false
+
+                        val displayName = when (preset) {
+                            ShadingModelPreset.ANIME_NORMAL -> "AnimeNormal (1.6MB)"
+                            ShadingModelPreset.DEPTH_ANYTHING -> "Depth Anything V2 (34MB)"
+                        }
 
                         withContext(Dispatchers.Main) {
                             modelStatus = ModelStatus.Ready(
                                 modelPath = targetFile.absolutePath,
                                 isCustom = false,
-                                fileName = "Depth Anything V2 (34MB)"
+                                fileName = displayName,
+                                preset = preset
                             )
                             onSuccess()
                         }
@@ -300,22 +367,31 @@ object ShadingModelManager {
             }
 
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            prefs.edit().putBoolean(KEY_USER_UNINSTALLED, false).apply()
+            prefs.edit().putBoolean(KEY_USE_CUSTOM, true).apply()
+            isCustomActive = true
 
             withContext(Dispatchers.Main) {
-                modelStatus = ModelStatus.Ready(targetFile.absolutePath, isCustom = true, fileName = targetFile.name)
+                modelStatus = ModelStatus.Ready(
+                    targetFile.absolutePath,
+                    isCustom = true,
+                    fileName = targetFile.name,
+                    preset = null
+                )
             }
             targetFile
         }
     }
 
-    /** 清理自定义模型并恢复默认状态 */
+    /** 清理自定义模型并恢复预设状态 */
     fun clearCustomModel(context: Context) {
         val dir = getModelDir(context)
         val custom = File(dir, CUSTOM_MODEL_NAME)
         if (custom.exists()) {
             custom.delete()
         }
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putBoolean(KEY_USE_CUSTOM, false).apply()
+        isCustomActive = false
         checkStatus(context)
     }
 
@@ -325,7 +401,7 @@ object ShadingModelManager {
         downloadJob = null
         if (context != null) {
             val dir = getModelDir(context)
-            val tempFile = File(dir, "$DEFAULT_MODEL_NAME.download")
+            val tempFile = File(dir, "${currentPreset.fileName}.download")
             if (tempFile.exists()) tempFile.delete()
         }
         modelStatus = ModelStatus.NotDownloaded

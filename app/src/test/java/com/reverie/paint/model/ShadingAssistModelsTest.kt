@@ -62,4 +62,26 @@ class ShadingAssistModelsTest {
         // For illumination = 0.7f (> threshold1), lit (0.0f shadow)
         assertTrue(0.7f > config1Step.threshold1)
     }
+
+    @Test
+    fun `test shading model presets and cel tuning parameters`() {
+        assertEquals(ShadingModelPreset.ANIME_NORMAL, ShadingModelPreset.fromId("anime_normal"))
+        assertEquals(ShadingModelPreset.DEPTH_ANYTHING, ShadingModelPreset.fromId("depth_anything"))
+        assertEquals(ShadingModelPreset.ANIME_NORMAL, ShadingModelPreset.fromId("unknown"))
+
+        assertTrue(ShadingModelPreset.ANIME_NORMAL.isNormalMap)
+        assertTrue(!ShadingModelPreset.DEPTH_ANYTHING.isNormalMap)
+
+        val config = ShadingAssistConfig(
+            colorEdgeSnapping = true,
+            colorEdgeSnapTolerance = 0.6f,
+            morphologicalSmoothRadius = 2,
+            ambientOcclusionIntensity = 0.45f
+        )
+        assertTrue(config.colorEdgeSnapping)
+        assertEquals(0.6f, config.colorEdgeSnapTolerance, 1e-4f)
+        assertEquals(2, config.morphologicalSmoothRadius)
+        assertEquals(0.45f, config.ambientOcclusionIntensity, 1e-4f)
+    }
 }
+

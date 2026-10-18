@@ -49,6 +49,10 @@ data class ShadingAssistConfig(
     val lineCastDistance: Float = 22.0f,
     val lineCastIntensity: Float = 1.2f,
     val volumeSmoothness: Float = 30.0f,
+    val colorEdgeSnapping: Boolean = true,
+    val colorEdgeSnapTolerance: Float = 0.50f,
+    val morphologicalSmoothRadius: Int = 2,
+    val ambientOcclusionIntensity: Float = 0.35f,
     val referenceLineLayerId: Int? = null,
     val useAiModel: Boolean = true,
     val downsampleTargetSize: Int = 1024
@@ -76,11 +80,28 @@ data class ShadingAssistConfig(
 }
 
 /**
+ * 智能阴影模型预设
+ */
+enum class ShadingModelPreset(
+    val id: String,
+    val fileName: String,
+    val defaultSizeBytes: Long,
+    val isNormalMap: Boolean
+) {
+    ANIME_NORMAL("anime_normal", "anime_normal_pbr.onnx", 1_633_205L, true),
+    DEPTH_ANYTHING("depth_anything", "depth_anything_v2_small.onnx", 35_615_956L, false);
+
+    companion object {
+        fun fromId(id: String): ShadingModelPreset = entries.firstOrNull { it.id == id } ?: ANIME_NORMAL
+    }
+}
+
+/**
  * 模型下载与加载状态
  */
 sealed class ModelStatus {
     object NotDownloaded : ModelStatus()
     data class Downloading(val progressPercent: Int, val downloadedBytes: Long, val totalBytes: Long) : ModelStatus()
-    data class Ready(val modelPath: String, val isCustom: Boolean, val fileName: String) : ModelStatus()
+    data class Ready(val modelPath: String, val isCustom: Boolean, val fileName: String, val preset: ShadingModelPreset? = null) : ModelStatus()
     data class Error(val message: String) : ModelStatus()
 }

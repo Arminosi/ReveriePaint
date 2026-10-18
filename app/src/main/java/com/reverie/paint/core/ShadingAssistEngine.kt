@@ -263,7 +263,7 @@ object ShadingAssistEngine {
         val tempBuffer = FloatArray(planeSize)
 
         // 1. 深度图多轮滤波，消除 ViT 14x14 Patch 的离散量化阶梯
-        val blurRadiusDepth = ((volumeSmoothness * outW) / 512.0f).toInt().coerceIn(3, 12)
+        val blurRadiusDepth = ((volumeSmoothness * outW) / 512.0f).toInt().coerceIn(4, 16)
         repeat(3) {
             boxBlurHorizontal(depthMap, tempBuffer, outW, outH, blurRadiusDepth)
             boxBlurVertical(tempBuffer, depthMap, outW, outH, blurRadiusDepth)
@@ -292,19 +292,20 @@ object ShadingAssistEngine {
         boxBlurHorizontal(gradY, tempBuffer, outW, outH, 2)
         boxBlurVertical(tempBuffer, gradY, outW, outH, 2)
 
-        // 4. 标准差自适应缩放梯度
-        var sumSqX = 0.0
-        var sumSqY = 0.0
+        // 4. 自适应梯度归一化：使得物体轮廓与球形弧面具有饱满的 [-1, 1] 2D 偏转
+        var sumMag = 0.0
+        var nonZeroCount = 0
         for (k in 0 until planeSize) {
-            val gx = gradX[k].toDouble()
-            val gy = gradY[k].toDouble()
-            sumSqX += gx * gx
-            sumSqY += gy * gy
+            val gx = gradX[k]
+            val gy = gradY[k]
+            val mag = sqrt(gx * gx + gy * gy)
+            if (mag > 1e-4f) {
+                sumMag += mag
+                nonZeroCount++
+            }
         }
-        val stdX = sqrt(sumSqX / planeSize).toFloat()
-        val stdY = sqrt(sumSqY / planeSize).toFloat()
-        val maxStd = max(stdX, stdY).coerceAtLeast(1e-5f)
-        val normalScale = 1.0f / (2.0f * maxStd)
+        val meanMag = if (nonZeroCount > 0) (sumMag / nonZeroCount).toFloat() else 1e-3f
+        val normalScale = 1.0f / (meanMag * 2.4f).coerceAtLeast(1e-4f)
 
         var idx = 0
         val normalArray = FloatArray(planeSize * 3)
@@ -312,7 +313,7 @@ object ShadingAssistEngine {
             // 深度图中数值越大离相机越近 (视差)，表面法线向外指，梯度必须取反 (-dz/dx, -dz/dy)
             val nx = -gradX[i] * normalScale
             val ny = -gradY[i] * normalScale
-            val nz = 1.0f
+            val nz = 0.45f
 
             val len = sqrt(nx * nx + ny * ny + nz * nz).coerceAtLeast(1e-4f)
             normalArray[idx++] = nx / len
@@ -410,6 +411,24 @@ object ShadingAssistEngine {
             val a = (basePixels[it] ushr 24) and 0xFF
             if (a < 25) 0.0f else 1e6f
         }
+        var hasTransparent = false
+        for (p in 0 until w * h) {
+            if (dist[p] == 0f) {
+                hasTransparent = true
+                break
+            }
+        }
+        if (!hasTransparent) {
+            // 若整张画布全不透明 (如在单层平铺背景上绘制)，将画布最外圈边缘作为距离场边界
+            for (x in 0 until w) {
+                dist[0 * w + x] = 0f
+                dist[(h - 1) * w + x] = 0f
+            }
+            for (y in 0 until h) {
+                dist[y * w + 0] = 0f
+                dist[y * w + (w - 1)] = 0f
+            }
+        }
         computeDistanceField(dist, w, h)
 
         // 2. Sobel 梯度
@@ -444,16 +463,17 @@ object ShadingAssistEngine {
             boxBlurVertical(tempMap, gradY, w, h, blurRadius)
         }
 
-        // 4. 归一化为平面法线场 (Nz=0.0f)
+        // 4. 归一化为 2.5D 平面法线场 (Nz=0.35f 拱起微体积)
         val normals = FloatArray(w * h * 3)
+        val nzVal = 0.35f
         for (i in 0 until w * h) {
             val gx = gradX[i]
             val gy = gradY[i]
-            val len = sqrt(gx * gx + gy * gy).coerceAtLeast(1e-4f)
+            val len = sqrt(gx * gx + gy * gy + nzVal * nzVal).coerceAtLeast(1e-4f)
             val baseIdx = i * 3
             normals[baseIdx] = gx / len
             normals[baseIdx + 1] = gy / len
-            normals[baseIdx + 2] = 0.0f
+            normals[baseIdx + 2] = nzVal / len
         }
 
         return NormalField(w, h, normals)
@@ -615,8 +635,8 @@ object ShadingAssistEngine {
         val cores = Runtime.getRuntime().availableProcessors().coerceIn(1, 8)
         val rowsPerChunk = (outHeight + cores - 1) / cores
 
-        val cutoff = (threshold1 - 0.35f) * 1.2f
-        val cutoff2 = cutoff + (threshold1 - threshold2).coerceAtLeast(0.05f) * 1.2f
+        val cutoff = (0.50f - threshold1) * 1.6f
+        val cutoff2 = cutoff + (threshold1 - threshold2).coerceAtLeast(0.1f) * 1.4f
         val aoIntensity = config.ambientOcclusionIntensity.coerceIn(0f, 1f)
 
         // Pass 1: 计算基础阴影评分 (体积法线三维点积 + 定向投射遮挡 + 线稿深缝接触 AO)
@@ -646,12 +666,10 @@ object ShadingAssistEngine {
                             normalField.getNormal(normX, normY, normalVec)
 
                             // 1. 本体体积阴影评分
-                            // 3D 神经网络法线采用完整三维光照点积，2D 平面法线采用投影点积
-                            val formDot = if (normalVec[2] > 0.05f) {
-                                normalVec[0] * lx + normalVec[1] * ly + normalVec[2] * lz
-                            } else {
-                                normalVec[0] * rayDx + normalVec[1] * rayDy
-                            }
+                            // 2D 主平面光源方向 (rayDx, rayDy) 主导二次元赛璐珞侧光截断
+                            val dot2D = normalVec[0] * rayDx + normalVec[1] * rayDy
+                            // Z 轴仰角贡献作为微调调制 (elevation modulation)，不淹没主方向
+                            val formDot = dot2D * (1.0f - lz * 0.35f) + (normalVec[2] * lz - 0.40f) * 0.25f
                             val formScore = -formDot
 
                             // 2. 线稿接触与投射阴影 + 死角闭塞 AO
@@ -686,8 +704,8 @@ object ShadingAssistEngine {
                                             val b = sampleLp and 0xFF
                                             val darkness = (255 - (r * 299 + g * 587 + b * 114) / 1000) / 255.0f
                                             val sampleStr = (sampleLa / 255.0f) * darkness
-                                            if (sampleStr > 0.15f) {
-                                                val falloff = 1.0f - (step.toFloat() / castSteps) * 0.40f
+                                            if (sampleStr > 0.20f) {
+                                                val falloff = 1.0f - (step.toFloat() / castSteps) * 0.50f
                                                 val castVal = sampleStr * falloff
                                                 if (castVal > maxCast) {
                                                     maxCast = castVal
@@ -713,7 +731,7 @@ object ShadingAssistEngine {
                                         }
                                     }
                                     if (lineNeighbors >= 2) {
-                                        creviceAo = (lineNeighbors / 8.0f) * aoIntensity * 0.6f
+                                        creviceAo = (lineNeighbors / 8.0f) * aoIntensity * 0.5f
                                     }
                                 }
                             }
@@ -755,9 +773,9 @@ object ShadingAssistEngine {
                                     continue
                                 }
 
-                                // 仅对处于明暗临界带 (|score - cutoff| < 0.22f) 的像素进行同色域双边平滑吸附
+                                // 仅对处于明暗临界带 (|score - cutoff| < 0.25f) 的像素进行同色域双边平滑吸附
                                 val distToCutoff = abs(curScore - cutoff)
-                                if (distToCutoff > 0.22f) {
+                                if (distToCutoff > 0.25f) {
                                     processed[pIdx] = curScore
                                     continue
                                 }

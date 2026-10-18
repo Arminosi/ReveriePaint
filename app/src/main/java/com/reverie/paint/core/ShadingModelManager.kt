@@ -33,7 +33,7 @@ object ShadingModelManager {
     private const val KEY_SELECTED_PRESET = "selected_preset"
     private const val KEY_USE_CUSTOM = "use_custom"
 
-    var currentPreset: ShadingModelPreset by mutableStateOf(ShadingModelPreset.ANIME_NORMAL)
+    var currentPreset: ShadingModelPreset by mutableStateOf(ShadingModelPreset.DEPTH_ANYTHING)
         private set
 
     var isCustomActive: Boolean by mutableStateOf(false)
@@ -55,7 +55,7 @@ object ShadingModelManager {
     /** 检查并刷新当前模型就绪状态 */
     fun checkStatus(context: Context) {
         val dir = getModelDir(context)
-        // 清理过时的旧实验模型
+        // 清理过时的旧实验模型与失效的 PBR 粗糙度模型
         val oldV1 = File(dir, "anime_normal_v1.onnx")
         if (oldV1.exists()) oldV1.delete()
         val oldV2 = File(dir, "anime_normal_v2.onnx")
@@ -66,11 +66,19 @@ object ShadingModelManager {
         if (oldSprite.exists()) oldSprite.delete()
         val oldSpriteData = File(dir, "sprite2normal.onnx.data")
         if (oldSpriteData.exists()) oldSpriteData.delete()
+        val oldPbr = File(dir, "anime_normal_pbr.onnx")
+        if (oldPbr.exists()) oldPbr.delete()
 
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val savedPresetId = prefs.getString(KEY_SELECTED_PRESET, ShadingModelPreset.ANIME_NORMAL.id)
-            ?: ShadingModelPreset.ANIME_NORMAL.id
-        currentPreset = ShadingModelPreset.fromId(savedPresetId)
+        val savedPresetId = prefs.getString(KEY_SELECTED_PRESET, ShadingModelPreset.DEPTH_ANYTHING.id)
+            ?: ShadingModelPreset.DEPTH_ANYTHING.id
+        // 自动将旧的 anime_normal 升级为 Depth Anything V2 空间几何模型
+        currentPreset = if (savedPresetId == "anime_normal") {
+            prefs.edit().putString(KEY_SELECTED_PRESET, ShadingModelPreset.DEPTH_ANYTHING.id).apply()
+            ShadingModelPreset.DEPTH_ANYTHING
+        } else {
+            ShadingModelPreset.fromId(savedPresetId)
+        }
         isCustomActive = prefs.getBoolean(KEY_USE_CUSTOM, false)
 
         val custom = File(dir, CUSTOM_MODEL_NAME)

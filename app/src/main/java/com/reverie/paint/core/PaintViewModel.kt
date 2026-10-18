@@ -4936,9 +4936,10 @@ class PaintViewModel : ViewModel() {
         const val STROKE_SAMPLE_STRIDE = 6
 
         /**
-         * 带时间的采样步进 (仅对称镜像重放使用): 前 6 个 float 与 [STROKE_SAMPLE_STRIDE]
-         * 相同, 第 7 个是相对笔锋起点的秒。JNI `touchStrokeMoveBatch` 按 stride 7 读取它,
-         * 让重放保留真实时间间隔而不是把整笔挤成 0 秒。实时运笔缓冲仍固定 6 元。
+         * 带时间的采样步进 (仅对称镜像缓冲使用): 前 6 个 float 与 [STROKE_SAMPLE_STRIDE]
+         * 相同, 第 7 个是相对笔锋起点的秒。注意 JNI `touchStrokeMoveBatch` 只认
+         * stride 6/3, 重放须重打包为 6 维并丢弃时间; 仅 `touchStrokeMirrorBatch`
+         * -> `paintMirrorPolyline(..., 7, ...)` 接受 7 维。实时运笔缓冲仍固定 6 元。
          */
         const val STROKE_SAMPLE_STRIDE_WITH_TIME = 7
         /** 对称镜像实时队列: 最多 8 条分支, 每条 256 个 7 元采样点。 */

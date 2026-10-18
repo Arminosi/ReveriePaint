@@ -180,6 +180,10 @@ data class DrawingGuideConfig(
     ): List<SymmetricSample> {
         if (mode != GuideMode.SYMMETRY) return emptyList()
         if (!docPt.x.isFinite() || !docPt.y.isFinite()) return emptyList()
+        // 传感器数值非有限值过滤: 个别硬件驱动偶发返回 NaN, 须在扩散前归零。
+        val safeTiltX = tiltX.takeIf { it.isFinite() } ?: 0f
+        val safeTiltY = tiltY.takeIf { it.isFinite() } ?: 0f
+        val safeRotation = rotation.takeIf { it.isFinite() } ?: 0f
         val scX = symmetryCenterX.takeIf { it.isFinite() }?.coerceIn(0.01f, 0.99f) ?: 0.5f
         val scY = symmetryCenterY.takeIf { it.isFinite() }?.coerceIn(0.01f, 0.99f) ?: 0.5f
         val cx = docWidth * scX
@@ -194,8 +198,8 @@ data class DrawingGuideConfig(
         val lx = dx * cosR + dy * sinR
         val ly = -dx * sinR + dy * cosR
         // 倾角向量: 同一套局部旋转 (与上面的点变换逐字一致)
-        val ltx = tiltX * cosR + tiltY * sinR
-        val lty = -tiltX * sinR + tiltY * cosR
+        val ltx = safeTiltX * cosR + safeTiltY * sinR
+        val lty = -safeTiltX * sinR + safeTiltY * cosR
 
         val offsets = symmetryBranchOffsets(lx, ly)
         val tiltOffsets = symmetryBranchOffsets(ltx, lty)
@@ -210,10 +214,10 @@ data class DrawingGuideConfig(
             val wtx = lt.x * cosR - lt.y * sinR
             val wty = lt.x * sinR + lt.y * cosR
             val branchRotation = when (symmetryType) {
-                SymmetryType.VERTICAL, SymmetryType.HORIZONTAL -> -rotation
+                SymmetryType.VERTICAL, SymmetryType.HORIZONTAL -> -safeRotation
                 // 第三支 (-lx, -ly) 是两次反射, 姿态回到原样
-                SymmetryType.QUADRANT -> if (i == 2) rotation else -rotation
-                SymmetryType.RADIAL -> rotation + (i + 1) * 45f
+                SymmetryType.QUADRANT -> if (i == 2) safeRotation else -safeRotation
+                SymmetryType.RADIAL -> safeRotation + (i + 1) * 45f
             }
             out.add(SymmetricSample(Point2D(wx, wy), wtx, wty, branchRotation))
         }

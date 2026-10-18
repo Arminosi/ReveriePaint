@@ -684,8 +684,10 @@ internal fun PaintViewModel.replaySymmetricBranches(
     }
 
     // Snapshot branch slices on the calling thread so subsequent touches never race.
-    // 每个采样点 7 个 float: [x, y, pressure, tiltX, tiltY, rotation, timeSeconds]
-    // (与 JNI 批量 stride 7 一致, 时间让重放保留真实间隔)。
+    // 每个采样点 7 个 float: [x, y, pressure, tiltX, tiltY, rotation, timeSeconds]。
+    // 注意: 7 维仅是镜像缓冲的存储格式。JNI `touchStrokeMoveBatch` 只认 stride 6/3,
+    // 重放须重打包为 6 维并丢弃 timeSeconds; 仅 `touchStrokeMirrorBatch`
+    // -> `paintMirrorPolyline(..., 7, ...)` 接受 7 维。
     val stride = PaintViewModel.STROKE_SAMPLE_STRIDE_WITH_TIME
     val activeBranches = ArrayList<FloatArray>(branchCount)
     val activeCounts = IntArray(branchCount)
@@ -716,55 +718,9 @@ internal fun PaintViewModel.replaySymmetricBranches(
     isModified = true
     onPaintingActivity()
 
-    // 录制器时间线录制 (与主笔画保持完全一致的图层/笔刷上下文)
-    if (recorder.recording) {
-        val toolMode = if (isEraser) 1 else when (currentToolId) {
-            "brush" -> 0
-            "eraser" -> 1
-            "smudge" -> 3
-            else -> -1
-        }
-        for (b in 0 until totalActive) {
-            val buf = activeBranches[b]
-            val count = activeCounts[b]
-            recorder.captureContext(
-                toolMode = toolMode,
-                preset = brushPresetIndex,
-                size = brushSize,
-                opacity = brushOpacity,
-                flow = brushFlow,
-                compositeOp = if (isEraser) "erase" else brushCompositeOp,
-                color = brushColor,
-                layer = currentLayerIndex,
-            )
-            val strokeParams = brushPresets.firstOrNull { it.index == brushPresetIndex }?.let { brushParams[it.name] }
-            recorder.captureContextExt(
-                softness = brushSoftness,
-                spacing = brushSpacing,
-                angle = brushAngle,
-                scatter = brushScatter,
-                rotation = brushRotation,
-                ratio = brushRatio,
-                sharpness = brushSharpness,
-                smudgeRate = brushSmudgeRate,
-                smudgeLength = brushSmudgeLength,
-                secondaryColor = brushSecondaryColor,
-                airbrushEnabled = brushAirbrush,
-                airbrushRate = brushAirbrushRate,
-                isCustomized = strokeParams != null,
-                spacingCustomized = strokeParams?.spacingCustomized == true,
-            )
-            recorder.captureBrushFade(brushFade)
-            val effStartP = buf[2].coerceIn(0f, 1f)
-            recorder.strokeStart(buf[0], buf[1], effStartP)
-            for (i in 1 until count) {
-                val base = i * stride
-                val effP = buf[base + 2].coerceIn(0f, 1f)
-                recorder.strokeMove(buf[base], buf[base + 1], effP)
-            }
-            recorder.strokeEnd()
-        }
-    }
+    // 录制器时间线录制 (与主笔画保持完全一致的图层/笔刷上下文)。
+    // 与 recordMirroredBranchesOnly 共享同一份写入逻辑, 避免两处格式漂移。
+    recordMirroredBranchesToRecorder(activeBranches, activeCounts, totalActive, isEraser)
 
     val mode = if (isEraser) 1 else when (currentToolId) {
         "brush" -> 0
@@ -777,7 +733,9 @@ internal fun PaintViewModel.replaySymmetricBranches(
     h.post {
         pendingCoreOps.decrementPositive()
         try {
-            val chunkStride = PaintViewModel.STROKE_SAMPLE_STRIDE_WITH_TIME
+            // P0: touchStrokeMoveBatch 只认 stride 6/3, 重放须重打包为 6 维。
+            // 镜像缓冲的第 7 维 timeSeconds 在此丢弃 (该 JNI 入口从未消费时间)。
+            val chunkStride = PaintViewModel.STROKE_SAMPLE_STRIDE
             for (b in 0 until totalActive) {
                 val buf = activeBranches[b]
                 val count = activeCounts[b]
@@ -821,7 +779,7 @@ internal fun PaintViewModel.replaySymmetricBranches(
                             chunkBuffer[offset + 3] = buf[base + 3]
                             chunkBuffer[offset + 4] = buf[base + 4]
                             chunkBuffer[offset + 5] = buf[base + 5]
-                            chunkBuffer[offset + 6] = buf[base + 6].coerceAtLeast(0f)
+                            // 第 7 维 timeSeconds 不拷: chunkBuffer 为 6 维, 写 offset+6 会串到下一点。
                             w++
                         }
                         ReverieCoreBridge.touchStrokeMoveBatch(chunkBuffer, validCount)
@@ -845,6 +803,103 @@ internal fun PaintViewModel.replaySymmetricBranches(
             }
         }
     }
+}
+
+/**
+ * 仅把已快照的镜像分支写入录制流 (P1 共享实现)。
+ * 只做 recorder.captureContext/captureContextExt/captureBrushFade/
+ * strokeStart/strokeMove/strokeEnd, 不发引擎、不 endUndoMacro、不渲染。
+ * 调用方保证 activeBranches 是 stride 7 的镜像缓冲快照。
+ */
+private fun PaintViewModel.recordMirroredBranchesToRecorder(
+    activeBranches: List<FloatArray>,
+    activeCounts: IntArray,
+    totalActive: Int,
+    isEraser: Boolean,
+) {
+    if (!recorder.recording) return
+    val stride = PaintViewModel.STROKE_SAMPLE_STRIDE_WITH_TIME
+    val toolMode = if (isEraser) 1 else when (currentToolId) {
+        "brush" -> 0
+        "eraser" -> 1
+        "smudge" -> 3
+        else -> -1
+    }
+    for (b in 0 until totalActive) {
+        val buf = activeBranches[b]
+        val count = activeCounts[b]
+        recorder.captureContext(
+            toolMode = toolMode,
+            preset = brushPresetIndex,
+            size = brushSize,
+            opacity = brushOpacity,
+            flow = brushFlow,
+            compositeOp = if (isEraser) "erase" else brushCompositeOp,
+            color = brushColor,
+            layer = currentLayerIndex,
+        )
+        val strokeParams = brushPresets.firstOrNull { it.index == brushPresetIndex }?.let { brushParams[it.name] }
+        recorder.captureContextExt(
+            softness = brushSoftness,
+            spacing = brushSpacing,
+            angle = brushAngle,
+            scatter = brushScatter,
+            rotation = brushRotation,
+            ratio = brushRatio,
+            sharpness = brushSharpness,
+            smudgeRate = brushSmudgeRate,
+            smudgeLength = brushSmudgeLength,
+            secondaryColor = brushSecondaryColor,
+            airbrushEnabled = brushAirbrush,
+            airbrushRate = brushAirbrushRate,
+            isCustomized = strokeParams != null,
+            spacingCustomized = strokeParams?.spacingCustomized == true,
+        )
+        recorder.captureBrushFade(brushFade)
+        val effStartP = buf[2].coerceIn(0f, 1f)
+        recorder.strokeStart(buf[0], buf[1], effStartP)
+        for (i in 1 until count) {
+            val base = i * stride
+            val effP = buf[base + 2].coerceIn(0f, 1f)
+            recorder.strokeMove(buf[base], buf[base + 1], effP)
+        }
+        recorder.strokeEnd()
+    }
+}
+
+/**
+ * P1: 实时对称 (liveMirror) 时仅补录镜像分支。
+ * 抬笔已跳过 replaySymmetricBranches, 镜像墨已实时入图层, 这里只把
+ * mirroredSamples 写进 recorder, 不发引擎、不碰撤销宏、不渲染。
+ * 必须在 CanvasTouchView 清缓冲 (resetMirrorBranches) 之前调用,
+ * 且须在 touchEnd 之后调用 (主笔 strokeEnd 已落盘, 顺序与重放路径一致)。
+ * liveMirror==false 时走 replay 已录制, 不要重复调用。
+ */
+internal fun PaintViewModel.recordMirroredBranchesOnly(
+    mirroredSamples: List<FloatArray>,
+    mirroredSizes: IntArray,
+    branchCount: Int = mirroredSamples.size,
+    isEraser: Boolean = false,
+) {
+    if (!recorder.recording) return
+    if (branchCount <= 0) return
+    val stride = PaintViewModel.STROKE_SAMPLE_STRIDE_WITH_TIME
+    val activeBranches = ArrayList<FloatArray>(branchCount)
+    val activeCounts = IntArray(branchCount)
+    var totalActive = 0
+    for (b in 0 until branchCount) {
+        val count = mirroredSizes.getOrNull(b) ?: 0
+        val buf = mirroredSamples.getOrNull(b)
+        if (count >= 1 && buf != null && buf.size >= count * stride) {
+            val slice = FloatArray(count * stride)
+            System.arraycopy(buf, 0, slice, 0, count * stride)
+            activeBranches.add(slice)
+            activeCounts[totalActive] = count
+            totalActive++
+        }
+    }
+    if (totalActive == 0) return
+    recordMirroredBranchesToRecorder(activeBranches, activeCounts, totalActive, isEraser)
 }
 
 internal fun PaintViewModel.applyTool(toolId: String) {

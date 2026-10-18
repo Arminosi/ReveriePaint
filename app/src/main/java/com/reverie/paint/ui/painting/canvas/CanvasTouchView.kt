@@ -6538,6 +6538,17 @@ class CanvasTouchView(context: Context) : View(context) {
                                 }
                             )
                         } else {
+                            // P1: liveMirror 时重放已跳过, 镜像分支须仅写入录制流 (不发引擎)。
+                            // 须在清缓冲之前调, 且仅当本笔未被撤销/取消中止时才补录;
+                            // hasBranchesToReplay==true 时 replay 内已录制, 这里不再重复。
+                            if (liveMirror && !v.mirrorStrokeAborted && hasMirrorSamples) {
+                                v.recordMirroredBranchesOnly(
+                                    mirroredSamples,
+                                    mirroredSizes,
+                                    mirroredSamples.size,
+                                    isEraser = isEraserStroke,
+                                )
+                            }
                             resetMirrorBranches()
                             safeEndSymmetryUndoMacro()
                         }

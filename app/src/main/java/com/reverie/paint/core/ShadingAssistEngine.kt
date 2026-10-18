@@ -232,8 +232,13 @@ object ShadingAssistEngine {
                     }
                 }
             }
+        } catch (e: Throwable) {
+            Log.e(TAG, "estimateRawDepth failed with model: ${modelFile.name}", e)
+            return@withContext null
         } finally {
-            opts.close()
+            try {
+                opts.close()
+            } catch (_: Throwable) {}
         }
     }
 

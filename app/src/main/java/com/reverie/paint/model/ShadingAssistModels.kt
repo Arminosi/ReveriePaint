@@ -88,11 +88,10 @@ enum class ShadingModelPreset(
     val defaultSizeBytes: Long,
     val isNormalMap: Boolean
 ) {
-    DEPTH_ANYTHING("depth_anything", "depth_anything_v2_small.onnx", 35_615_956L, false),
-    ANIME_NORMAL("anime_normal", "anime_normal_pbr.onnx", 1_633_205L, true);
+    DEPTH_ANYTHING("depth_anything", "depth_anything_v2_small.onnx", 35_615_956L, false);
 
     companion object {
-        fun fromId(id: String): ShadingModelPreset = entries.firstOrNull { it.id == id } ?: DEPTH_ANYTHING
+        fun fromId(id: String): ShadingModelPreset = DEPTH_ANYTHING
     }
 }
 

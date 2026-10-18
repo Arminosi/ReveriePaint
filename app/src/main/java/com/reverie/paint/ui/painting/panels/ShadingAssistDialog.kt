@@ -396,7 +396,7 @@ fun ShadingAssistDialog(
                                             Spacer(Modifier.height(14.dp))
                                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                                 ReTextButton(
-                                                    text = stringResource(R.string.shading_assist_model_download) + " (${if (ShadingModelManager.currentPreset == ShadingModelPreset.ANIME_NORMAL) "1.6MB" else "34MB"})",
+                                                    text = stringResource(R.string.shading_assist_model_download) + " (34MB)",
                                                     primary = true,
                                                     fontSize = 11.sp,
                                                     onClick = {
@@ -1205,70 +1205,60 @@ private fun ModelStatusCard(
                 }
             }
 
-            // 模型切换下拉框
+            // 模型切换 (仅当存在导入的自定义模型时显示切换，否则直接展示官方推荐模型)
             var modelMenuExpanded by remember { mutableStateOf(false) }
             val currentLabel = if (isCustomActive) {
                 stringResource(R.string.shading_assist_model_custom)
-            } else if (currentPreset == ShadingModelPreset.ANIME_NORMAL) {
-                stringResource(R.string.shading_assist_model_anime_normal)
             } else {
                 stringResource(R.string.shading_assist_model_depth_anything)
             }
 
-            Box(modifier = Modifier.fillMaxWidth()) {
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable { modelMenuExpanded = true },
-                    color = Morandi.panel
-                ) {
-                    Row(
+            if (hasCustomModel) {
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    Surface(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 10.dp, vertical = 7.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { modelMenuExpanded = true },
+                        color = Morandi.panel
                     ) {
-                        Text(
-                            text = currentLabel,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = Morandi.text,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Icon(
-                            painter = painterResource(R.drawable.ic_chevron_down),
-                            contentDescription = null,
-                            tint = Morandi.subText,
-                            modifier = Modifier.size(14.dp)
-                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 10.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = currentLabel,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = Morandi.text,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Icon(
+                                painter = painterResource(R.drawable.ic_chevron_down),
+                                contentDescription = null,
+                                tint = Morandi.subText,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
                     }
-                }
 
-                ReDropdownMenu(
-                    expanded = modelMenuExpanded,
-                    onDismissRequest = { modelMenuExpanded = false },
-                    modifier = Modifier.widthIn(min = 240.dp)
-                ) {
-                    ReDropdownMenuItem(
-                        text = stringResource(R.string.shading_assist_model_anime_normal),
-                        selected = !isCustomActive && currentPreset == ShadingModelPreset.ANIME_NORMAL,
-                        onClick = {
-                            onSelectPreset(ShadingModelPreset.ANIME_NORMAL)
-                            modelMenuExpanded = false
-                        }
-                    )
-                    ReDropdownMenuItem(
-                        text = stringResource(R.string.shading_assist_model_depth_anything),
-                        selected = !isCustomActive && currentPreset == ShadingModelPreset.DEPTH_ANYTHING,
-                        onClick = {
-                            onSelectPreset(ShadingModelPreset.DEPTH_ANYTHING)
-                            modelMenuExpanded = false
-                        }
-                    )
-                    if (hasCustomModel) {
+                    ReDropdownMenu(
+                        expanded = modelMenuExpanded,
+                        onDismissRequest = { modelMenuExpanded = false },
+                        modifier = Modifier.widthIn(min = 240.dp)
+                    ) {
+                        ReDropdownMenuItem(
+                            text = stringResource(R.string.shading_assist_model_depth_anything),
+                            selected = !isCustomActive,
+                            onClick = {
+                                onSelectPreset(ShadingModelPreset.DEPTH_ANYTHING)
+                                modelMenuExpanded = false
+                            }
+                        )
                         ReDropdownMenuItem(
                             text = stringResource(R.string.shading_assist_model_custom),
                             selected = isCustomActive,
@@ -1279,6 +1269,15 @@ private fun ModelStatusCard(
                         )
                     }
                 }
+            } else {
+                Text(
+                    text = currentLabel,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = Morandi.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
 
             // 内容与交互区
@@ -1371,7 +1370,7 @@ private fun ModelStatusCard(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         ReTextButton(
-                            text = stringResource(R.string.shading_assist_model_download) + " (${if (currentPreset == ShadingModelPreset.ANIME_NORMAL) "1.6MB" else "34MB"})",
+                            text = stringResource(R.string.shading_assist_model_download) + " (34MB)",
                             onClick = onDownload,
                             primary = true,
                             fontSize = 11.sp,

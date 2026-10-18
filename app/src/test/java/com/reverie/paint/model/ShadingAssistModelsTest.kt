@@ -65,11 +65,9 @@ class ShadingAssistModelsTest {
 
     @Test
     fun `test shading model presets and cel tuning parameters`() {
-        assertEquals(ShadingModelPreset.ANIME_NORMAL, ShadingModelPreset.fromId("anime_normal"))
         assertEquals(ShadingModelPreset.DEPTH_ANYTHING, ShadingModelPreset.fromId("depth_anything"))
         assertEquals(ShadingModelPreset.DEPTH_ANYTHING, ShadingModelPreset.fromId("unknown"))
 
-        assertTrue(ShadingModelPreset.ANIME_NORMAL.isNormalMap)
         assertTrue(!ShadingModelPreset.DEPTH_ANYTHING.isNormalMap)
 
         val config = ShadingAssistConfig(

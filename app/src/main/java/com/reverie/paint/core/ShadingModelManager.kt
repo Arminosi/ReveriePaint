@@ -88,12 +88,9 @@ object ShadingModelManager {
         }
 
         val targetFile = File(dir, currentPreset.fileName)
-        val minSize = if (currentPreset == ShadingModelPreset.ANIME_NORMAL) 500 * 1024L else 5 * 1024 * 1024L
+        val minSize = 5 * 1024 * 1024L
         if (targetFile.exists() && targetFile.length() > minSize) {
-            val displayName = when (currentPreset) {
-                ShadingModelPreset.ANIME_NORMAL -> "AnimeNormal (1.6MB)"
-                ShadingModelPreset.DEPTH_ANYTHING -> "Depth Anything V2 (34MB)"
-            }
+            val displayName = "Depth Anything V2 (34MB)"
             modelStatus = ModelStatus.Ready(
                 modelPath = targetFile.absolutePath,
                 isCustom = false,
@@ -124,7 +121,7 @@ object ShadingModelManager {
     fun isPresetDownloaded(preset: ShadingModelPreset, context: Context): Boolean {
         val dir = getModelDir(context)
         val file = File(dir, preset.fileName)
-        val minSize = if (preset == ShadingModelPreset.ANIME_NORMAL) 500 * 1024L else 5 * 1024 * 1024L
+        val minSize = 5 * 1024 * 1024L
         return file.exists() && file.length() > minSize
     }
 
@@ -151,7 +148,7 @@ object ShadingModelManager {
             if (custom.exists() && custom.length() > 0) return custom
         }
         val targetFile = File(dir, currentPreset.fileName)
-        val minSize = if (currentPreset == ShadingModelPreset.ANIME_NORMAL) 500 * 1024L else 5 * 1024 * 1024L
+        val minSize = 5 * 1024 * 1024L
         if (targetFile.exists() && targetFile.length() > minSize) return targetFile
         return null
     }
@@ -270,7 +267,7 @@ object ShadingModelManager {
                                     }
                                 }
                             }
-                            val minSize = if (preset == ShadingModelPreset.ANIME_NORMAL) 500 * 1024L else 5 * 1024 * 1024L
+                            val minSize = 5 * 1024 * 1024L
                             if (isActive && tempFile.exists() && tempFile.length() > minSize) {
                                 downloadedOk = true
                                 break
@@ -295,7 +292,7 @@ object ShadingModelManager {
                     return@launch
                 }
 
-                val minSize = if (preset == ShadingModelPreset.ANIME_NORMAL) 500 * 1024L else 5 * 1024 * 1024L
+                val minSize = 5 * 1024 * 1024L
                 if (tempFile.exists() && tempFile.length() > minSize) {
                     if (targetFile.exists()) targetFile.delete()
                     if (tempFile.renameTo(targetFile)) {
@@ -307,10 +304,7 @@ object ShadingModelManager {
                         currentPreset = preset
                         isCustomActive = false
 
-                        val displayName = when (preset) {
-                            ShadingModelPreset.ANIME_NORMAL -> "AnimeNormal (1.6MB)"
-                            ShadingModelPreset.DEPTH_ANYTHING -> "Depth Anything V2 (34MB)"
-                        }
+                        val displayName = "Depth Anything V2 (34MB)"
 
                         withContext(Dispatchers.Main) {
                             modelStatus = ModelStatus.Ready(

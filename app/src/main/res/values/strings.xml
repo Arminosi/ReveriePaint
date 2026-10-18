@@ -2787,7 +2787,6 @@
     <string name="shading_assist_import_failed">导入自定义模型失败</string>
     <string name="shading_assist_ai_hint">二次元法线神经网络，离线端侧推理</string>
     <string name="shading_assist_model_fallback_toast">AI 模型推理不兼容，已自动回退为 2.5D 几何算法</string>
-    <string name="shading_assist_model_anime_normal">AnimeNormal (二次元法线 1.6MB)</string>
     <string name="shading_assist_model_depth_anything">Depth Anything V2 (空间深度 34MB)</string>
     <string name="shading_assist_model_custom">自定义导入模型</string>
     <string name="shading_assist_model_switch">切换模型</string>

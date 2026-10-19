@@ -4,6 +4,7 @@
 
 package com.reverie.paint.ui.home
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -549,7 +550,7 @@ private fun SyncResultLine(vm: PaintViewModel) {
                             modifier = Modifier.weight(1f, fill = false),
                         )
                         Text(
-                            text = stringResource(R.string.diagnostics_copy_btn),
+                            text = stringResource(R.string.settings_export_log),
                             color = colors.accent,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.SemiBold,
@@ -557,10 +558,19 @@ private fun SyncResultLine(vm: PaintViewModel) {
                                 .clip(RoundedCornerShape(4.dp))
                                 .background(colors.panelHi)
                                 .clickable {
-                                    coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                    coroutineScope.launch(Dispatchers.IO) {
                                         val report = DiagnosticsManager.generateDiagnosticsReport(context)
-                                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                            DiagnosticsManager.copyReportToClipboard(context, report)
+                                        val path = DiagnosticsManager.exportReportToDownloads(context, report)
+                                        withContext(Dispatchers.Main) {
+                                            if (path != null) {
+                                                Toast.makeText(
+                                                    context,
+                                                    context.getString(R.string.diagnostics_save_success_toast, path),
+                                                    Toast.LENGTH_LONG,
+                                                ).show()
+                                            } else {
+                                                DiagnosticsManager.shareReport(context, report)
+                                            }
                                         }
                                     }
                                 }

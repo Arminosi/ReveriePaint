@@ -28,12 +28,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.reverie.paint.R
 import com.reverie.paint.core.CrashHandler
 import com.reverie.paint.ui.components.ReTextButton
 import com.reverie.paint.ui.theme.Theme
@@ -49,15 +51,16 @@ fun CrashReportDialog(
     val colors = Theme.current
     val context = LocalContext.current
     var showFullLog by remember { mutableStateOf(false) }
+    val canCopy = remember(logInfo.content) { CrashHandler.canCopy(logInfo.content) }
 
     val formattedTime = remember(logInfo.timestamp) {
         SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(logInfo.timestamp))
     }
 
     val crashTypeTitle = if (logInfo.isNative) {
-        "底层引擎异常崩溃 (Native Signal)"
+        stringResource(R.string.crash_report_type_native)
     } else {
-        "应用异常终止 (Java Uncaught)"
+        stringResource(R.string.crash_report_type_java)
     }
 
     Dialog(
@@ -102,7 +105,7 @@ fun CrashReportDialog(
                     Spacer(modifier = Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "检测到上次异常退出",
+                            text = stringResource(R.string.crash_report_title),
                             fontSize = 17.sp,
                             fontWeight = FontWeight.Bold,
                             color = colors.text,
@@ -135,11 +138,19 @@ fun CrashReportDialog(
 
                 // 说明文本
                 Text(
-                    text = "系统记录了崩溃调用栈与操作轨迹，可将其导出或复制，以便开发者快速定位与修复问题。",
+                    text = stringResource(R.string.crash_report_desc),
                     fontSize = 13.sp,
                     color = colors.subText,
                     lineHeight = 18.sp,
                 )
+
+                if (!canCopy) {
+                    Text(
+                        text = stringResource(R.string.crash_report_long_hint),
+                        fontSize = 12.sp,
+                        color = colors.accent,
+                    )
+                }
 
                 // 时间与简略状态标签
                 Row(
@@ -151,12 +162,16 @@ fun CrashReportDialog(
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
                     Text(
-                        text = "发生时间: $formattedTime",
+                        text = stringResource(R.string.crash_report_time_prefix, formattedTime),
                         fontSize = 12.sp,
                         color = colors.subText,
                     )
                     Text(
-                        text = if (logInfo.isNative) "Native 信号" else "Java 异常",
+                        text = if (logInfo.isNative) {
+                            stringResource(R.string.crash_report_tag_native)
+                        } else {
+                            stringResource(R.string.crash_report_tag_java)
+                        },
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium,
                         color = colors.accent,
@@ -179,13 +194,21 @@ fun CrashReportDialog(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            text = if (showFullLog) "诊断日志完整内容" else "诊断日志预览",
+                            text = if (showFullLog) {
+                                stringResource(R.string.crash_report_full_title)
+                            } else {
+                                stringResource(R.string.crash_report_preview_title)
+                            },
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             color = colors.text,
                         )
                         Text(
-                            text = if (showFullLog) "收起" else "展开详情",
+                            text = if (showFullLog) {
+                                stringResource(R.string.crash_report_collapse)
+                            } else {
+                                stringResource(R.string.crash_report_expand)
+                            },
                             fontSize = 12.sp,
                             color = colors.accent,
                             modifier = Modifier
@@ -226,21 +249,23 @@ fun CrashReportDialog(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    // 复制日志
-                    ReTextButton(
-                        text = "复制",
-                        onClick = {
-                            val ok = CrashHandler.copyToClipboard(context, logInfo.content)
-                            if (ok) {
-                                Toast.makeText(context, "崩溃日志已复制到剪贴板", Toast.LENGTH_SHORT).show()
-                            }
-                        },
-                        modifier = Modifier.weight(1f),
-                    )
+                    // 仅当日志不长时才允许复制
+                    if (canCopy) {
+                        ReTextButton(
+                            text = stringResource(R.string.crash_report_copy),
+                            onClick = {
+                                val ok = CrashHandler.copyToClipboard(context, logInfo.content)
+                                if (ok) {
+                                    Toast.makeText(context, R.string.crash_report_copied_toast, Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
 
                     // 导出到 Downloads
                     ReTextButton(
-                        text = "导出",
+                        text = stringResource(R.string.crash_report_export),
                         onClick = {
                             val savedPath = CrashHandler.exportCrashLogToDownloads(
                                 context,
@@ -248,19 +273,23 @@ fun CrashReportDialog(
                                 logInfo.content,
                             )
                             if (savedPath != null) {
-                                Toast.makeText(context, "已导出至: $savedPath", Toast.LENGTH_LONG).show()
+                                Toast.makeText(
+                                    context,
+                                    context.getString(R.string.diagnostics_save_success_toast, savedPath),
+                                    Toast.LENGTH_LONG,
+                                ).show()
                             } else {
-                                Toast.makeText(context, "导出失败", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, R.string.diagnostics_save_failed_toast, Toast.LENGTH_SHORT).show()
                             }
                         },
                         modifier = Modifier.weight(1f),
                     )
 
-                    // 系统分享
+                    // 系统文件分享
                     ReTextButton(
-                        text = "分享",
+                        text = stringResource(R.string.crash_report_share),
                         onClick = {
-                            CrashHandler.shareCrashLog(context, logInfo.content)
+                            CrashHandler.shareCrashLog(context, logInfo.file)
                         },
                         modifier = Modifier.weight(1f),
                     )
@@ -268,7 +297,7 @@ fun CrashReportDialog(
 
                 // 忽略 / 已知晓
                 ReTextButton(
-                    text = "我知道了",
+                    text = stringResource(R.string.crash_report_dismiss),
                     onClick = {
                         CrashHandler.markLatestLogAsSeen(context, logInfo.timestamp)
                         onDismiss()

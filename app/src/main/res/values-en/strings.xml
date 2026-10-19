@@ -448,6 +448,23 @@
     <string name="diagnostics_share_btn">Share Log</string>
     <string name="diagnostics_save_success_toast">Log saved to: %s</string>
     <string name="diagnostics_save_failed_toast">Failed to save log file</string>
+    <string name="crash_report_title">Abnormal Exit Detected</string>
+    <string name="crash_report_type_native">Engine Crash (Native Signal)</string>
+    <string name="crash_report_type_java">Application Crash (Java Uncaught)</string>
+    <string name="crash_report_desc">Crash stack trace and breadcrumbs were recorded. Log files are ready for developers to troubleshoot</string>
+    <string name="crash_report_time_prefix">Occurred at: %s</string>
+    <string name="crash_report_tag_native">Native Signal</string>
+    <string name="crash_report_tag_java">Java Exception</string>
+    <string name="crash_report_preview_title">Diagnostics Log Preview</string>
+    <string name="crash_report_full_title">Full Diagnostics Log</string>
+    <string name="crash_report_expand">Expand</string>
+    <string name="crash_report_collapse">Collapse</string>
+    <string name="crash_report_copy">Copy</string>
+    <string name="crash_report_export">Export</string>
+    <string name="crash_report_share">Share</string>
+    <string name="crash_report_dismiss">Dismiss</string>
+    <string name="crash_report_copied_toast">Crash log copied to clipboard</string>
+    <string name="crash_report_long_hint">Log is long and optimized for file export/sharing to avoid clipboard truncation</string>
 
     <!-- Tool Action Toasts -->
     <string name="toast_undo">Undo</string>

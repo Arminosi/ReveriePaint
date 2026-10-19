@@ -17,6 +17,7 @@ import android.os.Process
 import android.provider.MediaStore
 import android.util.Log
 import android.widget.Toast
+import androidx.core.content.FileProvider
 import com.reverie.paint.BuildConfig
 import com.reverie.paint.MainActivity
 import com.reverie.paint.R
@@ -245,21 +246,30 @@ object DiagnosticsManager {
     }
 
     /**
-     * 调用系统分享面板分享诊断报告
+     * 调用系统分享面板以文件形式分享诊断报告
      */
     fun shareReport(context: Context, content: String, title: String = "分享诊断日志") {
         try {
+            val cacheDir = File(context.cacheDir, "diagnostics").apply { if (!exists()) mkdirs() }
+            val fileName = "reverie_diag_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}.txt"
+            val file = File(cacheDir, fileName)
+            file.writeText(content)
+
+            val authority = "${context.packageName}.fileprovider"
+            val uri = FileProvider.getUriForFile(context, authority, file)
             val intent = Intent(Intent.ACTION_SEND).apply {
                 type = "text/plain"
+                putExtra(Intent.EXTRA_STREAM, uri)
                 putExtra(Intent.EXTRA_SUBJECT, "ReveriePaint 诊断与运行日志")
-                putExtra(Intent.EXTRA_TEXT, content)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-            context.startActivity(Intent.createChooser(intent, title).apply {
+            val chooser = Intent.createChooser(intent, title).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            })
+            }
+            context.startActivity(chooser)
         } catch (e: Throwable) {
-            Log.e(TAG, "Failed to share diagnostics report", e)
+            Log.e(TAG, "Failed to share diagnostics report as file", e)
         }
     }
 }

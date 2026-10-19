@@ -302,7 +302,7 @@
     <string name="settings_history_performance">History &amp; Performance</string>
     <string name="settings_render_schedule_mode">Render Scheduling Policy</string>
     <string name="settings_render_schedule_mode_sub">Adjust stroke composition rate and throttling window to balance responsiveness and thermal output</string>
-    <string name="settings_schedule_mode_perf">Performance</string>
+    <string name="settings_schedule_mode_perf">Performance (Default)</string>
     <string name="settings_schedule_mode_balanced">Balanced</string>
     <string name="settings_schedule_mode_saver">Power Saver</string>
     <string name="settings_schedule_mode_perf_desc">No throttling limit, lowest latency, highest power consumption and heat</string>

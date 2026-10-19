@@ -29,8 +29,10 @@ enum class RenderScheduleMode(
     POWER_SAVER(id = 2, minRenderIntervalMs = 18L, maxStrokeMergeSamples = 48);
 
     companion object {
+        val DEFAULT = PERFORMANCE
+
         fun fromId(id: Int): RenderScheduleMode {
-            return entries.firstOrNull { it.id == id } ?: BALANCED
+            return entries.firstOrNull { it.id == id } ?: DEFAULT
         }
     }
 }

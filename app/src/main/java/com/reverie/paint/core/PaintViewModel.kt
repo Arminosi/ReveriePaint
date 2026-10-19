@@ -539,7 +539,7 @@ class PaintViewModel : ViewModel() {
     var lastAutoSaveTimeMs by mutableLongStateOf(0L)
     var maxUndoSteps by mutableIntStateOf(50)
     var promptSaveOnExit by mutableStateOf(true)
-    var renderScheduleMode by mutableStateOf(com.reverie.paint.model.RenderScheduleMode.BALANCED)
+    var renderScheduleMode by mutableStateOf(com.reverie.paint.model.RenderScheduleMode.PERFORMANCE)
 
     // Brush state
     var brushSize by mutableDoubleStateOf(20.0)
@@ -3934,7 +3934,7 @@ class PaintViewModel : ViewModel() {
             maxUndoSteps = prefs.getInt("maxUndoSteps", 50).coerceIn(10, 200)
             promptSaveOnExit = prefs.getBoolean("promptSaveOnExit", true)
             renderScheduleMode = com.reverie.paint.model.RenderScheduleMode.fromId(
-                prefs.getInt("renderScheduleMode", com.reverie.paint.model.RenderScheduleMode.BALANCED.id)
+                prefs.getInt("renderScheduleMode", com.reverie.paint.model.RenderScheduleMode.PERFORMANCE.id)
             )
 
             val authorJson = prefs.getString("author_profile_json", null)
@@ -5250,6 +5250,11 @@ class PaintViewModel : ViewModel() {
     /** 上一次运笔渲染结束的系统时间戳 (uptimeMillis), 用于调度节流与温控。只在渲染线程读写。 */
     private var lastStrokeRenderFinishUptimeMs = 0L
     private var strokeThrottleRenderScheduled = false
+    private var pendingFrontierDocX = 0f
+    private var pendingFrontierDocY = 0f
+    private var pendingFrontierSampleTime = 0L
+    private var hasPendingFrontier = false
+
     private val strokeThrottleRenderRunnable = Runnable {
         strokeThrottleRenderScheduled = false
         if (renderW > 0 && renderH > 0) {
@@ -5257,6 +5262,10 @@ class PaintViewModel : ViewModel() {
             doRender()
             val dtNs = android.os.SystemClock.elapsedRealtimeNanos() - tStart
             lastStrokeRenderFinishUptimeMs = android.os.SystemClock.uptimeMillis()
+            if (hasPendingFrontier) {
+                updateRenderedFrontier(pendingFrontierDocX, pendingFrontierDocY, pendingFrontierSampleTime)
+                hasPendingFrontier = false
+            }
             reportRenderWorkDuration(dtNs)
         }
     }
@@ -5329,13 +5338,20 @@ class PaintViewModel : ViewModel() {
         val dtKrita = dtKritaNs / 1_000_000L
 
         // Render immediately in-place after ink landed to eliminate message queue roundtrip latency.
-        // 调度温控：若开启节流且距上一帧渲染间隔过短，暂缓 doRender() 并在窗口期满时统一输出，
+        // 调度温控：若开启节流且距上一帧渲染完成间隔过短，暂缓 doRender() 并在窗口期满时统一输出，
         // 防止高刷屏上过度触发瓦片合成导致 CPU/GPU 发热满载。
         if (painted || mirrorPainted) {
+            if (n > 0 || merged > 0) {
+                pendingFrontierDocX = lastDocX
+                pendingFrontierDocY = lastDocY
+                pendingFrontierSampleTime = lastSampleTime
+                hasPendingFrontier = true
+            }
+
             val minIntervalMs = renderScheduleMode.minRenderIntervalMs
             val nowMs = android.os.SystemClock.uptimeMillis()
             val elapsed = nowMs - lastStrokeRenderFinishUptimeMs
-            val shouldThrottle = minIntervalMs > 0L && elapsed < minIntervalMs && strokeBatchQueued
+            val shouldThrottle = minIntervalMs > 0L && elapsed < minIntervalMs
 
             if (!shouldThrottle) {
                 if (strokeThrottleRenderScheduled) {
@@ -5354,8 +5370,9 @@ class PaintViewModel : ViewModel() {
                 if (e2e in 1L..250L) {
                     lastE2ePipelineMs = ((lastE2ePipelineMs * 2L) + e2e) / 3L
                 }
-                if (n > 0 || merged > 0) {
-                    updateRenderedFrontier(lastDocX, lastDocY, lastSampleTime)
+                if (hasPendingFrontier) {
+                    updateRenderedFrontier(pendingFrontierDocX, pendingFrontierDocY, pendingFrontierSampleTime)
+                    hasPendingFrontier = false
                 }
 
                 if (++perfLogCounter % 5 == 0) {
@@ -5370,7 +5387,7 @@ class PaintViewModel : ViewModel() {
             } else {
                 if (!strokeThrottleRenderScheduled) {
                     strokeThrottleRenderScheduled = true
-                    val delay = (minIntervalMs - elapsed).coerceAtLeast(1L)
+                    val delay = (minIntervalMs - elapsed).coerceIn(1L, minIntervalMs)
                     renderHandler?.postDelayed(strokeThrottleRenderRunnable, delay)
                 }
             }

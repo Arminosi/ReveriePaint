@@ -10,9 +10,10 @@ import org.junit.Test
 class RenderScheduleModeTest {
 
     @Test
-    fun `default mode resolves to balanced`() {
-        assertEquals(RenderScheduleMode.BALANCED, RenderScheduleMode.fromId(1))
-        assertEquals(RenderScheduleMode.BALANCED, RenderScheduleMode.fromId(999))
+    fun `default mode resolves to performance`() {
+        assertEquals(RenderScheduleMode.PERFORMANCE, RenderScheduleMode.DEFAULT)
+        assertEquals(RenderScheduleMode.PERFORMANCE, RenderScheduleMode.fromId(0))
+        assertEquals(RenderScheduleMode.PERFORMANCE, RenderScheduleMode.fromId(999))
     }
 
     @Test

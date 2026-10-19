@@ -300,6 +300,14 @@
     <string name="crash_recovery_confirm">Restore Now</string>
     <string name="crash_recovery_dismiss">Review in Gallery Later</string>
     <string name="settings_history_performance">History &amp; Performance</string>
+    <string name="settings_render_schedule_mode">Render Scheduling Policy</string>
+    <string name="settings_render_schedule_mode_sub">Adjust stroke composition rate and throttling window to balance responsiveness and thermal output</string>
+    <string name="settings_schedule_mode_perf">Performance</string>
+    <string name="settings_schedule_mode_balanced">Balanced</string>
+    <string name="settings_schedule_mode_saver">Power Saver</string>
+    <string name="settings_schedule_mode_perf_desc">No throttling limit, lowest latency, highest power consumption and heat</string>
+    <string name="settings_schedule_mode_balanced_desc">Smart smooth scheduling (up to 90fps), balanced fluidity and temperature</string>
+    <string name="settings_schedule_mode_saver_desc">Capped render rate (up to 50-60fps) with higher batching, significantly reduces heat and battery drain</string>
     <string name="settings_max_undo_steps">Max Undo Steps</string>
     <string name="settings_max_undo_steps_sub">Upper limit of undo history; higher values allow longer undo chains</string>
     <string name="settings_step_unit">%d steps</string>

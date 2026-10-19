@@ -300,6 +300,14 @@
     <string name="crash_recovery_confirm">立即恢复</string>
     <string name="crash_recovery_dismiss">稍后在画廊查看</string>
     <string name="settings_history_performance">历史记录与性能</string>
+    <string name="settings_render_schedule_mode">渲染调度策略</string>
+    <string name="settings_render_schedule_mode_sub">调节运笔合成频率与节流窗口，平衡跟手度与设备发热</string>
+    <string name="settings_schedule_mode_perf">极速响应</string>
+    <string name="settings_schedule_mode_balanced">均衡推荐</string>
+    <string name="settings_schedule_mode_saver">节能温控</string>
+    <string name="settings_schedule_mode_perf_desc">无渲染节流上限，优先超低延迟，功耗与发热最高</string>
+    <string name="settings_schedule_mode_balanced_desc">智能平滑调度（上限 90fps），兼顾运笔流畅感与温度控制</string>
+    <string name="settings_schedule_mode_saver_desc">限制渲染帧率（上限 50-60fps）并加大合并，显著降低持续发热与耗电</string>
     <string name="settings_max_undo_steps">最大撤销步数</string>
     <string name="settings_max_undo_steps_sub">保留的历史操作记录上限，步数越多支持更长撤销链</string>
     <string name="settings_step_unit">%d步</string>

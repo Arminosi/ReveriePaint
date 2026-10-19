@@ -539,6 +539,7 @@ class PaintViewModel : ViewModel() {
     var lastAutoSaveTimeMs by mutableLongStateOf(0L)
     var maxUndoSteps by mutableIntStateOf(50)
     var promptSaveOnExit by mutableStateOf(true)
+    var renderScheduleMode by mutableStateOf(com.reverie.paint.model.RenderScheduleMode.BALANCED)
 
     // Brush state
     var brushSize by mutableDoubleStateOf(20.0)
@@ -3697,6 +3698,18 @@ class PaintViewModel : ViewModel() {
         }
     }
 
+    fun updateRenderScheduleMode(mode: com.reverie.paint.model.RenderScheduleMode) {
+        if (renderScheduleMode == mode) return
+        renderScheduleMode = mode
+        if (::appContext.isInitialized) {
+            appContext
+                .getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                .edit()
+                .putInt("renderScheduleMode", mode.id)
+                .apply()
+        }
+    }
+
     fun clearActionToast() {
         actionToastMessage = null
         actionToastIcon = null
@@ -3920,6 +3933,9 @@ class PaintViewModel : ViewModel() {
             autoSaveToastEnabled = prefs.getBoolean("autoSaveToastEnabled", true)
             maxUndoSteps = prefs.getInt("maxUndoSteps", 50).coerceIn(10, 200)
             promptSaveOnExit = prefs.getBoolean("promptSaveOnExit", true)
+            renderScheduleMode = com.reverie.paint.model.RenderScheduleMode.fromId(
+                prefs.getInt("renderScheduleMode", com.reverie.paint.model.RenderScheduleMode.BALANCED.id)
+            )
 
             val authorJson = prefs.getString("author_profile_json", null)
             authorProfile = com.reverie.paint.model.AuthorProfile.fromJson(authorJson)
@@ -5231,6 +5247,20 @@ class PaintViewModel : ViewModel() {
     /** 上一批「引擎 flush + 瓦片渲染」的实际耗时 (ns), 批内合并的触发依据。只在渲染线程读写。 */
     private var lastStrokeBatchWorkNs = 0L
 
+    /** 上一次运笔渲染结束的系统时间戳 (uptimeMillis), 用于调度节流与温控。只在渲染线程读写。 */
+    private var lastStrokeRenderFinishUptimeMs = 0L
+    private var strokeThrottleRenderScheduled = false
+    private val strokeThrottleRenderRunnable = Runnable {
+        strokeThrottleRenderScheduled = false
+        if (renderW > 0 && renderH > 0) {
+            val tStart = android.os.SystemClock.elapsedRealtimeNanos()
+            doRender()
+            val dtNs = android.os.SystemClock.elapsedRealtimeNanos() - tStart
+            lastStrokeRenderFinishUptimeMs = android.os.SystemClock.uptimeMillis()
+            reportRenderWorkDuration(dtNs)
+        }
+    }
+
     private val strokeBatchRunnable = Runnable {
         val tDispatch = android.os.SystemClock.uptimeMillis()
         strokeBatchQueued = false
@@ -5259,20 +5289,21 @@ class PaintViewModel : ViewModel() {
         // ---- 批内合并 (渲染线程) ----
         // 上一批 (引擎 flush + 瓦片渲染) 超过一整帧 16ms 预算说明渲染线程已落后于手写采样, 队列里又积了
         // 新样本。与其让它们各自触发一轮完整的 doRender (compositeDirtyRegions + 瓦片拷贝 + 前缓冲贴图),
-        // 不如在这里并进同一批, 只做一轮 doRender。限合并一次、最多 8 个、合并后 <= 32 个样本
-        // (与引擎 appendStrokeSample 的 32 样本分段对齐), 上屏不会被无限推迟。
-        // 只把新增样本拷到 strokeDrainCoords 头部送增量, 绝不把已画过的前 n 个点重送 (否则笔迹折返重画)。
-        // 刻意不动 strokeBatchQueued / pendingCoreOps: 为新样本投递的 runnable 稍后跑到时队列已空
-        // (n == 0, 不渲染), 退化成一次空转, 不存在"摘掉 runnable 却漏减计数"或"新样本搁浅"的竞态。
+        // 不如在这里并进同一批, 只做一轮 doRender。
+        // 根据当前调度策略 (RenderScheduleMode) 设定合并阈值与单次吸纳上限。
         var lastDocX = if (n > 0) strokeDrainCoords[(n - 1) * STROKE_SAMPLE_STRIDE] else 0f
         var lastDocY = if (n > 0) strokeDrainCoords[(n - 1) * STROKE_SAMPLE_STRIDE + 1] else 0f
         var lastSampleTime = if (n > 0) strokeDrainTimes[n - 1] else 0L
         var merged = 0
-        if (painted && n in 1 until STROKE_MERGE_MAX_SAMPLES &&
+        val maxMergeSamples = renderScheduleMode.maxStrokeMergeSamples
+        if (painted && n in 1 until maxMergeSamples &&
             lastStrokeBatchWorkNs > STROKE_MERGE_TRIGGER_MS * 1_000_000L
         ) {
             var extra = 0
-            val maxExtra = minOf(8, STROKE_MERGE_MAX_SAMPLES - n)
+            val maxExtra = minOf(
+                if (renderScheduleMode == com.reverie.paint.model.RenderScheduleMode.POWER_SAVER) 16 else 8,
+                maxMergeSamples - n,
+            )
             synchronized(strokeBatchLock) {
                 if (strokeBatchCount in 1..maxExtra) {
                     extra = strokeBatchCount
@@ -5291,38 +5322,57 @@ class PaintViewModel : ViewModel() {
                 } catch (_: Throwable) {
                     // 与首批一致: 引擎异常不影响本帧照常渲染已落墨的部分
                 }
-                // 合并那一次的引擎耗时也算进本批, 否则度量低报
                 dtKritaNs += android.os.SystemClock.elapsedRealtimeNanos() - tMergeStartNs
                 merged = extra
             }
         }
         val dtKrita = dtKritaNs / 1_000_000L
-        // Render immediately in-place after ink landed to eliminate message queue roundtrip latency
-        if (painted || mirrorPainted) {
-            val tRenderStartNs = android.os.SystemClock.elapsedRealtimeNanos()
-            doRender()
-            dtRenderNs = android.os.SystemClock.elapsedRealtimeNanos() - tRenderStartNs
-            val dtRender = dtRenderNs / 1_000_000L
-            val tDone = android.os.SystemClock.uptimeMillis()
-            val queueWait = tDispatch - lastQueuedUptime
-            val e2e =
-                if (lastQueuedInputEventTime > 0) (tDone - lastQueuedInputEventTime).coerceAtLeast(1L) else 0L
-            if (e2e in 1L..250L) {
-                // 2:1 滑动平均: 单帧抖动不直接改写延迟估计
-                lastE2ePipelineMs = ((lastE2ePipelineMs * 2L) + e2e) / 3L
-            }
-            if (n > 0 || merged > 0) {
-                updateRenderedFrontier(lastDocX, lastDocY, lastSampleTime)
-            }
 
-            if (++perfLogCounter % 5 == 0) {
-                android.util.Log.i(
-                    "ReveriePerf",
-                    "StrokePerf: n=$n merged=$merged queueWait=${queueWait}ms krita=${dtKrita}ms " +
-                        "render=${dtRender}ms e2e=${e2e}ms effectiveDelay=${effectivePipelineDelayMs}ms " +
-                        "presentWait=${PerfTrace.presentWaitP50Ms}ms " +
-                        "frontierErr=${"%.1f".format(PerfTrace.frontierErrP50Px)}px"
-                )
+        // Render immediately in-place after ink landed to eliminate message queue roundtrip latency.
+        // 调度温控：若开启节流且距上一帧渲染间隔过短，暂缓 doRender() 并在窗口期满时统一输出，
+        // 防止高刷屏上过度触发瓦片合成导致 CPU/GPU 发热满载。
+        if (painted || mirrorPainted) {
+            val minIntervalMs = renderScheduleMode.minRenderIntervalMs
+            val nowMs = android.os.SystemClock.uptimeMillis()
+            val elapsed = nowMs - lastStrokeRenderFinishUptimeMs
+            val shouldThrottle = minIntervalMs > 0L && elapsed < minIntervalMs && strokeBatchQueued
+
+            if (!shouldThrottle) {
+                if (strokeThrottleRenderScheduled) {
+                    renderHandler?.removeCallbacks(strokeThrottleRenderRunnable)
+                    strokeThrottleRenderScheduled = false
+                }
+                val tRenderStartNs = android.os.SystemClock.elapsedRealtimeNanos()
+                doRender()
+                lastStrokeRenderFinishUptimeMs = android.os.SystemClock.uptimeMillis()
+                dtRenderNs = android.os.SystemClock.elapsedRealtimeNanos() - tRenderStartNs
+                val dtRender = dtRenderNs / 1_000_000L
+                val tDone = android.os.SystemClock.uptimeMillis()
+                val queueWait = tDispatch - lastQueuedUptime
+                val e2e =
+                    if (lastQueuedInputEventTime > 0) (tDone - lastQueuedInputEventTime).coerceAtLeast(1L) else 0L
+                if (e2e in 1L..250L) {
+                    lastE2ePipelineMs = ((lastE2ePipelineMs * 2L) + e2e) / 3L
+                }
+                if (n > 0 || merged > 0) {
+                    updateRenderedFrontier(lastDocX, lastDocY, lastSampleTime)
+                }
+
+                if (++perfLogCounter % 5 == 0) {
+                    android.util.Log.i(
+                        "ReveriePerf",
+                        "StrokePerf: n=$n merged=$merged mode=${renderScheduleMode.name} queueWait=${queueWait}ms krita=${dtKrita}ms " +
+                            "render=${dtRender}ms e2e=${e2e}ms effectiveDelay=${effectivePipelineDelayMs}ms " +
+                            "presentWait=${PerfTrace.presentWaitP50Ms}ms " +
+                            "frontierErr=${"%.1f".format(PerfTrace.frontierErrP50Px)}px"
+                    )
+                }
+            } else {
+                if (!strokeThrottleRenderScheduled) {
+                    strokeThrottleRenderScheduled = true
+                    val delay = (minIntervalMs - elapsed).coerceAtLeast(1L)
+                    renderHandler?.postDelayed(strokeThrottleRenderRunnable, delay)
+                }
             }
         }
         lastStrokeBatchWorkNs = dtKritaNs + dtRenderNs
@@ -5399,6 +5449,10 @@ class PaintViewModel : ViewModel() {
      * API < 29 没有 hasCallbacks, 无法确认, 不做。只允许在渲染线程调用。
      */
     internal fun drainPendingStrokeBatchOnRenderThread() {
+        if (strokeThrottleRenderScheduled) {
+            renderHandler?.removeCallbacks(strokeThrottleRenderRunnable)
+            strokeThrottleRenderScheduled = false
+        }
         if (!strokeBatchQueued) return
         if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) return
         val h = renderHandler ?: return
@@ -5410,6 +5464,10 @@ class PaintViewModel : ViewModel() {
     /** Drop undelivered stroke samples (cancel path: they must not reach the
      *  engine after touchStrokeCancel ran). */
     internal fun clearPendingStrokeSamples() {
+        if (strokeThrottleRenderScheduled) {
+            renderHandler?.removeCallbacks(strokeThrottleRenderRunnable)
+            strokeThrottleRenderScheduled = false
+        }
         synchronized(strokeBatchLock) {
             strokeBatchCount = 0
         }
@@ -5618,6 +5676,10 @@ class PaintViewModel : ViewModel() {
 
     internal fun scheduleRender(immediate: Boolean = false) {
         val h = renderHandler ?: return
+        if (strokeThrottleRenderScheduled) {
+            h.removeCallbacks(strokeThrottleRenderRunnable)
+            strokeThrottleRenderScheduled = false
+        }
         if (immediate) {
             // touchEnd / undo / structural changes: render right away and
             // drop any pending throttled render (its 16ms-later run would
@@ -5644,7 +5706,12 @@ class PaintViewModel : ViewModel() {
                 doRender()
             }
         pendingRenderRunnable = r
-        h.post(r)
+        val delay = if (renderScheduleMode == com.reverie.paint.model.RenderScheduleMode.POWER_SAVER) 16L else 0L
+        if (delay > 0L) {
+            h.postDelayed(r, delay)
+        } else {
+            h.post(r)
+        }
     }
 
     @Volatile internal var liquifyPresentationGesture = 0L

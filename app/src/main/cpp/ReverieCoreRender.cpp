@@ -102,6 +102,9 @@ void ReverieCore::bakeStaticUnderlay(const QRect &r)
         return;
     }
 
+    const KoColor defaultBg = m_document->defaultProjectionColor();
+    const bool hasBg = (defaultBg.opacityU8() > 0);
+
     // 一行里连续缺失的宏瓦片并成一段一起合成; 碰到已烘焙的瓦片先把攒着的那段冲掉,
     // 否则段会跨过已烘焙的瓦片, 把它也清掉重算 (白算一遍)。
     const int tile = kStaticUnderlayTile;
@@ -111,7 +114,11 @@ void ReverieCore::bakeStaticUnderlay(const QRect &r)
             const quint64 key = (quint64(quint32(ty)) << 32) | quint64(quint32(tx));
             if (m_staticUnderlayTiles.contains(key)) {
                 if (!rowSpan.isEmpty()) {
-                    m_staticUnderlay->clear(rowSpan);
+                    if (hasBg) {
+                        m_staticUnderlay->fill(rowSpan, defaultBg);
+                    } else {
+                        m_staticUnderlay->clear(rowSpan);
+                    }
                     compositeLayersRange(m_staticUnderlay, 0, stopIdx, rowSpan);
                     rowSpan = QRect();
                 }
@@ -124,7 +131,11 @@ void ReverieCore::bakeStaticUnderlay(const QRect &r)
             }
         }
         if (!rowSpan.isEmpty()) {
-            m_staticUnderlay->clear(rowSpan);
+            if (hasBg) {
+                m_staticUnderlay->fill(rowSpan, defaultBg);
+            } else {
+                m_staticUnderlay->clear(rowSpan);
+            }
             compositeLayersRange(m_staticUnderlay, 0, stopIdx, rowSpan);
         }
     }
@@ -138,6 +149,8 @@ void ReverieCore::compositeDirtyRegions(KisPaintDeviceSP out)
     const QRect docRect(0, 0, m_document->width(), m_document->height());
     const int stopIdx = strokeStaticUnderlayStop(*this);
     const int n = dirtyRegionCount(m_dirtyRects, m_dirtyRect);
+    const KoColor defaultBg = m_document->defaultProjectionColor();
+    const bool hasBg = (defaultBg.opacityU8() > 0);
 
     if (stopIdx > 0) {
         // [0, stopIdx) 由静态底图提供: COMPOSITE_COPY 覆盖 r 内全部像素 (不必先 clear), 再从
@@ -157,7 +170,11 @@ void ReverieCore::compositeDirtyRegions(KisPaintDeviceSP out)
                 copyPainter.bitBlt(r.topLeft(), m_staticUnderlay, r);
                 compositeLayersRange(out, stopIdx, m_layers.size(), r);
             } else {
-                out->clear(r);
+                if (hasBg) {
+                    out->fill(r, defaultBg);
+                } else {
+                    out->clear(r);
+                }
                 compositeLayersRange(out, 0, m_layers.size(), r);
             }
         }
@@ -170,7 +187,11 @@ void ReverieCore::compositeDirtyRegions(KisPaintDeviceSP out)
         if (r.isEmpty()) {
             continue;
         }
-        out->clear(r);
+        if (hasBg) {
+            out->fill(r, defaultBg);
+        } else {
+            out->clear(r);
+        }
         compositeLayersRange(out, 0, m_layers.size(), r);
     }
 }

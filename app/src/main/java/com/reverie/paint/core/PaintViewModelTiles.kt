@@ -394,7 +394,8 @@ private fun copyTileInto(src: Bitmap, dst: Bitmap) {
  */
 private fun PaintViewModel.publishTileSnapshotIfNeeded(grid: DisplayTileGrid, tiles: AtomicReferenceArray<Bitmap?>) {
     val liquifyPending = liquifyPresentation.isPending(liquifyPresentationGesture)
-    if (!referenceWindowOpen && !liquifyPending) return
+    val refCanvasActive = referenceWindowOpen && referenceActiveTab == 1
+    if (!refCanvasActive && !liquifyPending) return
     val st = displayTiles
     val now = SystemClock.uptimeMillis()
     if (!liquifyPending && isStrokeRenderActive() && now - st.lastSnapshotMs < DisplayTileState.SNAPSHOT_MIN_MS) {

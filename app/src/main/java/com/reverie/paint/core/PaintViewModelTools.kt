@@ -413,14 +413,13 @@ internal fun PaintViewModel.touchMove(
                 val effectiveZoom = (tv?.canvasZoom ?: 1f).toDouble() * (tv?.canvasFitScale ?: 1f).toDouble()
                 val zoomCoeff = if (strokeScalableDistance && effectiveZoom > 0.001) 1.0 / effectiveZoom else 1.0
 
-                // Normalized speed in range [0.0, 1.0] (分母由 2.5 调至 1.6, 中速即可激活低滞后响应)
-                val scaledDist = dist * (if (strokeScalableDistance) effectiveZoom else 1.0)
-                val speed = (scaledDist / eventDt.toDouble() / 1.6).coerceIn(0.0, 1.0)
+                // Normalized speed in range [0.0, 1.0] (0 = slow/fine lines, 1 = rapid sweep)
+                val speed = ((dist * (if (strokeScalableDistance) effectiveZoom else 1.0)) / eventDt.toDouble() / 2.5).coerceIn(0.0, 1.0)
                 val effDist = zoomCoeff * ((1.0 - speed) * strokeSmoothnessDistanceMax + speed * strokeSmoothnessDistanceMin)
                 val baseSigma = effDist / 3.0
-                val speedDecay = 1.0 - speed * 0.88
-                val minSigma = maxOf(1.2 * speedDecay, curDist * 0.16 * speedDecay)
-                val sigma = maxOf(baseSigma * speedDecay, minSigma * (effDist / 40.0).coerceIn(0.20, 1.0))
+                // Adaptive sigma floor ensures multi-point smoothing even when stylus moves fast or on high-DPI screens
+                val minSigma = maxOf(2.5, curDist * 0.6)
+                val sigma = maxOf(baseSigma, minSigma * (effDist / 40.0).coerceIn(0.3, 1.8))
 
                 if (sigma > 0.001) {
                     val gaussianWeight = 1.0 / (Math.sqrt(2.0 * Math.PI) * sigma)
@@ -476,20 +475,17 @@ internal fun PaintViewModel.touchMove(
             lastInputEventTimeMs = inputEventTimeMs
             val stabFactor = maxOf(strokeStabilizer.toDouble(), brushStreamline).coerceIn(0.0, 1.0)
             if (stabFactor > 0.0) {
-                // 基础平滑: 慢速精细勾线保持稳固防抖, 一旦滞后距离超过 4~22px 或运笔速度提升,
-                // 迅速抬升 alpha 至 0.65~0.96, 斩断中高速扫笔的橡皮筋拖尾。
-                val baseAlpha = kotlin.math.exp(-stabFactor * 4.2) * 0.98 + 0.02
-                val distToTarget =
-                    Math.hypot((targetX - smoothedStrokeX).toDouble(), (targetY - smoothedStrokeY).toDouble())
-                val normLag = (distToTarget / 22.0).coerceIn(0.0, 1.0)
-                val speedPxPerMs = dist / dt.toDouble()
-                val normSpeed = (speedPxPerMs / 1.5).coerceIn(0.0, 1.0)
-                val adaptiveBoost = maxOf(normLag * normLag, normSpeed * 0.75) * (0.82 * (1.0 - stabFactor * 0.35))
-                val alpha = (baseAlpha + adaptiveBoost).toFloat().coerceIn(0.02f, 0.96f)
+                // High-precision non-linear stabilizer curve:
+                // Exponential response with adaptive distance boost provides rock-solid jitter removal
+                // when drawing slow/fine lines while remaining responsive during rapid sweeps.
+                val baseAlpha = kotlin.math.exp(-stabFactor * 5.2) * 0.994 + 0.006
+                val distToTarget = Math.hypot((targetX - smoothedStrokeX).toDouble(), (targetY - smoothedStrokeY).toDouble())
+                val adaptiveBoost = (distToTarget / 150.0).coerceIn(0.0, 1.0) * 0.015
+                val alpha = (baseAlpha + adaptiveBoost).toFloat().coerceIn(0.006f, 1.0f)
 
                 smoothedStrokeX += (targetX - smoothedStrokeX) * alpha
                 smoothedStrokeY += (targetY - smoothedStrokeY) * alpha
-                val pressureAlpha = maxOf(alpha * 2.5f, 0.08f).coerceAtMost(1.0f)
+                val pressureAlpha = maxOf(alpha * 2.5f, 0.06f).coerceAtMost(1.0f)
                 smoothedStrokePressure += (effPressure - smoothedStrokePressure) * pressureAlpha.toDouble()
                 effX = smoothedStrokeX
                 effY = smoothedStrokeY

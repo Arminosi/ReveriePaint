@@ -39,7 +39,9 @@ import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -444,10 +446,10 @@ fun ReferenceWindow(
                 // Canvas Tab (Main canvas projection bitmap)
                 val canvasBmp = vm.displayBitmap
                 val rev = vm.displayRevision
-                val memoized = remember(canvasBmp, rev) { canvasBmp }
-                if (memoized != null) {
+                if (canvasBmp != null) {
                     ReferenceSingleBitmapView(
-                        bitmap = memoized,
+                        bitmap = canvasBmp,
+                        revision = rev,
                         zoom = vm.referenceZoom,
                         rotation = vm.referenceRotation,
                         panX = vm.referencePanX,
@@ -552,6 +554,9 @@ fun ReferenceWindow(
                 activeTab = vm.referenceActiveTab,
                 onTabSelect = { tab ->
                     vm.referenceActiveTab = tab
+                    if (tab == 1) {
+                        vm.scheduleRender(immediate = true)
+                    }
                     vm.persistReferenceState()
                     if (tab == 0 && vm.referenceImages.isEmpty()) {
                         showAlbumPicker = true
@@ -1053,6 +1058,7 @@ private fun ReferenceImagesView(
 @Composable
 private fun ReferenceSingleBitmapView(
     bitmap: Bitmap,
+    revision: Long,
     zoom: Float,
     rotation: Float,
     panX: Float,
@@ -1061,18 +1067,24 @@ private fun ReferenceSingleBitmapView(
     isFlipped: Boolean,
     modifier: Modifier = Modifier
 ) {
-    val imageBitmap = remember(bitmap) { bitmap.asImageBitmap() }
-    val colorFilter = remember(isGrayscale) {
-        if (isGrayscale) {
-            ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(0f) })
-        } else {
-            null
+    val grayPaint = remember {
+        android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG).apply {
+            colorFilter = android.graphics.ColorMatrixColorFilter(
+                android.graphics.ColorMatrix().apply { setSaturation(0f) }
+            )
         }
+    }
+    val defaultPaint = remember {
+        android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG)
     }
 
     Canvas(
         modifier = modifier.fillMaxSize()
     ) {
+        // Read revision to subscribe to canvas frame updates
+        @Suppress("UNUSED_VARIABLE")
+        val rev = revision
+        if (bitmap.isRecycled) return@Canvas
         val bw = bitmap.width.toFloat()
         val bh = bitmap.height.toFloat()
         if (bw <= 0f || bh <= 0f) return@Canvas
@@ -1082,20 +1094,16 @@ private fun ReferenceSingleBitmapView(
         val centerX = size.width / 2f + panX
         val centerY = size.height / 2f + panY
 
-        withTransform({
-            translate(centerX, centerY)
-            rotate(rotation, pivot = Offset.Zero)
-            scale(
-                scaleX = if (isFlipped) -finalScale else finalScale,
-                scaleY = finalScale,
-                pivot = Offset.Zero
-            )
-            translate(-bw / 2f, -bh / 2f)
-        }) {
-            drawImage(
-                image = imageBitmap,
-                colorFilter = colorFilter
-            )
+        drawIntoCanvas { canvas ->
+            val nativeCanvas = canvas.nativeCanvas
+            nativeCanvas.save()
+            nativeCanvas.translate(centerX, centerY)
+            nativeCanvas.rotate(rotation)
+            nativeCanvas.scale(if (isFlipped) -finalScale else finalScale, finalScale)
+            nativeCanvas.translate(-bw / 2f, -bh / 2f)
+            val paint = if (isGrayscale) grayPaint else defaultPaint
+            nativeCanvas.drawBitmap(bitmap, 0f, 0f, paint)
+            nativeCanvas.restore()
         }
     }
 }

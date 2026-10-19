@@ -76,7 +76,7 @@ object FrontBufferProbe {
      */
     fun realInkHoldAllowed(): Boolean {
         val v = preservedContent ?: return false
-        return v || probeSource == SOURCE_PROBE_FAILED
+        return v && probeSource == SOURCE_PROBE
     }
 
     /** 诊断用: `<结论>/<来源>`。 */
@@ -89,7 +89,7 @@ object FrontBufferProbe {
                 .getOrElse { e ->
                     Log.w(TAG, "preserved-content probe failed: ${e.message}")
                     probeSource = SOURCE_PROBE_FAILED
-                    true
+                    false
                 }
         if (probeSource != SOURCE_PROBE_FAILED) probeSource = SOURCE_PROBE
         preservedContent = result

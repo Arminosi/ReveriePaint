@@ -1924,8 +1924,17 @@ QVector<float> ReverieCore::currentBrushOutline()
         return {};
     }
     KisBrushSP brush = bs->brush();
-    if (!brush) {
+    if (!brush || !brush->valid() || brush->width() <= 0 || brush->height() <= 0) {
         return {};
+    }
+    if (KisImagePipeBrush *pipeBrush = dynamic_cast<KisImagePipeBrush *>(brush.data())) {
+        if (pipeBrush->brushes().isEmpty()) {
+            return {};
+        }
+        KisGbrBrushSP first = pipeBrush->brushes().first();
+        if (!first || !first->valid()) {
+            return {};
+        }
     }
 
     KisOptimizedBrushOutline outline = brush->outline();

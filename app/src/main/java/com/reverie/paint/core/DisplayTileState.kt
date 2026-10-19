@@ -235,6 +235,6 @@ internal class DisplayTileState {
         const val SPARE_CAP = 24
 
         /** 参考窗口快照在连续出帧时的最小间隔。 */
-        const val SNAPSHOT_MIN_MS = 250L
+        const val SNAPSHOT_MIN_MS = 80L
     }
 }

@@ -549,6 +549,7 @@ private fun SyncResultLine(vm: PaintViewModel) {
                             fontSize = 12.sp,
                             modifier = Modifier.weight(1f, fill = false),
                         )
+                        val saveSuccessPattern = stringResource(R.string.diagnostics_save_success_toast)
                         Text(
                             text = stringResource(R.string.settings_export_log),
                             color = colors.accent,
@@ -565,7 +566,7 @@ private fun SyncResultLine(vm: PaintViewModel) {
                                             if (path != null) {
                                                 Toast.makeText(
                                                     context,
-                                                    context.getString(R.string.diagnostics_save_success_toast, path),
+                                                    String.format(saveSuccessPattern, path),
                                                     Toast.LENGTH_LONG,
                                                 ).show()
                                             } else {

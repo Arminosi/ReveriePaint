@@ -264,6 +264,7 @@ fun CrashReportDialog(
                     }
 
                     // 导出到 Downloads
+                    val saveSuccessPattern = stringResource(R.string.diagnostics_save_success_toast)
                     ReTextButton(
                         text = stringResource(R.string.crash_report_export),
                         onClick = {
@@ -275,7 +276,7 @@ fun CrashReportDialog(
                             if (savedPath != null) {
                                 Toast.makeText(
                                     context,
-                                    context.getString(R.string.diagnostics_save_success_toast, savedPath),
+                                    String.format(saveSuccessPattern, savedPath),
                                     Toast.LENGTH_LONG,
                                 ).show()
                             } else {

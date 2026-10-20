@@ -44,6 +44,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -362,6 +363,7 @@ fun QuickOklchWindow(
                                             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                             val targetHex = vm.brushSecondaryColor
                                             currentOklch = OklchColor.fromHex(targetHex)
+                                            lastSelfHex = targetHex
                                             vm.swapColors()
                                         },
                                 ) {
@@ -550,6 +552,11 @@ private fun OklchLCSlicePlaneView(
     onEditNumeric: (DirectInputTarget) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val currentOklch by rememberUpdatedState(oklch)
+    val currentOnColorChange by rememberUpdatedState(onColorChange)
+    val currentOnInteractionStart by rememberUpdatedState(onInteractionStart)
+    val currentOnInteractionEnd by rememberUpdatedState(onInteractionEnd)
+
     val bmpWidth = 120
     val bmpHeight = 80
     val maxChroma = OklchColor.MAX_CHROMA
@@ -583,15 +590,16 @@ private fun OklchLCSlicePlaneView(
                             if (w > 0f && h > 0f) {
                                 val newL = (1f - (pos.y / h)).coerceIn(0f, 1f)
                                 val rawC = (pos.x / w * maxChroma).coerceIn(0f, maxChroma)
-                                val maxCInGamut = OklchColor.findMaxChromaInGamut(newL, oklch.h)
+                                val curH = currentOklch.h
+                                val maxCInGamut = OklchColor.findMaxChromaInGamut(newL, curH)
                                 val finalC = rawC.coerceAtMost(maxCInGamut)
-                                onColorChange(OklchColor(newL, finalC, oklch.h))
+                                currentOnColorChange(OklchColor(newL, finalC, curH))
                             }
                         }
 
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false).also { it.consume() }
-                            onInteractionStart()
+                            currentOnInteractionStart()
                             handleTouch(down.position)
                             while (true) {
                                 val event = awaitPointerEvent()
@@ -600,7 +608,7 @@ private fun OklchLCSlicePlaneView(
                                 handleTouch(change.position)
                                 change.consume()
                             }
-                            onInteractionEnd()
+                            currentOnInteractionEnd()
                         }
                     }
             ) {
@@ -694,15 +702,15 @@ private fun OklchLCSlicePlaneView(
             trackBrush = Brush.horizontalGradient(hColors),
             onValueChange = { frac ->
                 val newH = (frac * 360f).coerceIn(0f, 360f)
-                onColorChange(OklchColor(oklch.l, oklch.c, newH))
+                currentOnColorChange(currentOklch.copy(h = newH))
             },
             onStepDown = {
-                val newH = (oklch.h - 5f).let { if (it < 0f) 360f + it else it }
-                onColorChange(OklchColor(oklch.l, oklch.c, newH))
+                val newH = (currentOklch.h - 5f).let { if (it < 0f) 360f + it else it }
+                currentOnColorChange(currentOklch.copy(h = newH))
             },
             onStepUp = {
-                val newH = (oklch.h + 5f).let { if (it > 360f) it - 360f else it }
-                onColorChange(OklchColor(oklch.l, oklch.c, newH))
+                val newH = (currentOklch.h + 5f).let { if (it > 360f) it - 360f else it }
+                currentOnColorChange(currentOklch.copy(h = newH))
             },
             onClickValue = { onEditNumeric(DirectInputTarget.HUE) },
             onInteractionStart = onInteractionStart,
@@ -728,6 +736,11 @@ private fun OklchLightnessWheelView(
     onEditNumeric: (DirectInputTarget) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val currentOklch by rememberUpdatedState(oklch)
+    val currentOnColorChange by rememberUpdatedState(onColorChange)
+    val currentOnInteractionStart by rememberUpdatedState(onInteractionStart)
+    val currentOnInteractionEnd by rememberUpdatedState(onInteractionEnd)
+
     val wheelBmpSize = 96
     val wheelBitmap = remember { Bitmap.createBitmap(wheelBmpSize, wheelBmpSize, Bitmap.Config.ARGB_8888) }
     val wheelPixels = remember { IntArray(wheelBmpSize * wheelBmpSize) }
@@ -806,14 +819,15 @@ private fun OklchLightnessWheelView(
                             if (angleDeg < 0f) angleDeg += 360f
 
                             activeSatRatio = normDist
-                            val maxC = OklchColor.findMaxChromaInGamut(oklch.l, angleDeg)
+                            val curL = currentOklch.l
+                            val maxC = OklchColor.findMaxChromaInGamut(curL, angleDeg)
                             val finalC = normDist * maxC
-                            onColorChange(OklchColor(oklch.l, finalC, angleDeg))
+                            currentOnColorChange(OklchColor(curL, finalC, angleDeg))
                         }
 
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false).also { it.consume() }
-                            onInteractionStart()
+                            currentOnInteractionStart()
                             handleTouch(down.position)
                             while (true) {
                                 val event = awaitPointerEvent()
@@ -822,7 +836,7 @@ private fun OklchLightnessWheelView(
                                 handleTouch(change.position)
                                 change.consume()
                             }
-                            onInteractionEnd()
+                            currentOnInteractionEnd()
                         }
                     }
             ) {
@@ -914,25 +928,29 @@ private fun OklchLightnessWheelView(
             trackBrush = Brush.horizontalGradient(lColors),
             onValueChange = { frac ->
                 val newL = frac.coerceIn(0f, 1f)
-                val newMaxC = OklchColor.findMaxChromaInGamut(newL, oklch.h)
-                onColorChange(OklchColor(newL, dragStartSatRatio * newMaxC, oklch.h))
+                val curH = currentOklch.h
+                val ratio = if (dragStartSatRatio > 0f) dragStartSatRatio else activeSatRatio
+                val newMaxC = OklchColor.findMaxChromaInGamut(newL, curH)
+                currentOnColorChange(OklchColor(newL, ratio * newMaxC, curH))
             },
             onStepDown = {
                 val currentRatio = if (activeSatRatio > 0f) activeSatRatio else dragStartSatRatio
-                val newL = (oklch.l - 0.02f).coerceIn(0f, 1f)
-                val newMaxC = OklchColor.findMaxChromaInGamut(newL, oklch.h)
-                onColorChange(OklchColor(newL, currentRatio * newMaxC, oklch.h))
+                val newL = (currentOklch.l - 0.02f).coerceIn(0f, 1f)
+                val curH = currentOklch.h
+                val newMaxC = OklchColor.findMaxChromaInGamut(newL, curH)
+                currentOnColorChange(OklchColor(newL, currentRatio * newMaxC, curH))
             },
             onStepUp = {
                 val currentRatio = if (activeSatRatio > 0f) activeSatRatio else dragStartSatRatio
-                val newL = (oklch.l + 0.02f).coerceIn(0f, 1f)
-                val newMaxC = OklchColor.findMaxChromaInGamut(newL, oklch.h)
-                onColorChange(OklchColor(newL, currentRatio * newMaxC, oklch.h))
+                val newL = (currentOklch.l + 0.02f).coerceIn(0f, 1f)
+                val curH = currentOklch.h
+                val newMaxC = OklchColor.findMaxChromaInGamut(newL, curH)
+                currentOnColorChange(OklchColor(newL, currentRatio * newMaxC, curH))
             },
             onClickValue = { onEditNumeric(DirectInputTarget.LIGHTNESS) },
             onInteractionStart = {
-                val maxC = OklchColor.findMaxChromaInGamut(oklch.l, oklch.h)
-                dragStartSatRatio = if (activeSatRatio > 0f) activeSatRatio else if (maxC > 0.001f) (oklch.c / maxC).coerceIn(0f, 1f) else 0f
+                val maxC = OklchColor.findMaxChromaInGamut(currentOklch.l, currentOklch.h)
+                dragStartSatRatio = if (activeSatRatio > 0f) activeSatRatio else if (maxC > 0.001f) (currentOklch.c / maxC).coerceIn(0f, 1f) else 0f
                 isInteractingSlider = true
                 onInteractionStart()
             },
@@ -956,6 +974,9 @@ private fun OklchPrecisionSlidersView(
     onEditNumeric: (DirectInputTarget) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val currentOklch by rememberUpdatedState(oklch)
+    val currentOnColorChange by rememberUpdatedState(onColorChange)
+
     Column(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -975,15 +996,15 @@ private fun OklchPrecisionSlidersView(
             trackBrush = Brush.horizontalGradient(lColors),
             onValueChange = { frac ->
                 val newL = frac.coerceIn(0f, 1f)
-                onColorChange(OklchColor(newL, oklch.c, oklch.h))
+                currentOnColorChange(currentOklch.copy(l = newL))
             },
             onStepDown = {
-                val newL = (oklch.l - 0.01f).coerceIn(0f, 1f)
-                onColorChange(OklchColor(newL, oklch.c, oklch.h))
+                val newL = (currentOklch.l - 0.01f).coerceIn(0f, 1f)
+                currentOnColorChange(currentOklch.copy(l = newL))
             },
             onStepUp = {
-                val newL = (oklch.l + 0.01f).coerceIn(0f, 1f)
-                onColorChange(OklchColor(newL, oklch.c, oklch.h))
+                val newL = (currentOklch.l + 0.01f).coerceIn(0f, 1f)
+                currentOnColorChange(currentOklch.copy(l = newL))
             },
             onClickValue = { onEditNumeric(DirectInputTarget.LIGHTNESS) },
             onInteractionStart = onInteractionStart,
@@ -1007,15 +1028,15 @@ private fun OklchPrecisionSlidersView(
             trackBrush = Brush.horizontalGradient(cColors),
             onValueChange = { frac ->
                 val rawC = (frac * maxC).coerceIn(0f, maxC)
-                onColorChange(OklchColor(oklch.l, rawC, oklch.h))
+                currentOnColorChange(currentOklch.copy(c = rawC))
             },
             onStepDown = {
-                val rawC = (oklch.c - 0.01f).coerceIn(0f, maxC)
-                onColorChange(OklchColor(oklch.l, rawC, oklch.h))
+                val rawC = (currentOklch.c - 0.01f).coerceIn(0f, maxC)
+                currentOnColorChange(currentOklch.copy(c = rawC))
             },
             onStepUp = {
-                val rawC = (oklch.c + 0.01f).coerceIn(0f, maxC)
-                onColorChange(OklchColor(oklch.l, rawC, oklch.h))
+                val rawC = (currentOklch.c + 0.01f).coerceIn(0f, maxC)
+                currentOnColorChange(currentOklch.copy(c = rawC))
             },
             onClickValue = { onEditNumeric(DirectInputTarget.CHROMA) },
             onInteractionStart = onInteractionStart,
@@ -1036,15 +1057,15 @@ private fun OklchPrecisionSlidersView(
             trackBrush = Brush.horizontalGradient(hColors),
             onValueChange = { frac ->
                 val newH = (frac * 360f).coerceIn(0f, 360f)
-                onColorChange(OklchColor(oklch.l, oklch.c, newH))
+                currentOnColorChange(currentOklch.copy(h = newH))
             },
             onStepDown = {
-                val newH = (oklch.h - 1f).let { if (it < 0f) 360f + it else it }
-                onColorChange(OklchColor(oklch.l, oklch.c, newH))
+                val newH = (currentOklch.h - 1f).let { if (it < 0f) 360f + it else it }
+                currentOnColorChange(currentOklch.copy(h = newH))
             },
             onStepUp = {
-                val newH = (oklch.h + 1f).let { if (it > 360f) it - 360f else it }
-                onColorChange(OklchColor(oklch.l, oklch.c, newH))
+                val newH = (currentOklch.h + 1f).let { if (it > 360f) it - 360f else it }
+                currentOnColorChange(currentOklch.copy(h = newH))
             },
             onClickValue = { onEditNumeric(DirectInputTarget.HUE) },
             onInteractionStart = onInteractionStart,
@@ -1071,6 +1092,12 @@ private fun OklchSteppedSlider(
     modifier: Modifier = Modifier,
 ) {
     val haptic = LocalHapticFeedback.current
+    val currentOnValueChange by rememberUpdatedState(onValueChange)
+    val currentOnInteractionStart by rememberUpdatedState(onInteractionStart)
+    val currentOnInteractionEnd by rememberUpdatedState(onInteractionEnd)
+    val currentOnStepDown by rememberUpdatedState(onStepDown)
+    val currentOnStepUp by rememberUpdatedState(onStepUp)
+    val currentOnClickValue by rememberUpdatedState(onClickValue)
 
     Row(
         modifier = modifier.fillMaxWidth(),
@@ -1096,9 +1123,9 @@ private fun OklchSteppedSlider(
                 .background(Morandi.panelHi.copy(alpha = 0.5f))
                 .clickable(interactionSource = stepDownSource, indication = null) {
                     haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    onInteractionStart()
-                    onStepDown()
-                    onInteractionEnd()
+                    currentOnInteractionStart()
+                    currentOnStepDown()
+                    currentOnInteractionEnd()
                 },
             contentAlignment = Alignment.Center,
         ) {
@@ -1122,10 +1149,10 @@ private fun OklchSteppedSlider(
                 .pointerInput(Unit) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false).also { it.consume() }
-                        onInteractionStart()
+                        currentOnInteractionStart()
                         val updateFraction = { x: Float ->
                             val frac = (x / size.width.toFloat()).coerceIn(0f, 1f)
-                            onValueChange(frac)
+                            currentOnValueChange(frac)
                         }
                         updateFraction(down.position.x)
 
@@ -1136,7 +1163,7 @@ private fun OklchSteppedSlider(
                             updateFraction(change.position.x)
                             change.consume()
                         }
-                        onInteractionEnd()
+                        currentOnInteractionEnd()
                     }
                 }
         ) {
@@ -1167,9 +1194,9 @@ private fun OklchSteppedSlider(
                 .background(Morandi.panelHi.copy(alpha = 0.5f))
                 .clickable(interactionSource = stepUpSource, indication = null) {
                     haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    onInteractionStart()
-                    onStepUp()
-                    onInteractionEnd()
+                    currentOnInteractionStart()
+                    currentOnStepUp()
+                    currentOnInteractionEnd()
                 },
             contentAlignment = Alignment.Center,
         ) {
@@ -1197,7 +1224,7 @@ private fun OklchSteppedSlider(
                 .background(Morandi.panelHi.copy(alpha = 0.35f))
                 .clickable {
                     haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    onClickValue()
+                    currentOnClickValue()
                 }
                 .padding(vertical = 1.dp),
             contentAlignment = Alignment.Center,

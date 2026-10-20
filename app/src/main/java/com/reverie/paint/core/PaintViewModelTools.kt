@@ -190,6 +190,11 @@ internal fun PaintViewModel.touchStart(
         } else {
             defaultEraserIdx
         }
+        if (eraserState == null && eraserPresetIdx >= 0) {
+            toolBrushStates = toolBrushStates.toMutableMap().apply {
+                put("eraser", PaintViewModel.ToolBrushState(category = "橡皮擦", presetIndex = eraserPresetIdx))
+            }
+        }
         val eraserPreset = brushPresets.firstOrNull { it.index == eraserPresetIdx }
         val savedEraserParam = eraserPreset?.let { brushParams[it.name] }
         val eraserMem = eraserPreset?.let { eraserState?.paramMemory?.get(it.name) }
@@ -997,7 +1002,12 @@ internal fun PaintViewModel.applyTool(toolId: String) {
                 isSmudgeTool -> defaultSmudgeIdx
                 else -> defaultBrushIdx
             }
-            state = PaintViewModel.ToolBrushState(category = cat, presetIndex = defaultIdx)
+            val initialPresetIdx = if (isBrushTool && brushPresetIndex >= 0 && brushPresets.any { it.index == brushPresetIndex }) {
+                brushPresetIndex
+            } else {
+                defaultIdx
+            }
+            state = PaintViewModel.ToolBrushState(category = cat, presetIndex = initialPresetIdx)
             toolBrushStates = toolBrushStates.toMutableMap().apply { put(toolId, state) }
         } else if (isBrushTool && state.presetIndex >= 0) {
             // Self-healing: if brush tool mistakenly inherited an eraser preset, revert to default drawing brush

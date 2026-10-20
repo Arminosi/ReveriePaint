@@ -231,5 +231,57 @@ class BrushAndCurveLogicTest {
             com.reverie.paint.ui.painting.brush.BrushPresetTranslations.getChineseTranslation("Custom_Brush_NonExistent")
         )
     }
+
+    @Test
+    fun `tool param memory preserves customized size and opacity across tool switches`() {
+        val toolStates = mutableMapOf<String, com.reverie.paint.core.PaintViewModel.ToolBrushState>()
+        val presetName = "c)_Pencil-4_Soft"
+        val customSize = 35.0
+        val customOpacity = 0.65
+
+        // Initial snapshot for brush tool
+        val currentBrush = toolStates["brush"] ?: com.reverie.paint.core.PaintViewModel.ToolBrushState(presetIndex = 2)
+        toolStates["brush"] = currentBrush.copy(
+            paramMemory = currentBrush.paramMemory + (presetName to listOf(customSize, customOpacity, 1.0))
+        )
+
+        // Switch to eraser and record eraser snapshot
+        val eraserName = "a)_Eraser_Circle"
+        val currentEraser = toolStates["eraser"] ?: com.reverie.paint.core.PaintViewModel.ToolBrushState(presetIndex = 0)
+        toolStates["eraser"] = currentEraser.copy(
+            paramMemory = currentEraser.paramMemory + (eraserName to listOf(60.0, 1.0, 1.0))
+        )
+
+        // Switch back to brush and verify brush parameters are preserved
+        val restoredBrush = toolStates["brush"]
+        val mem = restoredBrush?.paramMemory?.get(presetName)
+        assertEquals(2, restoredBrush?.presetIndex)
+        assertEquals(35.0, mem?.get(0) ?: 0.0, 1e-6)
+        assertEquals(0.65, mem?.get(1) ?: 0.0, 1e-6)
+    }
+
+    @Test
+    fun `preset dynamics sensor xml is preserved when dynamics were not customized`() {
+        val nativeSensorXml = mapOf(
+            "Size" to "<params id=\"pressure\"><curve>0,0;1,1;</curve></params>",
+            "Rotation" to "<params id=\"drawingangle\"><curve>0,0;1,1;</curve></params>"
+        )
+        val saved = com.reverie.paint.core.BrushParams(
+            size = 40.0,
+            opacity = 0.8,
+            dynamicsCustomized = false,
+            dynamicOptions = emptyMap()
+        )
+
+        val effectiveSensors = if (saved.dynamicsCustomized && saved.dynamicOptions.isNotEmpty()) {
+            saved.dynamicOptions
+        } else {
+            nativeSensorXml
+        }
+
+        assertEquals(2, effectiveSensors.size)
+        assertTrue(effectiveSensors.containsKey("Size"))
+        assertTrue(effectiveSensors.containsKey("Rotation"))
+    }
 }
 

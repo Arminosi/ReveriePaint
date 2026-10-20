@@ -514,7 +514,7 @@ import kotlinx.coroutines.launch
         val sc = smudgeChanged || (existing?.smudgeCustomized == true)
         val spc = spacingChanged || (existing?.spacingCustomized == true)
         val p = BrushParams(
-            dynamicOptions = buildDynamicOptionSensorXml(),
+            dynamicOptions = if (dc) buildDynamicOptionSensorXml() else (existing?.dynamicOptions ?: emptyMap()),
             size = brushSize,
             opacity = brushOpacity,
             flow = brushFlow,

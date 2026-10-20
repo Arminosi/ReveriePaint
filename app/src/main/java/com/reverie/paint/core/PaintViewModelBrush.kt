@@ -863,7 +863,7 @@ import kotlinx.coroutines.withContext
                 brushSmudgeMode = saved.smudgeMode
                 val kppFile = preset?.name?.let { File(File(appContext.filesDir, "paintoppresets"), "$it.kpp") }
                 val parsed = if (kppFile?.exists() == true) KppHelper.parseKppFile(kppFile) else KppHelper.KppParsedAttributes()
-                val effectiveSensors = if (saved.dynamicOptions.isNotEmpty()) saved.dynamicOptions else parsed.sensorXml
+                val effectiveSensors = if (saved.dynamicsCustomized && saved.dynamicOptions.isNotEmpty()) saved.dynamicOptions else parsed.sensorXml
                 applySensorXmlToDynamicOptions(effectiveSensors)
             } else {
                 // 原生 Krita 预设: 读取预设自身在引擎中解析得到的默认参数与 XML 原生配置
@@ -975,10 +975,20 @@ import kotlinx.coroutines.withContext
                 } catch (_: Exception) {
                 }
             }
+            val mem = toolBrushStates[currentToolId]?.paramMemory?.get(preset?.name)
+            val effSize = mem?.getOrNull(0) ?: (if (isCustomized) saved?.size else null)
+            val effOpacity = mem?.getOrNull(1) ?: (if (isCustomized) saved?.opacity else null)
+            val effFlow = mem?.getOrNull(2) ?: (if (isCustomized) saved?.flow else null)
+            if (effSize != null && effSize.isFinite()) {
+                ReverieCoreBridge.setBrushSize(effSize)
+            }
+            if (effOpacity != null && effOpacity.isFinite()) {
+                ReverieCoreBridge.setBrushOpacity(effOpacity)
+            }
+            if (effFlow != null && effFlow.isFinite()) {
+                ReverieCoreBridge.setBrushFlow(effFlow)
+            }
             if (saved != null && isCustomized) {
-                ReverieCoreBridge.setBrushSize(saved.size)
-                ReverieCoreBridge.setBrushOpacity(saved.opacity)
-                ReverieCoreBridge.setBrushFlow(saved.flow)
                 if (saved.spacingCustomized) {
                     ReverieCoreBridge.setBrushSpacing(saved.spacing)
                 }
@@ -1233,11 +1243,12 @@ import kotlinx.coroutines.withContext
             lastDrawingToolId
         }
         val name = brushPresets.firstOrNull { it.index == brushPresetIndex }?.name ?: return
-        val currentMap = toolBrushStates[targetToolId] ?: return
+        val currentMap = toolBrushStates[targetToolId] ?: PaintViewModel.ToolBrushState(presetIndex = brushPresetIndex)
         toolBrushStates = toolBrushStates.toMutableMap().apply {
             put(
                 targetToolId,
                 currentMap.copy(
+                    presetIndex = if (currentMap.presetIndex >= 0) currentMap.presetIndex else brushPresetIndex,
                     paramMemory = currentMap.paramMemory.toMutableMap().apply {
                         put(name, listOf(brushSize, brushOpacity, brushFlow))
                     }

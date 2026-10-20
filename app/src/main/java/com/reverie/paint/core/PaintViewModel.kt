@@ -660,6 +660,29 @@ class PaintViewModel : ViewModel() {
         config: com.reverie.paint.model.DynamicOptionConfig,
     ) {
         brushDynamicOptions[key] = config
+        when (key.lowercase()) {
+            "size" -> {
+                brushPressureSize = if (config.enabled) config.strength.toDouble() else 0.0
+                if (config.enabled) brushPressureEnabled = true
+                brushSizeSensor = config.sensorId
+            }
+            "opacity" -> {
+                brushPressureOpacity = if (config.enabled) config.strength.toDouble() else 0.0
+                if (config.enabled) brushPressureEnabled = true
+                brushOpacitySensor = config.sensorId
+            }
+            "flow" -> {
+                brushPressureFlow = if (config.enabled) config.strength.toDouble() else 0.0
+                if (config.enabled) brushPressureEnabled = true
+                brushFlowSensor = config.sensorId
+            }
+            "scatter" -> {
+                brushScatterSensor = config.sensorId
+            }
+            "rotation" -> {
+                brushRotationSensor = config.sensorId
+            }
+        }
         runCore(render = false) {
             ReverieCoreBridge.setBrushOptionDynamics(
                 optionName = key,

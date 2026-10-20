@@ -192,6 +192,10 @@ import kotlinx.coroutines.launch
 
     internal fun PaintViewModel.updateBrushPressureSize(v: Double) {
         brushPressureSize = v
+        val opt = brushDynamicOptions["Size"]
+        if (opt != null) {
+            brushDynamicOptions["Size"] = opt.copy(strength = v.toFloat(), enabled = v > 0.001)
+        }
         saveBrushParam(dynamicsChanged = true, reloadEngine = true)
         runCore(render = false) {
             ReverieCoreBridge.setBrushPressureDynamics(brushPressureEnabled, brushPressureSize, brushPressureOpacity, brushPressureFlow, brushPressureCurve)
@@ -200,6 +204,10 @@ import kotlinx.coroutines.launch
 
     internal fun PaintViewModel.updateBrushPressureOpacity(v: Double) {
         brushPressureOpacity = v
+        val opt = brushDynamicOptions["Opacity"]
+        if (opt != null) {
+            brushDynamicOptions["Opacity"] = opt.copy(strength = v.toFloat(), enabled = v > 0.001)
+        }
         saveBrushParam(dynamicsChanged = true, reloadEngine = true)
         runCore(render = false) {
             ReverieCoreBridge.setBrushPressureDynamics(brushPressureEnabled, brushPressureSize, brushPressureOpacity, brushPressureFlow, brushPressureCurve)
@@ -208,6 +216,10 @@ import kotlinx.coroutines.launch
 
     internal fun PaintViewModel.updateBrushPressureFlow(v: Double) {
         brushPressureFlow = v
+        val opt = brushDynamicOptions["Flow"]
+        if (opt != null) {
+            brushDynamicOptions["Flow"] = opt.copy(strength = v.toFloat(), enabled = v > 0.001)
+        }
         saveBrushParam(dynamicsChanged = true, reloadEngine = true)
         runCore(render = false) {
             ReverieCoreBridge.setBrushPressureDynamics(brushPressureEnabled, brushPressureSize, brushPressureOpacity, brushPressureFlow, brushPressureCurve)
@@ -357,21 +369,25 @@ import kotlinx.coroutines.launch
 
     internal fun PaintViewModel.updateBrushSizeSensor(v: String) {
         brushSizeSensor = v
+        brushDynamicOptions["Size"] = (brushDynamicOptions["Size"] ?: com.reverie.paint.model.DynamicOptionConfig.defaultFor("Size")).copy(sensorId = v)
         saveBrushParam(dynamicsChanged = true, reloadEngine = true, immediateReload = true)
     }
 
     internal fun PaintViewModel.updateBrushOpacitySensor(v: String) {
         brushOpacitySensor = v
+        brushDynamicOptions["Opacity"] = (brushDynamicOptions["Opacity"] ?: com.reverie.paint.model.DynamicOptionConfig.defaultFor("Opacity")).copy(sensorId = v)
         saveBrushParam(dynamicsChanged = true, reloadEngine = true, immediateReload = true)
     }
 
     internal fun PaintViewModel.updateBrushFlowSensor(v: String) {
         brushFlowSensor = v
+        brushDynamicOptions["Flow"] = (brushDynamicOptions["Flow"] ?: com.reverie.paint.model.DynamicOptionConfig.defaultFor("Flow")).copy(sensorId = v)
         saveBrushParam(dynamicsChanged = true, reloadEngine = true, immediateReload = true)
     }
 
     internal fun PaintViewModel.updateBrushScatterSensor(v: String) {
         brushScatterSensor = v
+        brushDynamicOptions["Scatter"] = (brushDynamicOptions["Scatter"] ?: com.reverie.paint.model.DynamicOptionConfig.defaultFor("Scatter")).copy(sensorId = v)
         saveBrushParam(dynamicsChanged = true, reloadEngine = true, immediateReload = true)
     }
 
@@ -445,10 +461,8 @@ import kotlinx.coroutines.launch
         for ((key, cfg) in brushDynamicOptions) {
             if (key.isBlank()) continue
             val curve = cfg.toKritaCurveString()
-            val nonLinear = curve != "0.000,0.000;1.000,1.000;"
-            if (!cfg.enabled && !nonLinear) continue
             val id = cfg.sensorId.ifBlank { "pressure" }
-            out[key] = "<!DOCTYPE params><params id=\"$id\"><curve>$curve</curve></params>"
+            out[key] = "<!DOCTYPE params><params id=\"$id\" enabled=\"${cfg.enabled}\" strength=\"${cfg.strength}\"><curve>$curve</curve></params>"
         }
         return out
     }
@@ -482,17 +496,26 @@ import kotlinx.coroutines.launch
             val isLinear = points.size == 2 &&
                     points[0].x == 0f && points[0].y == 0f &&
                     points[1].x == 1f && points[1].y == 1f
+
+            val enabledAttr = Regex("""enabled="([^"]+)"""").find(body)?.groupValues?.getOrNull(1)?.toBooleanStrictOrNull()
+            val strengthAttr = Regex("""strength="([^"]+)"""").find(body)?.groupValues?.getOrNull(1)?.toFloatOrNull()
+
             // 出厂预设中常包含所有通道的 Sensor/curve 节点，但实际压感并未启用。
-            // 只有 Size 默认开启压感；非 Size 通道若为默认线性曲线且无已有启用状态，则默认保持关闭，避免无脑设 enabled = true
-            val isEnabled = if (!key.equals("Size", ignoreCase = true) && isLinear && (id == null || id == "pressure")) {
+            // 若 XML 显式包含 enabled 属性则按显式值恢复；仅当来自出厂预设/旧版 XML 时应用启发式规则
+            val isEnabled = if (enabledAttr != null) {
+                enabledAttr
+            } else if (!key.equals("Size", ignoreCase = true) && isLinear && (id == null || id == "pressure")) {
                 existing?.enabled ?: false
             } else {
                 existing?.enabled ?: true
             }
+            val strength = strengthAttr ?: 1.0f
+
             newMap[key] = (existing ?: com.reverie.paint.model.DynamicOptionConfig(optionKey = key)).copy(
                 enabled = isEnabled,
                 sensorId = id ?: existing?.sensorId ?: "pressure",
                 points = points,
+                strength = strength,
             )
         }
         brushDynamicOptions.clear()
@@ -623,16 +646,18 @@ import kotlinx.coroutines.launch
                             ReverieCoreBridge.setBrushCompositeOp(brushCompositeOp)
                             if (pSnapshot.dynamicsCustomized) {
                                 if (pSnapshot.dynamicOptions.isNotEmpty()) {
-                                    for ((opt, xml) in pSnapshot.dynamicOptions) {
+                                     for ((opt, xml) in pSnapshot.dynamicOptions) {
                                         val sensorId = Regex("""id="([^"]+)"""").find(xml)?.groupValues?.getOrNull(1) ?: "pressure"
                                         val curve = Regex("""<curve>([^<]*)</curve>""").find(xml)?.groupValues?.getOrNull(1) ?: "0,0;1,1;"
-                                        val strength = when (opt.lowercase()) {
+                                        val enabledAttr = Regex("""enabled="([^"]+)"""").find(xml)?.groupValues?.getOrNull(1)?.toBooleanStrictOrNull()
+                                        val strengthAttr = Regex("""strength="([^"]+)"""").find(xml)?.groupValues?.getOrNull(1)?.toDoubleOrNull()
+                                        val strength = strengthAttr ?: when (opt.lowercase()) {
                                             "size" -> pSnapshot.pressureSize
                                             "opacity" -> pSnapshot.pressureOpacity
                                             "flow" -> pSnapshot.pressureFlow
                                             else -> 1.0
                                         }
-                                        val isEnabled = when (opt.lowercase()) {
+                                        val isEnabled = enabledAttr ?: when (opt.lowercase()) {
                                             "size" -> pSnapshot.pressureEnabled && pSnapshot.pressureSize > 0.001
                                             "opacity" -> pSnapshot.pressureEnabled && pSnapshot.pressureOpacity > 0.001
                                             "flow" -> pSnapshot.pressureEnabled && pSnapshot.pressureFlow > 0.001

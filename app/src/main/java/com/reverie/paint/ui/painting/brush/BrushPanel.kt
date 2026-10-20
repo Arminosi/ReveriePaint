@@ -1435,7 +1435,9 @@ fun BrushPanel(
                             presetIndex = v.index,
                             onBack = { view = BrushView.List },
                             onOpenStudio = {
-                                vm.selectBrushPreset(v.index)
+                                if (vm.brushPresetIndex != v.index) {
+                                    vm.selectBrushPreset(v.index)
+                                }
                                 vm.brushStudioOpen = true
                                 onClose()
                             },

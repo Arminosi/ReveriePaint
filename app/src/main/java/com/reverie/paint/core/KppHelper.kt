@@ -1093,7 +1093,8 @@ object KppHelper {
         for ((key, sensorXml) in params.dynamicOptions) {
             if (key.isBlank() || sensorXml.isBlank()) continue
             xml = updateParam(xml, "${key}Sensor", sensorXml)
-            val isEnabled = when (key.lowercase()) {
+            val enabledAttr = Regex("""enabled="([^"]+)"""").find(sensorXml)?.groupValues?.getOrNull(1)?.toBooleanStrictOrNull()
+            val isEnabled = enabledAttr ?: when (key.lowercase()) {
                 "size" -> params.pressureEnabled && params.pressureSize > 0.001
                 "opacity" -> params.pressureEnabled && params.pressureOpacity > 0.001
                 "flow" -> params.pressureEnabled && params.pressureFlow > 0.001

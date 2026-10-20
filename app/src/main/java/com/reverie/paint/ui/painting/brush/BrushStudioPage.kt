@@ -142,9 +142,7 @@ fun BrushStudioPage(
     var scratchpadVisible by remember { mutableStateOf(true) }
     var scratchpadExpanded by remember { mutableStateOf(false) }
 
-    var shapeInvert by remember { mutableStateOf(false) }
-    var shapeColorInvert by remember { mutableStateOf(false) }
-    var shapeRgbAffectsAlpha by remember { mutableStateOf(true) }
+
 
     val pageBg = Morandi.bg
     val panelBg = Morandi.panel
@@ -314,12 +312,6 @@ fun BrushStudioPage(
                                     vm = vm,
                                     preset = preset,
                                     allTips = allTipItems,
-                                    shapeInvert = shapeInvert,
-                                    onShapeInvert = { shapeInvert = it },
-                                    shapeColorInvert = shapeColorInvert,
-                                    onShapeColorInvert = { shapeColorInvert = it },
-                                    shapeRgbAffectsAlpha = shapeRgbAffectsAlpha,
-                                    onShapeRgbAffectsAlpha = { shapeRgbAffectsAlpha = it },
                                     onOpenTipPicker = { showTipPickerModal = true },
                                     onImportCustomTip = { importTipLauncher.launch(arrayOf("*/*")) },
                                     cardBg = cardBg,

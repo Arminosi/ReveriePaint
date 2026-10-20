@@ -51,12 +51,12 @@ internal fun TipTabContent(
     vm: PaintViewModel,
     preset: BrushPresetInfo?,
     allTips: List<BrushTipItem>,
-    shapeInvert: Boolean,
-    onShapeInvert: (Boolean) -> Unit,
-    shapeColorInvert: Boolean,
-    onShapeColorInvert: (Boolean) -> Unit,
-    shapeRgbAffectsAlpha: Boolean,
-    onShapeRgbAffectsAlpha: (Boolean) -> Unit,
+    shapeInvert: Boolean = false,
+    onShapeInvert: (Boolean) -> Unit = {},
+    shapeColorInvert: Boolean = false,
+    onShapeColorInvert: (Boolean) -> Unit = {},
+    shapeRgbAffectsAlpha: Boolean = true,
+    onShapeRgbAffectsAlpha: (Boolean) -> Unit = {},
     onOpenTipPicker: () -> Unit,
     onImportCustomTip: () -> Unit,
     cardBg: Color,
@@ -221,8 +221,8 @@ internal fun TipTabContent(
             }
 
             StudioInnerDivider()
-            StudioSwitchItem(stringResource(R.string.brush_dynamics_invert_h), shapeInvert, textMain = textMain) { onShapeInvert(it) }
-            StudioSwitchItem(stringResource(R.string.brush_dynamics_invert_v), shapeColorInvert, textMain = textMain) { onShapeColorInvert(it) }
+            StudioSwitchItem(stringResource(R.string.brush_dynamics_invert_h), vm.brushRandomFlipX, textMain = textMain) { vm.updateBrushRandomFlipX(it) }
+            StudioSwitchItem(stringResource(R.string.brush_dynamics_invert_v), vm.brushRandomFlipY, textMain = textMain) { vm.updateBrushRandomFlipY(it) }
         }
     }
 

@@ -1008,13 +1008,15 @@ import kotlinx.coroutines.withContext
                         for ((opt, xml) in saved.dynamicOptions) {
                             val sensorId = Regex("""id="([^"]+)"""").find(xml)?.groupValues?.getOrNull(1) ?: "pressure"
                             val curve = Regex("""<curve>([^<]*)</curve>""").find(xml)?.groupValues?.getOrNull(1) ?: "0,0;1,1;"
-                            val strength = when (opt.lowercase()) {
+                            val enabledAttr = Regex("""enabled="([^"]+)"""").find(xml)?.groupValues?.getOrNull(1)?.toBooleanStrictOrNull()
+                            val strengthAttr = Regex("""strength="([^"]+)"""").find(xml)?.groupValues?.getOrNull(1)?.toDoubleOrNull()
+                            val strength = strengthAttr ?: when (opt.lowercase()) {
                                 "size" -> saved.pressureSize
                                 "opacity" -> saved.pressureOpacity
                                 "flow" -> saved.pressureFlow
                                 else -> 1.0
                             }
-                            val isEnabled = when (opt.lowercase()) {
+                            val isEnabled = enabledAttr ?: when (opt.lowercase()) {
                                 "size" -> saved.pressureEnabled && saved.pressureSize > 0.001
                                 "opacity" -> saved.pressureEnabled && saved.pressureOpacity > 0.001
                                 "flow" -> saved.pressureEnabled && saved.pressureFlow > 0.001
@@ -1136,13 +1138,15 @@ import kotlinx.coroutines.withContext
                         for ((opt, xml) in saved.dynamicOptions) {
                             val sensorId = Regex("""id="([^"]+)"""").find(xml)?.groupValues?.getOrNull(1) ?: "pressure"
                             val curve = Regex("""<curve>([^<]*)</curve>""").find(xml)?.groupValues?.getOrNull(1) ?: "0,0;1,1;"
-                            val strength = when (opt.lowercase()) {
+                            val enabledAttr = Regex("""enabled="([^"]+)"""").find(xml)?.groupValues?.getOrNull(1)?.toBooleanStrictOrNull()
+                            val strengthAttr = Regex("""strength="([^"]+)"""").find(xml)?.groupValues?.getOrNull(1)?.toDoubleOrNull()
+                            val strength = strengthAttr ?: when (opt.lowercase()) {
                                 "size" -> saved.pressureSize
                                 "opacity" -> saved.pressureOpacity
                                 "flow" -> saved.pressureFlow
                                 else -> 1.0
                             }
-                            val isEnabled = when (opt.lowercase()) {
+                            val isEnabled = enabledAttr ?: when (opt.lowercase()) {
                                 "size" -> saved.pressureEnabled && saved.pressureSize > 0.001
                                 "opacity" -> saved.pressureEnabled && saved.pressureOpacity > 0.001
                                 "flow" -> saved.pressureEnabled && saved.pressureFlow > 0.001

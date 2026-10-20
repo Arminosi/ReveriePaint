@@ -43,31 +43,31 @@ import kotlinx.coroutines.launch
 
     internal fun PaintViewModel.updateBrushFade(v: Double) {
         brushFade = v
-        saveBrushParam(reloadEngine = true)
+        saveBrushParam(reloadEngine = false)
         runCore(render = false) { ReverieCoreBridge.setBrushFade(v) }
     }
 
     internal fun PaintViewModel.updateBrushSoftness(v: Double) {
         brushSoftness = v
-        saveBrushParam(reloadEngine = true)
+        saveBrushParam(reloadEngine = false)
         runCore(render = false) { ReverieCoreBridge.setBrushSoftness(v) }
     }
 
     internal fun PaintViewModel.updateBrushRatio(v: Double) {
         brushRatio = v
-        saveBrushParam(reloadEngine = true)
+        saveBrushParam(reloadEngine = false)
         runCore(render = false) { ReverieCoreBridge.setBrushRatio(v) }
     }
 
     internal fun PaintViewModel.updateBrushSharpness(v: Double) {
         brushSharpness = v
-        saveBrushParam(reloadEngine = true)
+        saveBrushParam(reloadEngine = false)
         runCore(render = false) { ReverieCoreBridge.setBrushSharpness(v) }
     }
 
     internal fun PaintViewModel.updateBrushRotation(v: Double) {
         brushRotation = v
-        saveBrushParam(reloadEngine = true)
+        saveBrushParam(reloadEngine = false)
         val effAngle = ((brushAngle + brushRotation) % 360.0).let { if (it < 0.0) it + 360.0 else it }
         runCore(render = false) {
             ReverieCoreBridge.setBrushRotation(v)
@@ -108,10 +108,12 @@ import kotlinx.coroutines.launch
         brushFollowDirection = v
         if (v) {
             brushRotationSensor = "drawingangle"
-            val opt = brushDynamicOptions["Rotation"]
-            if (opt != null) {
-                brushDynamicOptions["Rotation"] = opt.copy(sensorId = "drawingangle", enabled = true)
-            }
+            val opt = brushDynamicOptions["Rotation"] ?: com.reverie.paint.model.DynamicOptionConfig.defaultFor("Rotation")
+            brushDynamicOptions["Rotation"] = opt.copy(sensorId = "drawingangle", enabled = true)
+        } else {
+            brushRotationSensor = ""
+            val opt = brushDynamicOptions["Rotation"] ?: com.reverie.paint.model.DynamicOptionConfig.defaultFor("Rotation")
+            brushDynamicOptions["Rotation"] = opt.copy(enabled = false)
         }
         saveBrushParam(dynamicsChanged = true, reloadEngine = true, immediateReload = true)
         runCore(render = false) { ReverieCoreBridge.setBrushFollowDirection(v) }
@@ -193,36 +195,42 @@ import kotlinx.coroutines.launch
     internal fun PaintViewModel.updateBrushPressureSize(v: Double) {
         brushPressureSize = v
         val opt = brushDynamicOptions["Size"]
-        if (opt != null) {
-            brushDynamicOptions["Size"] = opt.copy(strength = v.toFloat(), enabled = v > 0.001)
-        }
-        saveBrushParam(dynamicsChanged = true, reloadEngine = true)
+        val cfg = (opt ?: com.reverie.paint.model.DynamicOptionConfig.defaultFor("Size")).copy(
+            strength = v.toFloat(),
+            enabled = v > 0.001,
+        )
+        brushDynamicOptions["Size"] = cfg
+        saveBrushParam(dynamicsChanged = true)
         runCore(render = false) {
-            ReverieCoreBridge.setBrushPressureDynamics(brushPressureEnabled, brushPressureSize, brushPressureOpacity, brushPressureFlow, brushPressureCurve)
+            ReverieCoreBridge.setBrushOptionDynamics("Size", cfg.enabled, cfg.sensorId, cfg.toKritaCurveString(), v)
         }
     }
 
     internal fun PaintViewModel.updateBrushPressureOpacity(v: Double) {
         brushPressureOpacity = v
         val opt = brushDynamicOptions["Opacity"]
-        if (opt != null) {
-            brushDynamicOptions["Opacity"] = opt.copy(strength = v.toFloat(), enabled = v > 0.001)
-        }
-        saveBrushParam(dynamicsChanged = true, reloadEngine = true)
+        val cfg = (opt ?: com.reverie.paint.model.DynamicOptionConfig.defaultFor("Opacity")).copy(
+            strength = v.toFloat(),
+            enabled = v > 0.001,
+        )
+        brushDynamicOptions["Opacity"] = cfg
+        saveBrushParam(dynamicsChanged = true)
         runCore(render = false) {
-            ReverieCoreBridge.setBrushPressureDynamics(brushPressureEnabled, brushPressureSize, brushPressureOpacity, brushPressureFlow, brushPressureCurve)
+            ReverieCoreBridge.setBrushOptionDynamics("Opacity", cfg.enabled, cfg.sensorId, cfg.toKritaCurveString(), v)
         }
     }
 
     internal fun PaintViewModel.updateBrushPressureFlow(v: Double) {
         brushPressureFlow = v
         val opt = brushDynamicOptions["Flow"]
-        if (opt != null) {
-            brushDynamicOptions["Flow"] = opt.copy(strength = v.toFloat(), enabled = v > 0.001)
-        }
-        saveBrushParam(dynamicsChanged = true, reloadEngine = true)
+        val cfg = (opt ?: com.reverie.paint.model.DynamicOptionConfig.defaultFor("Flow")).copy(
+            strength = v.toFloat(),
+            enabled = v > 0.001,
+        )
+        brushDynamicOptions["Flow"] = cfg
+        saveBrushParam(dynamicsChanged = true)
         runCore(render = false) {
-            ReverieCoreBridge.setBrushPressureDynamics(brushPressureEnabled, brushPressureSize, brushPressureOpacity, brushPressureFlow, brushPressureCurve)
+            ReverieCoreBridge.setBrushOptionDynamics("Flow", cfg.enabled, cfg.sensorId, cfg.toKritaCurveString(), v)
         }
     }
 
@@ -471,7 +479,10 @@ import kotlinx.coroutines.launch
      * 将预设中的传感器 XML (SizeSensor/SpacingSensor 等) 反向灌回 UI 状态。
      * 每次切换笔刷时必须先彻底重置内存 Map，彻底杜绝跨笔刷曲线污染。
      */
-    internal fun PaintViewModel.applySensorXmlToDynamicOptions(sensorXml: Map<String, String>) {
+    internal fun PaintViewModel.applySensorXmlToDynamicOptions(
+        sensorXml: Map<String, String>,
+        parsed: KppHelper.KppParsedAttributes? = null,
+    ) {
         val standardKeys = listOf("Size", "Opacity", "Flow", "Spacing", "Scatter", "Rotation", "SmudgeRate", "ColorRate")
         val newMap = mutableMapOf<String, com.reverie.paint.model.DynamicOptionConfig>()
         for (k in standardKeys) {
@@ -504,10 +515,15 @@ import kotlinx.coroutines.launch
             // 若 XML 显式包含 enabled 属性则按显式值恢复；仅当来自出厂预设/旧版 XML 时应用启发式规则
             val isEnabled = if (enabledAttr != null) {
                 enabledAttr
-            } else if (!key.equals("Size", ignoreCase = true) && isLinear && (id == null || id == "pressure")) {
-                existing?.enabled ?: false
-            } else {
-                existing?.enabled ?: true
+            } else when (key.lowercase()) {
+                "size" -> parsed?.pressureSize?.let { it > 0.001 } ?: true
+                "opacity" -> parsed?.pressureOpacity?.let { it > 0.001 } ?: false
+                "flow" -> parsed?.pressureFlow?.let { it > 0.001 } ?: false
+                else -> if (isLinear && (id == null || id == "pressure")) {
+                    existing?.enabled ?: false
+                } else {
+                    existing?.enabled ?: true
+                }
             }
             val strength = strengthAttr ?: 1.0f
 
@@ -624,6 +640,7 @@ import kotlinx.coroutines.launch
                         if (brushPresetIndex != targetIdx) return@runCore
                         val pSnapshot = brushParams[name] ?: return@runCore
                         if (ReverieCoreBridge.loadBrushPreset(targetIdx)) {
+                            if (pSnapshot.tipAsset.isNotBlank()) ReverieCoreBridge.setBrushTipAsset(pSnapshot.tipAsset)
                             ReverieCoreBridge.setPresetIsEraser(isEraserPreset)
                             ReverieCoreBridge.setBrushColor(brushColor)
                             ReverieCoreBridge.setBrushSecondaryColor(brushSecondaryColor)
@@ -696,7 +713,7 @@ import kotlinx.coroutines.launch
                             ReverieCoreBridge.setBrushMirror(pSnapshot.randomFlipX, pSnapshot.randomFlipY)
                             ReverieCoreBridge.setBrushAntiAliasing(pSnapshot.antiAliasing)
                             ReverieCoreBridge.setBrushJitter(pSnapshot.jitterAngle, pSnapshot.jitterSize)
-                            ReverieCoreBridge.setBrushSmudgeRate(pSnapshot.colorRate)
+                            ReverieCoreBridge.setBrushSmudgeRate(pSnapshot.smudgeRate)
                             ReverieCoreBridge.setBrushSmudgeLength(pSnapshot.smudgeLength)
                             ReverieCoreBridge.setBrushAirbrush(pSnapshot.airbrush, pSnapshot.airbrushRate)
                         }

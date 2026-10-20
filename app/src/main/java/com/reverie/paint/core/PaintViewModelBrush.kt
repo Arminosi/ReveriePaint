@@ -664,6 +664,11 @@ import kotlinx.coroutines.withContext
             runCatching { kppFile.writeBytes(kppBytes) }
         }
         persistBrushParams()
+        toolBrushStates = toolBrushStates.mapValues { (_, s) ->
+            if (initial != null) s.copy(paramMemory = s.paramMemory + (preset.name to listOf(initial.size, initial.opacity, initial.flow)))
+            else s.copy(paramMemory = s.paramMemory - preset.name)
+        }
+        persistToolBrushStates()
         brushDynamicOptions.clear()
         selectBrushPreset(preset.index)
         return true
@@ -864,7 +869,7 @@ import kotlinx.coroutines.withContext
                 val kppFile = preset?.name?.let { File(File(appContext.filesDir, "paintoppresets"), "$it.kpp") }
                 val parsed = if (kppFile?.exists() == true) KppHelper.parseKppFile(kppFile) else KppHelper.KppParsedAttributes()
                 val effectiveSensors = if (saved.dynamicsCustomized && saved.dynamicOptions.isNotEmpty()) saved.dynamicOptions else parsed.sensorXml
-                applySensorXmlToDynamicOptions(effectiveSensors)
+                applySensorXmlToDynamicOptions(effectiveSensors, parsed)
             } else {
                 // 原生 Krita 预设: 读取预设自身在引擎中解析得到的默认参数与 XML 原生配置
                 val d = ReverieCoreBridge.brushPresetDefaults(index)
@@ -896,7 +901,7 @@ import kotlinx.coroutines.withContext
                 // SoftnessValue 缺省即 1.0(neutral/不改动笔尖羽化)；引擎侧兜底报告的是 0.5，
                 // 那是"半羽化"而不是中性值，所以这里不拿 d[10] 兜底，直接落到 neutral。
                 brushSoftness = parsed.softness ?: KppHelper.SOFTNESS_NEUTRAL
-                applySensorXmlToDynamicOptions(parsed.sensorXml)
+                applySensorXmlToDynamicOptions(parsed.sensorXml, parsed)
                 brushRatio = parsed.ratio ?: d.getOrNull(11) ?: 1.0
                 brushSharpness = d.getOrNull(12) ?: 0.0
                 // 附加旋转偏角默认初始为 0.0 度，不读取 Krita 的 RotationValue 强度乘数 (1.0)

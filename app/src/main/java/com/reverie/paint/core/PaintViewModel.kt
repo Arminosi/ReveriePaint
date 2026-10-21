@@ -4698,6 +4698,10 @@ class PaintViewModel : ViewModel() {
     var displayRevision by mutableLongStateOf(0L)
         internal set
 
+    /** 参考窗口-画布页的独立刷新版本号: 仅当快照真正上屏时才自增, 避免 120Hz 冗余重组与纹理重传。 */
+    var referenceCanvasRevision by mutableLongStateOf(0L)
+        internal set
+
     // ===== 动画 (帧 / 轨道 / 时间轴) 状态镜像 =====
     // 引擎侧真身在 Krita 的 KisRasterKeyframeChannel (图层即轨道),
     // 这里只镜像 UI 需要的元信息。所有动画操作必须经
@@ -5907,6 +5911,12 @@ class PaintViewModel : ViewModel() {
             } catch (_: Throwable) {}
         }
 
+        if (referenceWindowOpen && referenceActiveTab == 1) {
+            mainHandler.post {
+                referenceCanvasRevision++
+            }
+        }
+
         // Direct hardware invalidate from render thread (zero Handler hop, zero frame delay).
         // 走 invalidateFromRender: 视图侧能证明画面其他部分不受影响时只失效脏区,
         // 否则 (光标/预测笔迹/旋转/大脏区等) 自动回退为整屏重绘。
@@ -5972,7 +5982,7 @@ class PaintViewModel : ViewModel() {
                 mainHandler.post(postedCanvasInvalidate)
             }
         }
-        if (referenceWindowOpen || currentPage == Page.REPLAY) {
+        if (currentPage == Page.REPLAY) {
             mainHandler.post {
                 displayRevision++
             }

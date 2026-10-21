@@ -378,7 +378,9 @@ private val tileCopyPaint =
     android.graphics.Paint().apply {
         xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SRC)
     }
-private val tileSnapshotPaint = android.graphics.Paint()
+private val tileSnapshotPaint = android.graphics.Paint().apply {
+    xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SRC)
+}
 
 /** 把 [src] 的像素整块 SRC 拷进 [dst] (同尺寸)。只在渲染线程调用。 */
 private fun copyTileInto(src: Bitmap, dst: Bitmap) {
@@ -405,12 +407,16 @@ private fun PaintViewModel.publishTileSnapshotIfNeeded(grid: DisplayTileGrid, ti
     val snap = composeTileSnapshot(grid, tiles) ?: return
     displayBitmap = snap
     if (liquifyPending) liquifyPresentation.publish(liquifyPresentationGesture, snap)
+    if (refCanvasActive) {
+        mainHandler.post {
+            referenceCanvasRevision++
+        }
+    }
 }
 
 private fun PaintViewModel.composeTileSnapshot(grid: DisplayTileGrid, tiles: AtomicReferenceArray<Bitmap?>): Bitmap? {
     val target = displayTiles.nextSnapshotTarget(grid.width, grid.height) ?: return null
     tileCopyCanvas.setBitmap(target)
-    tileCopyCanvas.drawColor(0, android.graphics.PorterDuff.Mode.CLEAR)
     for (ty in 0 until grid.rows) {
         for (tx in 0 until grid.cols) {
             val b = tiles.get(grid.tileIndex(tx, ty)) ?: continue

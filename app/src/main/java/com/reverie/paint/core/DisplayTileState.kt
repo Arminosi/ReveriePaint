@@ -104,10 +104,11 @@ internal class DisplayTileState {
     val dirtyRects = IntArray(DIRTY_CAP * 4)
     val written = IntArray(4)
 
-    // 参考窗口需要"一张整图": 瓦片路径下按需拼进快照。两张交替使用, 渲染线程
-    // 永远不写 UI 当前可能在画的那一张 (双缓冲)。
-    private val snapshots = arrayOfNulls<Bitmap>(2)
-    private var snapshotFlip = 0
+    // 参考窗口/液化需要"一张整图": 瓦片路径下按需拼进快照。
+    // 使用 3 级环形缓冲池 (Triple Buffering), 彻底隔离 Android HWUI RenderThread 2~3 帧时延,
+    // 渲染线程永远不写 UI/HWUI 当前可能正在读取或采样的位图。
+    private val snapshots = arrayOfNulls<Bitmap>(3)
+    private var snapshotIndex = 0
     var lastSnapshotMs = 0L
 
     /** UI 线程读: 可以画的网格快照; 换文档的清理尚未完成时返回 null。 */
@@ -170,8 +171,7 @@ internal class DisplayTileState {
         spareCoolingStage0.clear()
         spareCoolingStage1.clear()
         spareCoolingStage2.clear()
-        snapshots[0] = null
-        snapshots[1] = null
+        snapshots.fill(null)
         consecutiveRetryFailures = 0
     }
 
@@ -211,10 +211,10 @@ internal class DisplayTileState {
         }
     }
 
-    /** 渲染线程: 取下一张可写的快照位图 (不是 UI 当前可能在画的那张)。 */
+    /** 渲染线程: 取下一张可写的快照位图 (不是 UI/HWUI 当前可能在画的那两张)。 */
     fun nextSnapshotTarget(w: Int, h: Int): Bitmap? {
-        snapshotFlip = 1 - snapshotFlip
-        var snap = snapshots[snapshotFlip]
+        snapshotIndex = (snapshotIndex + 1) % 3
+        var snap = snapshots[snapshotIndex]
         if (snap == null || snap.isRecycled || snap.width != w || snap.height != h) {
             snap =
                 try {
@@ -222,7 +222,7 @@ internal class DisplayTileState {
                 } catch (_: OutOfMemoryError) {
                     null
                 }
-            snapshots[snapshotFlip] = snap
+            snapshots[snapshotIndex] = snap
         }
         return snap
     }

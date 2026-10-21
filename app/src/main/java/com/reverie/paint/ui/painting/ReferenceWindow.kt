@@ -111,8 +111,13 @@ fun ReferenceWindow(
     }
 
     val context = androidx.compose.ui.platform.LocalContext.current
-    LaunchedEffect(vm.referenceWindowOpen) {
-        if (vm.referenceWindowOpen) vm.ensureReferenceImagesLoaded()
+    LaunchedEffect(vm.referenceWindowOpen, vm.referenceActiveTab) {
+        if (vm.referenceWindowOpen) {
+            vm.ensureReferenceImagesLoaded()
+            if (vm.referenceActiveTab == 1) {
+                vm.scheduleRender(immediate = true)
+            }
+        }
     }
     val windowShape = RoundedCornerShape(16.dp)
 
@@ -444,9 +449,14 @@ fun ReferenceWindow(
                 }
             } else {
                 // Canvas Tab (Main canvas projection bitmap)
-                val canvasBmp = vm.displayBitmap
-                val rev = vm.displayRevision
-                if (canvasBmp != null) {
+                val currentBmp = vm.displayBitmap
+                var lastGoodCanvasBitmap by remember { mutableStateOf<Bitmap?>(null) }
+                if (currentBmp != null && !currentBmp.isRecycled) {
+                    lastGoodCanvasBitmap = currentBmp
+                }
+                val canvasBmp = (currentBmp?.takeIf { !it.isRecycled }) ?: lastGoodCanvasBitmap
+                val rev = vm.referenceCanvasRevision
+                if (canvasBmp != null && !canvasBmp.isRecycled) {
                     ReferenceSingleBitmapView(
                         bitmap = canvasBmp,
                         revision = rev,

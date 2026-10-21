@@ -6,9 +6,14 @@ package com.reverie.paint.ui.create
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.widget.Toast
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.FileOutputStream
+import java.util.zip.ZipFile
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -747,6 +752,70 @@ private fun CategoryTagItem(
     }
 }
 
+private object TemplateThumbCache {
+    private val lruCache = object : android.util.LruCache<String, Bitmap>(32) {
+        override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount / 1024
+    }
+
+    fun peek(key: String): Bitmap? = lruCache.get(key)?.takeIf { !it.isRecycled }
+
+    fun put(key: String, bitmap: Bitmap) {
+        lruCache.put(key, bitmap)
+    }
+}
+
+@Composable
+private fun rememberTemplateThumbnail(template: CanvasTemplate): Bitmap? {
+    val file = File(template.filePath)
+    val key = "${template.id}:${template.previewPath}:${if (file.exists()) file.lastModified() else 0L}"
+    val cached = remember(key) { TemplateThumbCache.peek(key) }
+    if (cached != null) return cached
+
+    var bmp by remember(key) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(key) {
+        val loaded = withContext(Dispatchers.IO) {
+            var path = template.previewPath
+            if (path.isEmpty() || !File(path).exists()) {
+                if (file.exists()) {
+                    val cand = File(file.parentFile, "${file.nameWithoutExtension}_thumb.png")
+                    if (cand.exists() && cand.length() > 0) {
+                        path = cand.absolutePath
+                    } else if (file.extension.lowercase() == "revp" || file.extension.lowercase() == "kra") {
+                        try {
+                            ZipFile(file).use { zf ->
+                                val entry = zf.getEntry("thumbnail.png")
+                                    ?: zf.getEntry("preview.png")
+                                    ?: zf.getEntry("mergedimage.png")
+                                if (entry != null) {
+                                    zf.getInputStream(entry).use { input ->
+                                        FileOutputStream(cand).use { output -> input.copyTo(output) }
+                                    }
+                                    if (cand.exists() && cand.length() > 0) {
+                                        path = cand.absolutePath
+                                    }
+                                }
+                            }
+                        } catch (_: Exception) {}
+                    }
+                }
+            }
+            if (path.isNotEmpty() && File(path).exists()) {
+                try {
+                    val b = BitmapFactory.decodeFile(path)
+                    if (b != null) TemplateThumbCache.put(key, b)
+                    b
+                } catch (_: Exception) {
+                    null
+                }
+            } else {
+                null
+            }
+        }
+        bmp = loaded
+    }
+    return bmp
+}
+
 /** 单个模板卡片 */
 @Composable
 private fun TemplateCardItem(
@@ -760,18 +829,7 @@ private fun TemplateCardItem(
     onDelete: () -> Unit,
 ) {
     var showMenu by remember { mutableStateOf(false) }
-
-    val thumbBitmap = remember(template.previewPath) {
-        if (template.previewPath.isNotEmpty() && File(template.previewPath).exists()) {
-            try {
-                BitmapFactory.decodeFile(template.previewPath)
-            } catch (_: Exception) {
-                null
-            }
-        } else {
-            null
-        }
-    }
+    val thumbBitmap = rememberTemplateThumbnail(template)
 
     Box(
         modifier = Modifier

@@ -66,18 +66,49 @@ object TemplateManager {
 
             val templatesJson = json.optJSONArray("templates")
             val templates = mutableListOf<CanvasTemplate>()
+            var metaNeedsUpdate = false
             if (templatesJson != null) {
                 for (i in 0 until templatesJson.length()) {
                     val obj = templatesJson.optJSONObject(i) ?: continue
                     val filePath = obj.optString("filePath")
                     if (filePath.isNotEmpty() && File(filePath).exists()) {
+                        val file = File(filePath)
+                        var previewPath = obj.optString("previewPath", "")
+                        if (previewPath.isEmpty() || !File(previewPath).exists()) {
+                            val candidateThumb = File(getTemplatesDir(context), "${file.nameWithoutExtension}_thumb.png")
+                            if (candidateThumb.exists() && candidateThumb.length() > 0) {
+                                previewPath = candidateThumb.absolutePath
+                                metaNeedsUpdate = true
+                            } else if (file.extension.lowercase() == "revp" || file.extension.lowercase() == "kra") {
+                                try {
+                                    ZipFile(file).use { zf ->
+                                        val entry = zf.getEntry("thumbnail.png")
+                                            ?: zf.getEntry("preview.png")
+                                            ?: zf.getEntry("mergedimage.png")
+                                        if (entry != null) {
+                                            zf.getInputStream(entry).use { input ->
+                                                FileOutputStream(candidateThumb).use { output ->
+                                                    input.copyTo(output)
+                                                }
+                                            }
+                                            if (candidateThumb.exists() && candidateThumb.length() > 0) {
+                                                previewPath = candidateThumb.absolutePath
+                                                metaNeedsUpdate = true
+                                            }
+                                        }
+                                    }
+                                } catch (e: Exception) {
+                                    android.util.Log.w("TemplateManager", "Failed to extract thumbnail in loadTemplateData", e)
+                                }
+                            }
+                        }
                         templates.add(
                             CanvasTemplate(
                                 id = obj.optString("id", UUID.randomUUID().toString()),
                                 name = obj.optString("name", "未命名模板"),
                                 category = obj.optString("category", CATEGORY_UNCATEGORIZED),
                                 filePath = filePath,
-                                previewPath = obj.optString("previewPath", ""),
+                                previewPath = previewPath,
                                 width = obj.optInt("width", 1080),
                                 height = obj.optInt("height", 1920),
                                 dpi = obj.optInt("dpi", 300),
@@ -89,6 +120,9 @@ object TemplateManager {
                         )
                     }
                 }
+            }
+            if (metaNeedsUpdate) {
+                saveTemplateData(context, categories, templates)
             }
             Pair(categories, templates)
         } catch (e: Exception) {
@@ -184,6 +218,24 @@ object TemplateManager {
             return@withContext null
         }
 
+        // 3. 从新生成的 revp 归档中提取缩略图/预览图
+        if (!thumbFile.exists() || thumbFile.length() == 0L) {
+            try {
+                ZipFile(templateFile).use { zip ->
+                    val thumbEntry = zip.getEntry("thumbnail.png")
+                        ?: zip.getEntry("preview.png")
+                        ?: zip.getEntry("mergedimage.png")
+                    if (thumbEntry != null) {
+                        zip.getInputStream(thumbEntry).use { input ->
+                            FileOutputStream(thumbFile).use { output -> input.copyTo(output) }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("TemplateManager", "Failed to extract thumb from template", e)
+            }
+        }
+
         val template = CanvasTemplate(
             id = id,
             name = name,
@@ -257,7 +309,9 @@ object TemplateManager {
                                 (0 until arr.length()).any { arr.optJSONObject(it)?.optBoolean("animated", false) == true }
                             } ?: false
                         }
-                        val thumbEntry = zf.getEntry("thumbnail.png") ?: zf.getEntry("preview.png")
+                        val thumbEntry = zf.getEntry("thumbnail.png")
+                            ?: zf.getEntry("preview.png")
+                            ?: zf.getEntry("mergedimage.png")
                         if (thumbEntry != null) {
                             zf.getInputStream(thumbEntry).use { input ->
                                 FileOutputStream(thumbFile).use { output -> input.copyTo(output) }

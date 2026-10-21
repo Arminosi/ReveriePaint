@@ -48,10 +48,10 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
@@ -86,6 +86,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
 import com.reverie.paint.R
 import com.reverie.paint.core.PaintViewModel
@@ -502,28 +503,17 @@ fun TemplateStudioSection(
 
     // 3. 删除分类标签确认对话框
     categoryToDelete?.let { cat ->
-        AlertDialog(
-            onDismissRequest = { categoryToDelete = null },
-            title = { Text(stringResource(R.string.template_category_delete_title)) },
-            text = { Text(stringResource(R.string.template_category_delete_message)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        TemplateManager.deleteCategory(context, cat)
-                        if (selectedCategory == cat) selectedCategory = TemplateManager.CATEGORY_ALL
-                        refreshData()
-                        categoryToDelete = null
-                    }
-                ) {
-                    Text(stringResource(R.string.common_delete), color = Color(0xFFE57373))
-                }
+        TemplateConfirmDialog(
+            title = stringResource(R.string.template_category_delete_title),
+            message = stringResource(R.string.template_category_delete_message),
+            confirmText = stringResource(R.string.common_delete),
+            onDismiss = { categoryToDelete = null },
+            onConfirm = {
+                TemplateManager.deleteCategory(context, cat)
+                if (selectedCategory == cat) selectedCategory = TemplateManager.CATEGORY_ALL
+                refreshData()
+                categoryToDelete = null
             },
-            dismissButton = {
-                TextButton(onClick = { categoryToDelete = null }) {
-                    Text(stringResource(R.string.common_cancel))
-                }
-            },
-            containerColor = Morandi.panel,
         )
     }
 
@@ -559,27 +549,16 @@ fun TemplateStudioSection(
 
     // 6. 删除模板确认对话框
     templateToDelete?.let { t ->
-        AlertDialog(
-            onDismissRequest = { templateToDelete = null },
-            title = { Text(stringResource(R.string.template_delete_title)) },
-            text = { Text(stringResource(R.string.template_delete_confirm, t.name)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        TemplateManager.deleteTemplate(context, t.id)
-                        refreshData()
-                        templateToDelete = null
-                    }
-                ) {
-                    Text(stringResource(R.string.common_delete), color = Color(0xFFE57373))
-                }
+        TemplateConfirmDialog(
+            title = stringResource(R.string.template_delete_title),
+            message = stringResource(R.string.template_delete_confirm, t.name),
+            confirmText = stringResource(R.string.common_delete),
+            onDismiss = { templateToDelete = null },
+            onConfirm = {
+                TemplateManager.deleteTemplate(context, t.id)
+                refreshData()
+                templateToDelete = null
             },
-            dismissButton = {
-                TextButton(onClick = { templateToDelete = null }) {
-                    Text(stringResource(R.string.common_cancel))
-                }
-            },
-            containerColor = Morandi.panel,
         )
     }
 
@@ -602,29 +581,18 @@ fun TemplateStudioSection(
 
     // 8. 批量删除确认对话框
     if (showBatchDeleteConfirm) {
-        AlertDialog(
-            onDismissRequest = { showBatchDeleteConfirm = false },
-            title = { Text(stringResource(R.string.template_batch_delete)) },
-            text = { Text(stringResource(R.string.template_batch_delete_confirm, selectedIds.size)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        TemplateManager.batchDeleteTemplates(context, selectedIds)
-                        refreshData()
-                        showBatchDeleteConfirm = false
-                        selectedIds = emptySet()
-                        isBatchMode = false
-                    }
-                ) {
-                    Text(stringResource(R.string.common_delete), color = Color(0xFFE57373))
-                }
+        TemplateConfirmDialog(
+            title = stringResource(R.string.template_batch_delete),
+            message = stringResource(R.string.template_batch_delete_confirm, selectedIds.size),
+            confirmText = stringResource(R.string.common_delete),
+            onDismiss = { showBatchDeleteConfirm = false },
+            onConfirm = {
+                TemplateManager.batchDeleteTemplates(context, selectedIds)
+                refreshData()
+                showBatchDeleteConfirm = false
+                selectedIds = emptySet()
+                isBatchMode = false
             },
-            dismissButton = {
-                TextButton(onClick = { showBatchDeleteConfirm = false }) {
-                    Text(stringResource(R.string.common_cancel))
-                }
-            },
-            containerColor = Morandi.panel,
         )
     }
 }
@@ -1079,6 +1047,105 @@ private fun BatchActionsBar(
     }
 }
 
+/** 统一风格确认对话框 (样式对齐 ReveriePaint 全局规范) */
+@Composable
+private fun TemplateConfirmDialog(
+    title: String,
+    message: String,
+    confirmText: String = stringResource(R.string.common_delete),
+    isDestructive: Boolean = true,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onDismiss,
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(320.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = {},
+                    )
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(Morandi.panel)
+                    .border(0.8.dp, Morandi.border, RoundedCornerShape(18.dp))
+                    .padding(22.dp),
+            ) {
+                Column {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (isDestructive) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFFF5252).copy(alpha = 0.12f)),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_alert_triangle),
+                                    contentDescription = null,
+                                    tint = Color(0xFFFF5252),
+                                    modifier = Modifier.size(20.dp),
+                                )
+                            }
+                            Spacer(Modifier.width(12.dp))
+                        }
+                        Text(
+                            text = title,
+                            color = Morandi.text,
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                    Spacer(Modifier.height(14.dp))
+                    Text(
+                        text = message,
+                        color = Morandi.subText,
+                        fontSize = 13.sp,
+                        lineHeight = 18.sp,
+                    )
+                    Spacer(Modifier.height(22.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        ReTextButton(
+                            text = stringResource(R.string.common_cancel),
+                            onClick = onDismiss,
+                            textColor = Morandi.subText,
+                            fontSize = 14.sp,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        ReTextButton(
+                            text = confirmText,
+                            onClick = onConfirm,
+                            primary = true,
+                            containerColor = if (isDestructive) Color(0xFFFF5252) else Morandi.accent,
+                            contentColor = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 /** 通用文本输入对话框 */
 @Composable
 private fun InputTextDialog(
@@ -1090,58 +1157,85 @@ private fun InputTextDialog(
 ) {
     var text by remember { mutableStateOf(initialText) }
 
-    Dialog(onDismissRequest = onDismiss) {
-        Column(
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
             modifier = Modifier
-                .width(320.dp)
-                .clip(RoundedCornerShape(16.dp))
-                .background(Morandi.panel)
-                .padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+                .fillMaxSize()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onDismiss,
+                ),
+            contentAlignment = Alignment.Center,
         ) {
-            Text(
-                text = title,
-                color = Morandi.text,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-
-            BasicTextField(
-                value = text,
-                onValueChange = { text = it },
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .height(42.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(Morandi.panelHi)
-                    .border(0.8.dp, Morandi.border, RoundedCornerShape(10.dp))
-                    .padding(horizontal = 12.dp, vertical = 11.dp),
-                singleLine = true,
-                textStyle = LocalTextStyle.current.copy(color = Morandi.text, fontSize = 14.sp),
-                cursorBrush = SolidColor(Morandi.accent),
-                decorationBox = { inner ->
-                    if (text.isEmpty()) {
-                        Text(text = hint, color = Morandi.subText, fontSize = 14.sp)
-                    }
-                    inner()
-                },
-            )
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically,
+                    .width(320.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = {},
+                    )
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(Morandi.panel)
+                    .border(0.8.dp, Morandi.border, RoundedCornerShape(18.dp))
+                    .padding(22.dp),
             ) {
-                TextButton(onClick = onDismiss) {
-                    Text(stringResource(R.string.common_cancel), color = Morandi.subText)
-                }
-                Spacer(Modifier.width(8.dp))
-                Button(
-                    onClick = { onConfirm(text.trim()) },
-                    enabled = text.isNotBlank(),
-                    colors = ButtonDefaults.buttonColors(containerColor = Morandi.accent),
-                ) {
-                    Text(stringResource(R.string.common_confirm), color = Color.White)
+                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Text(
+                        text = title,
+                        color = Morandi.text,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+
+                    BasicTextField(
+                        value = text,
+                        onValueChange = { text = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(42.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Morandi.panelHi)
+                            .border(0.8.dp, Morandi.border, RoundedCornerShape(10.dp))
+                            .padding(horizontal = 12.dp, vertical = 11.dp),
+                        singleLine = true,
+                        textStyle = LocalTextStyle.current.copy(color = Morandi.text, fontSize = 14.sp),
+                        cursorBrush = SolidColor(Morandi.accent),
+                        decorationBox = { inner ->
+                            if (text.isEmpty()) {
+                                Text(text = hint, color = Morandi.subText, fontSize = 14.sp)
+                            }
+                            inner()
+                        },
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        ReTextButton(
+                            text = stringResource(R.string.common_cancel),
+                            onClick = onDismiss,
+                            textColor = Morandi.subText,
+                            fontSize = 14.sp,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        ReTextButton(
+                            text = stringResource(R.string.common_confirm),
+                            onClick = { onConfirm(text.trim()) },
+                            enabled = text.isNotBlank(),
+                            primary = true,
+                            containerColor = Morandi.accent,
+                            contentColor = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                        )
+                    }
                 }
             }
         }
@@ -1159,69 +1253,96 @@ private fun CategoryPickerRadioDialog(
 ) {
     var selected by remember { mutableStateOf(currentCategory.ifEmpty { categories.firstOrNull() ?: TemplateManager.CATEGORY_UNCATEGORIZED }) }
 
-    Dialog(onDismissRequest = onDismiss) {
-        Column(
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
             modifier = Modifier
-                .width(320.dp)
-                .clip(RoundedCornerShape(16.dp))
-                .background(Morandi.panel)
-                .padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+                .fillMaxSize()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onDismiss,
+                ),
+            contentAlignment = Alignment.Center,
         ) {
-            Text(
-                text = title,
-                color = Morandi.text,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-
-            LazyColumn(
-                modifier = Modifier.heightIn(max = 240.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
+            Box(
+                modifier = Modifier
+                    .width(320.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = {},
+                    )
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(Morandi.panel)
+                    .border(0.8.dp, Morandi.border, RoundedCornerShape(18.dp))
+                    .padding(22.dp),
             ) {
-                items(categories) { cat ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(if (selected == cat) Morandi.accent.copy(alpha = 0.16f) else Color.Transparent)
-                            .clickable { selected = cat }
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
+                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Text(
+                        text = title,
+                        color = Morandi.text,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+
+                    LazyColumn(
+                        modifier = Modifier.heightIn(max = 240.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        Text(
-                            text = cat,
-                            color = if (selected == cat) Morandi.accent else Morandi.text,
-                            fontSize = 13.sp,
-                            fontWeight = if (selected == cat) FontWeight.SemiBold else FontWeight.Normal,
-                        )
-                        if (selected == cat) {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_check),
-                                contentDescription = null,
-                                tint = Morandi.accent,
-                                modifier = Modifier.size(16.dp),
-                            )
+                        items(categories) { cat ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (selected == cat) Morandi.accent.copy(alpha = 0.16f) else Color.Transparent)
+                                    .clickable { selected = cat }
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                Text(
+                                    text = cat,
+                                    color = if (selected == cat) Morandi.accent else Morandi.text,
+                                    fontSize = 13.sp,
+                                    fontWeight = if (selected == cat) FontWeight.SemiBold else FontWeight.Normal,
+                                )
+                                if (selected == cat) {
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_check),
+                                        contentDescription = null,
+                                        tint = Morandi.accent,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                }
+                            }
                         }
                     }
-                }
-            }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                TextButton(onClick = onDismiss) {
-                    Text(stringResource(R.string.common_cancel), color = Morandi.subText)
-                }
-                Spacer(Modifier.width(8.dp))
-                Button(
-                    onClick = { onSelect(selected) },
-                    colors = ButtonDefaults.buttonColors(containerColor = Morandi.accent),
-                ) {
-                    Text(stringResource(R.string.common_confirm), color = Color.White)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        ReTextButton(
+                            text = stringResource(R.string.common_cancel),
+                            onClick = onDismiss,
+                            textColor = Morandi.subText,
+                            fontSize = 14.sp,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        ReTextButton(
+                            text = stringResource(R.string.common_confirm),
+                            onClick = { onSelect(selected) },
+                            primary = true,
+                            containerColor = Morandi.accent,
+                            contentColor = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                        )
+                    }
                 }
             }
         }

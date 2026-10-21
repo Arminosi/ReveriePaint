@@ -132,11 +132,21 @@ JNIEXPORT jbyteArray JNICALL
 Java_com_reverie_paint_core_ReverieCoreBridge_brushPresetThumbData(JNIEnv *env, jobject, jint index)
 {
     const QByteArray data = core()->brushPresetThumbData(index);
-    jbyteArray arr = env->NewByteArray(data.size());
-    if (data.size() > 0) {
-        env->SetByteArrayRegion(arr, 0, data.size(),
-                                reinterpret_cast<const jbyte *>(data.constData()));
+    const int sz = data.size();
+    if (sz <= 0) {
+        jbyteArray emptyArr = env->NewByteArray(0);
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        return emptyArr;
     }
+    jbyteArray arr = env->NewByteArray(sz);
+    if (!arr || env->ExceptionCheck()) {
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        jbyteArray emptyArr = env->NewByteArray(0);
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        return emptyArr;
+    }
+    env->SetByteArrayRegion(arr, 0, sz,
+                            reinterpret_cast<const jbyte *>(data.constData()));
     return arr;
 }
 

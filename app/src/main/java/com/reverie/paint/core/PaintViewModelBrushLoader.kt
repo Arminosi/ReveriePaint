@@ -254,7 +254,7 @@ private fun PaintViewModel.loadBrushPresetsAfterAssets(
                     BrushPresetInfo(
                         index = i,
                         name = nm,
-                        thumbBytes = ReverieCoreBridge.brushPresetThumbData(i),
+                        thumbBytes = ReverieCoreBridge.brushPresetThumbData(i) ?: ByteArray(0),
                         group = userBrushGroups[nm] ?: inferBrushGroup(nm),
                         isBuiltIn = builtInNames.contains(nm),
                     ),

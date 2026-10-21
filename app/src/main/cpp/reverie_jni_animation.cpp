@@ -177,6 +177,10 @@ Java_com_reverie_paint_core_ReverieCoreBridge_revAssetBytes(JNIEnv *env, jobject
     env->ReleaseStringUTFChars(name, nameChars);
     if (data.isEmpty()) return nullptr;
     jbyteArray out = env->NewByteArray(jsize(data.size()));
+    if (!out || env->ExceptionCheck()) {
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        return nullptr;
+    }
     env->SetByteArrayRegion(out, 0, jsize(data.size()), reinterpret_cast<const jbyte *>(data.constData()));
     return out;
 }

@@ -1282,11 +1282,17 @@ QByteArray ReverieCore::brushPresetThumbData(int index) const
         prevPath += QStringLiteral("_prev.png");
         QFile prevFile(prevPath);
         if (prevFile.open(QIODevice::ReadOnly)) {
-            return prevFile.readAll();
+            if (prevFile.size() > 0 && prevFile.size() <= 8 * 1024 * 1024) {
+                return prevFile.readAll();
+            }
+            return QByteArray();
         }
     }
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly)) {
+        return QByteArray();
+    }
+    if (f.size() <= 0 || f.size() > 8 * 1024 * 1024) {
         return QByteArray();
     }
     return f.readAll();

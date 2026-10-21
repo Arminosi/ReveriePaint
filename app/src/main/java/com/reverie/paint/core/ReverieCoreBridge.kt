@@ -519,7 +519,7 @@ object ReverieCoreBridge {
 
     external fun brushPresetTipFilename(index: Int): String
 
-    external fun brushPresetThumbData(index: Int): ByteArray
+    external fun brushPresetThumbData(index: Int): ByteArray?
 
     external fun currentBrushPreset(): Int
 
@@ -1354,7 +1354,7 @@ object ReverieCoreBridge {
 
     external fun hasSelection(): Boolean
 
-    external fun selectionMask(): ByteArray
+    external fun selectionMask(): ByteArray?
 
     external fun selectionOverlayScaled(
         vw: Int,

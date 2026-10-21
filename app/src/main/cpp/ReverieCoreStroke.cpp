@@ -1495,6 +1495,10 @@ void ReverieCore::undo()
                                  dynamic_cast<const KisImageLayerRemoveCommand *>(cmd) != nullptr ||
                                  dynamic_cast<const KisImageLayerMoveCommand *>(cmd) != nullptr;
 
+    {
+        std::lock_guard<std::mutex> lock(m_asyncUpdateMutex);
+        m_lastAsyncUpdateRect = QRect();
+    }
     m_undoStore->undo();
     ++m_redoCount;
     m_document->waitForDone();
@@ -1538,7 +1542,24 @@ void ReverieCore::undo()
             }
         }
     }
-    markDirty();
+
+    m_nativeProjectionValid = true;
+    QRect updateRect;
+    {
+        std::lock_guard<std::mutex> lock(m_asyncUpdateMutex);
+        updateRect = m_lastAsyncUpdateRect;
+        m_lastAsyncUpdateRect = QRect();
+    }
+    if (!updateRect.isEmpty() && !structureChanged) {
+        const QRect r = updateRect.intersected(QRect(0, 0, m_docWidth, m_docHeight));
+        invalidateStaticUnderlayRect(r);
+        markRegionDirty(r);
+        for (auto it = m_thumbCache.begin(); it != m_thumbCache.end(); ++it) {
+            ++it->gen;
+        }
+    } else {
+        markDirty();
+    }
     m_snapshotPending = false;
 }
 
@@ -1562,6 +1583,10 @@ void ReverieCore::redo()
         oldVisibilities.append(e.visible);
     }
 
+    {
+        std::lock_guard<std::mutex> lock(m_asyncUpdateMutex);
+        m_lastAsyncUpdateRect = QRect();
+    }
     m_undoStore->redo();
     --m_redoCount;
     m_document->waitForDone();
@@ -1605,7 +1630,24 @@ void ReverieCore::redo()
             }
         }
     }
-    markDirty();
+
+    m_nativeProjectionValid = true;
+    QRect updateRect;
+    {
+        std::lock_guard<std::mutex> lock(m_asyncUpdateMutex);
+        updateRect = m_lastAsyncUpdateRect;
+        m_lastAsyncUpdateRect = QRect();
+    }
+    if (!updateRect.isEmpty() && !structureChanged) {
+        const QRect r = updateRect.intersected(QRect(0, 0, m_docWidth, m_docHeight));
+        invalidateStaticUnderlayRect(r);
+        markRegionDirty(r);
+        for (auto it = m_thumbCache.begin(); it != m_thumbCache.end(); ++it) {
+            ++it->gen;
+        }
+    } else {
+        markDirty();
+    }
     m_snapshotPending = false;
 }
 

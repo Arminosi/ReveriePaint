@@ -1663,6 +1663,7 @@ bool ReverieCore::loadRevp(const QString &path)
     }
 
     m_document = image.data();
+    setupDocumentConnections(image);
     m_docWidth = w;
     m_docHeight = h;
     syncLayersFromImage();
@@ -2055,6 +2056,7 @@ bool ReverieCore::loadPsd(const QString &path)
 
     m_backgroundColor = Qt::white;
     m_document = image.data();
+    setupDocumentConnections(image);
     m_docWidth = w;
     m_docHeight = h;
     syncLayersFromImage();

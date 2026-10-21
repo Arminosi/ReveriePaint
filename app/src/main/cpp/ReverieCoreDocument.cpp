@@ -34,8 +34,27 @@ ReverieCore::ReverieCore()
     ensureRgbU8DifferenceHook();
 }
 
+void ReverieCore::setupDocumentConnections(KisImageSP image)
+{
+    if (m_sigImageUpdatedConn) {
+        QObject::disconnect(m_sigImageUpdatedConn);
+    }
+    if (!image) {
+        return;
+    }
+    m_sigImageUpdatedConn = QObject::connect(image.data(), &KisImage::sigImageUpdated, [this](const QRect &rc) {
+        if (!rc.isEmpty()) {
+            std::lock_guard<std::mutex> lock(m_asyncUpdateMutex);
+            m_lastAsyncUpdateRect = m_lastAsyncUpdateRect.isNull() ? rc : m_lastAsyncUpdateRect.united(rc);
+        }
+    });
+}
+
 ReverieCore::~ReverieCore()
 {
+    if (m_sigImageUpdatedConn) {
+        QObject::disconnect(m_sigImageUpdatedConn);
+    }
     endStrokeBatch();
     m_layers.clear();
     m_canvasClipboard = nullptr;
@@ -132,6 +151,7 @@ bool ReverieCore::newDocument(int width, int height, bool infiniteCanvas)
     KisPaintLayerSP paint = new KisPaintLayer(image, QStringLiteral("颜料图层 1"), 255, cs);
     if (!paint) {
         m_document = image.data();
+        setupDocumentConnections(image);
         m_docWidth = width;
         m_docHeight = height;
         syncLayersFromImage();
@@ -141,6 +161,7 @@ bool ReverieCore::newDocument(int width, int height, bool infiniteCanvas)
     image->addNode(paint, image->rootLayer());
 
     m_document = image.data();
+    setupDocumentConnections(image);
     m_docWidth = width;
     m_docHeight = height;
     // Must run AFTER m_document is set (recompositeProjection reads it)
@@ -182,6 +203,14 @@ void ReverieCore::closeDocument()
     // frees all layers and their tiles.
     m_canvasClipboard = nullptr;
     waitForDocumentTasks();
+    if (m_sigImageUpdatedConn) {
+        QObject::disconnect(m_sigImageUpdatedConn);
+    }
+    m_nativeProjectionValid = false;
+    {
+        std::lock_guard<std::mutex> lock(m_asyncUpdateMutex);
+        m_lastAsyncUpdateRect = QRect();
+    }
     m_document.clear();
     m_undoStore = nullptr;
     m_macroDepth = 0;
@@ -343,6 +372,7 @@ void ReverieCore::recompositeProjection()
     // 看到调度器忙会先 waitForDone 再出图。调用方不得在锁住期间指望投影已刷新。
     if (reverie::mayWaitForImage(image->locked())) {
         image->waitForDone();
+        m_nativeProjectionValid = true;
     }
 }
 

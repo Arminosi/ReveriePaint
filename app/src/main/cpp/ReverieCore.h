@@ -24,6 +24,7 @@
 #include <QMutex>
 #include <QSet>
 #include <QElapsedTimer>
+#include <mutex>
 
 #include <kis_types.h>
 #include <kis_random_source.h>
@@ -1403,6 +1404,12 @@ private:
     KisPaintDeviceSP m_tileFrameProjection;
     void markBlendChanged(int index);  // blend-only change: targeted thumb invalidation
     void flipCanvasCommon(bool horizontal); // flipCanvasHorizontal/Vertical shared body
+
+    QRect m_lastAsyncUpdateRect;
+    std::mutex m_asyncUpdateMutex;
+    bool m_nativeProjectionValid = false;
+    QMetaObject::Connection m_sigImageUpdatedConn;
+    void setupDocumentConnections(KisImageSP image);
 
     void markDirty() {
         // 文档级改动 (滤镜/变换/撤销/图层操作) 说不清改了哪层, 静态底图无条件作废

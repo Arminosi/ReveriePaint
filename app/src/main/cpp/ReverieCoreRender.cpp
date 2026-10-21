@@ -367,19 +367,20 @@ bool ReverieCore::renderToBuffer(quint8 *buffer, int w, int h, bool forceFull)
         // 1) Active in-stroke drawing (m_drawing)
         // 2) Visible stroke layers requiring real-time stroke synchronization
         // 3) Pen-up final stroke completion or direct slider drag previews (!m_dirtyRect.isEmpty())
-        if (!gate.waitForMerger) {
-            bool hasSpecialCompositeLayer = false;
-            for (const LayerEntry &le : m_layers) {
-                if (le.visible && (le.isStrokeLayer || le.nodeType == NodeTypeStroke || le.nodeType == NodeTypeTransparencyMask)) {
-                    hasSpecialCompositeLayer = true;
-                    break;
-                }
+        bool hasSpecialCompositeLayer = false;
+        for (const LayerEntry &le : m_layers) {
+            if (le.visible && (le.isStrokeLayer || le.nodeType == NodeTypeStroke || le.nodeType == NodeTypeTransparencyMask)) {
+                hasSpecialCompositeLayer = true;
+                break;
             }
+        }
+        if ((!gate.waitForMerger && !m_nativeProjectionValid) || (m_nativeProjectionValid && hasSpecialCompositeLayer)) {
             if (m_drawing || hasSpecialCompositeLayer || !m_dirtyRect.isEmpty()) {
                 // 逐块合成离散脏区, 不再先把几处笔迹并成一个大包围盒再整体合成。
                 compositeDirtyRegions(proj);
             }
         }
+        m_nativeProjectionValid = false;
     }
     if (!proj) {
         return false;
@@ -558,19 +559,20 @@ int ReverieCore::beginTileFrame(QRect *outRects, int cap)
         proj = compositeSoloProjection();
     } else {
         proj = image->projection();
-        if (!wasAsyncBusy) {
-            bool hasSpecialCompositeLayer = false;
-            for (const LayerEntry &le : m_layers) {
-                if (le.visible && (le.isStrokeLayer || le.nodeType == NodeTypeStroke ||
-                                   le.nodeType == NodeTypeTransparencyMask)) {
-                    hasSpecialCompositeLayer = true;
-                    break;
-                }
+        bool hasSpecialCompositeLayer = false;
+        for (const LayerEntry &le : m_layers) {
+            if (le.visible && (le.isStrokeLayer || le.nodeType == NodeTypeStroke ||
+                               le.nodeType == NodeTypeTransparencyMask)) {
+                hasSpecialCompositeLayer = true;
+                break;
             }
+        }
+        if ((!wasAsyncBusy && !m_nativeProjectionValid) || (m_nativeProjectionValid && hasSpecialCompositeLayer)) {
             if (m_drawing || hasSpecialCompositeLayer || !m_dirtyRect.isEmpty()) {
                 compositeDirtyRegions(proj);
             }
         }
+        m_nativeProjectionValid = false;
     }
     if (!proj) {
         return 0;

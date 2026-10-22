@@ -3,23 +3,13 @@
 日期: 2026-10-07
 状态: 已实现并通过真机验收 (vivo Pad2 (PA2373) + vivo Pencil2, 笔迹预测 / 双击切换 / 书写振动 三项实测通过)
 
-## 1. SDK 集成方式 (仓库内置, 不走 maven)
+## 1. 架构合规改造 (GPL-3.0 兼容与纯反射解耦)
 
-官方接入指南要求在项目级 build.gradle 添加 `https://repos.vivo.com.cn/maven/repository/external-lib/`
-(HTTP, 需 `allowInsecureProtocol`) 并依赖 `vivo:penengine-simplify:1.0.0.7`。本项目采用与 OPPO
-`libforecast.so` / `Qt6Android.jar` 一致的「仓库内置」策略, 保证克隆即可离线构建、不改仓库配置:
-
-| 仓库内文件 | 来源 (官方 AAR `penengine-simplify-1.0.0.7.aar`) |
-|---|---|
-| `app/libs/vivo-penengine-simplify-1.0.0.7.jar` | AAR 内 `classes.jar` |
-| `third_party/android-native-libs/libtrack_prediction.so` | AAR `jni/arm64-v8a/` (被 `copy_jni_libs.sh` / `copyPrebuiltJniLibs` 打包进 jniLibs) |
-| `app/src/main/assets/optparam*.cfg` (4 个) | AAR `assets/` (SDK 运行时从 **app assets 根**按固定文件名读取, 不能放进子目录) |
-
-`app/build.gradle.kts` 仅新增一行 `implementation(files("libs/vivo-penengine-simplify-1.0.0.7.jar"))`。
-release 未开启 minify, 无需 proguard keep (官方要求的 3 组 keep 规则已记录于此备查:
-`com.vivo.trackpredictor.**` / `com.vivo.bluetoothpen.**` / `com.vivo.penengine.impl.**`)。
-清单仅新增两条 `<queries>` (`com.vivo.penwrite` / `com.vivo.penalgoengine`), 未引入
-AAR 清单里的 `QUERY_ALL_PACKAGES` (以精筛 queries 替代)。
+为遵守 GPL-3.0 许可规范并杜绝分发第三方闭源二进制, 仓库已彻底剥离闭源 JAR 与 SO 文件:
+- 移除 `vivo-penengine-simplify-1.0.0.7.jar` / `libtrack_prediction.so` / `optparam*.cfg`
+- 手写笔手势与书写振动全面重构为**纯反射动态调用** (`Class.forName` + 动态代理), 运行时探测宿主系统类
+- 笔迹预测收口至开源 `UniversalKalmanPredictor` (卡尔曼滤波) 与 AndroidX `input-motionprediction`
+- 清单保留 `<queries>` (`com.vivo.penwrite` / `com.vivo.penalgoengine`), 未安装服务时安全降级零崩溃
 
 ## 2. 已核对的 SDK 真实 API (javap 反编译, 非文档推测)
 
@@ -48,7 +38,7 @@ AAR 清单里的 `QUERY_ALL_PACKAGES` (以精筛 queries 替代)。
 
 | 能力 | 接入点 |
 |---|---|
-| 笔迹预测 | `CanvasTouchView` 持有 `VivoAlgorithmManagerImpl`, 与 OPPO 预测共用 `predictedScreenPoint` 消费管线 (onDraw 渐变切线); 门控沿用 `vm.isCurrentBrushPredictionEligible` (含全局预测开关) |
+| 笔迹预测 | 统一由 `UniversalKalmanPredictor` / `androidx.input:input-motionprediction` 接管, 门控沿用 `vm.isCurrentBrushPredictionEligible` |
 | 双击/按键切换 | `VivoStylusAdapter.handleGesture` → `vm.executeStylusAction(...)`; 动作映射存于 `paint_prefs` 的 `vivoDoubleTapAction` / `vivoPrimaryClickAction` / `vivoSecondaryClickAction` |
 | 书写振动 | `StylusFeedbackManager.vivoWritingVibrateHook` (由 `VivoStylusAdapter` 注册), 挂在既有落笔/抬笔调用点; 适配器内做状态去重, 每次书写仅 2 次 binder 调用 |
 | 按键切换 (按住变橡皮) | 复用 `StylusDriver.isSideButtonEraseActive` 的 `VIVO_PENCIL` 分支 + 画布层 `tempEraseActive` |

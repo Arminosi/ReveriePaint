@@ -22,6 +22,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -126,6 +129,9 @@ fun GradientPanel(
         )
     }
 
+    val density = LocalDensity.current
+    var mainRowWidthDp by remember { mutableStateOf<Dp?>(null) }
+
     ToolFloatPanel(modifier = Modifier, vm = vm, hazeState = hazeState) {
         Column(
             modifier = Modifier.animateContentSize(
@@ -134,7 +140,13 @@ fun GradientPanel(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Row(
-                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                modifier = Modifier
+                    .horizontalScroll(rememberScrollState())
+                    .onSizeChanged { size ->
+                        if (size.width > 0) {
+                            mainRowWidthDp = with(density) { size.width.toDp() }
+                        }
+                    },
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -225,13 +237,21 @@ fun GradientPanel(
                 enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.expandVertically(),
                 exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.shrinkVertically(),
             ) {
+                val drawerModifier = if (mainRowWidthDp != null) {
+                    Modifier.width(mainRowWidthDp!!.coerceAtLeast(260.dp))
+                } else {
+                    Modifier.widthIn(min = 260.dp, max = 360.dp)
+                }
+
                 Column(
-                    modifier = Modifier.padding(top = 2.dp),
+                    modifier = drawerModifier.padding(top = 2.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     // 高级设置第一行：两组精巧下拉 + 防断层抖动开关，自然对齐主行宽度
                     Row(
-                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -259,6 +279,7 @@ fun GradientPanel(
 
                     // 高级设置第二行：不透明度滑块
                     ToolFloatSlider(
+                        modifier = Modifier.fillMaxWidth(),
                         label = androidx.compose.ui.res.stringResource(R.string.gradient_opacity),
                         valueText = "${(state.opacity * 100).toInt()}%",
                         range = 1f..100f,

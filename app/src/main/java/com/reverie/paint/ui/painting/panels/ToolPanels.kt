@@ -5,6 +5,8 @@
 package com.reverie.paint.ui.painting.panels
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -126,6 +128,9 @@ fun GradientPanel(
 
     ToolFloatPanel(modifier = Modifier, vm = vm, hazeState = hazeState) {
         Column(
+            modifier = Modifier.animateContentSize(
+                animationSpec = spring(dampingRatio = 0.85f, stiffness = 500f),
+            ),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Row(
@@ -181,6 +186,14 @@ fun GradientPanel(
                     onSelect = onType,
                 )
 
+                // 反向渐变按钮 (常用主属性)
+                ToolActionButton(
+                    iconRes = R.drawable.ic_refresh,
+                    label = androidx.compose.ui.res.stringResource(R.string.gradient_reverse),
+                    active = reverse,
+                    onClick = { onReverse(!reverse) },
+                )
+
                 // 高级属性展开 (Sliders)
                 ToolActionButton(
                     iconRes = R.drawable.ic_sliders,
@@ -206,22 +219,19 @@ fun GradientPanel(
                 }
             }
 
-            // 展开高级属性 (平滑垂直展开动画，两行布局规避横向挤爆)
+            // 展开高级属性 (渲染混合模式、重复模式、防断层仿色与独立不透明度)
             androidx.compose.animation.AnimatedVisibility(
                 visible = propsOpen,
                 enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.expandVertically(),
                 exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.shrinkVertically(),
             ) {
                 Column(
-                    modifier = Modifier
-                        .widthIn(min = 280.dp, max = 340.dp)
-                        .padding(top = 2.dp),
+                    modifier = Modifier.padding(top = 2.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
+                    // 高级设置第一行：两组精巧下拉 + 防断层抖动开关，自然对齐主行宽度
                     Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -239,14 +249,6 @@ fun GradientPanel(
                             onSelect = { state.blendMode = it },
                         )
 
-                        // 反向按钮
-                        ToolActionButton(
-                            iconRes = R.drawable.ic_refresh,
-                            label = androidx.compose.ui.res.stringResource(R.string.gradient_reverse),
-                            active = reverse,
-                            onClick = { onReverse(!reverse) },
-                        )
-
                         // 防色彩断层仿色抖动
                         ToolFloatChip(
                             label = androidx.compose.ui.res.stringResource(R.string.gradient_dither),
@@ -255,6 +257,7 @@ fun GradientPanel(
                         )
                     }
 
+                    // 高级设置第二行：不透明度滑块
                     ToolFloatSlider(
                         label = androidx.compose.ui.res.stringResource(R.string.gradient_opacity),
                         valueText = "${(state.opacity * 100).toInt()}%",

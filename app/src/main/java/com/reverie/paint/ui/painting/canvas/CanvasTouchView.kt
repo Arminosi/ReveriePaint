@@ -189,6 +189,7 @@ class CanvasTouchView(context: Context) : View(context) {
     var onPolyPopPoint: (() -> Unit)? = null
     private var isPolyPointPendingOnTouch = false
     private var shapeCreatedOnCurrentTouch = false
+    private var gradientCreatedOnCurrentTouch = false
     var onCropRect: ((Rect?) -> Unit)? = null
 
     var liveShapeStart: MutableState<Offset?>? = null
@@ -5346,8 +5347,7 @@ class CanvasTouchView(context: Context) : View(context) {
                 handleTextDown(docPos)
             }
             Tool.GRADIENT -> {
-                liveShapeStart?.value = docPos
-                liveShapeEnd?.value = docPos
+                handleGradientDown(docPos)
             }
             Tool.SELECT_RECT, Tool.SELECT_ELLIPSE -> {
                 if (v.selectionMode == 0) {
@@ -6051,7 +6051,10 @@ class CanvasTouchView(context: Context) : View(context) {
             Tool.TEXT -> {
                 handleTextMove(docPos)
             }
-            Tool.GRADIENT, Tool.SELECT_RECT, Tool.SELECT_ELLIPSE -> {
+            Tool.GRADIENT -> {
+                handleGradientMove(docPos)
+            }
+            Tool.SELECT_RECT, Tool.SELECT_ELLIPSE -> {
                 shapeEndDocPos = docPos
                 liveShapeEnd?.value = docPos
             }
@@ -6788,13 +6791,7 @@ class CanvasTouchView(context: Context) : View(context) {
                 handleTextUp(docPos)
             }
             Tool.GRADIENT -> {
-                liveShapeStart?.value = null
-                liveShapeEnd?.value = null
-                v.gradientFill(
-                    firstDocPos.x.toInt(), firstDocPos.y.toInt(),
-                    shapeEndDocPos.x.toInt(), shapeEndDocPos.y.toInt(),
-                    v.gradientType, v.gradientRepeat, v.gradientReverse
-                )
+                handleGradientUp(docPos)
             }
             Tool.SELECT_RECT -> {
                 liveShapeStart?.value = null
@@ -7296,6 +7293,7 @@ class CanvasTouchView(context: Context) : View(context) {
         }
 
         shapeCreatedOnCurrentTouch = false
+        cancelPendingGradientGesture()
 
         if (isPolyPointPendingOnTouch) {
             onPolyPopPoint?.invoke()
@@ -7473,6 +7471,154 @@ class CanvasTouchView(context: Context) : View(context) {
         activeTextHandle = -1
         textDragStartDocPos = Offset.Zero
         vm?.typographySnapGuides = emptyList()
+    }
+
+    private fun cancelPendingGradientGesture() {
+        val v = vm ?: return
+        val state = v.gradientState
+        if (state.active) {
+            if (gradientCreatedOnCurrentTouch) {
+                state.clear()
+            } else if (state.activeHandle != GradientHandleId.NONE) {
+                state.p1 = state.dragOriginalP1
+                state.p2 = state.dragOriginalP2
+                state.activeHandle = GradientHandleId.NONE
+            }
+        }
+        gradientCreatedOnCurrentTouch = false
+    }
+
+    private fun hitTestGradientHandle(
+        state: GradientState,
+        docPos: Offset,
+        density: Float,
+        currentScale: Float,
+    ): Int {
+        val hitDist = (28f * density) / maxOf(0.01f, currentScale)
+        val lineVec = state.p2 - state.p1
+        val lineLen = hypot(lineVec.x, lineVec.y)
+
+        // 1. 中间色标手柄 (仅非动态自定义色标且色标数 > 2 时允许拖动中间手柄)
+        if (lineLen > 10f && !state.isDynamicFgBg && !state.isDynamicFgTrans && state.stops.size > 2) {
+            for (i in 1 until state.stops.size - 1) {
+                val s = state.stops[i]
+                val stopDocPos = state.p1 + lineVec * s.position
+                if (hypot(docPos.x - stopDocPos.x, docPos.y - stopDocPos.y) < hitDist) {
+                    return GradientHandleId.STOP_BASE + i
+                }
+            }
+        }
+
+        // 2. 起点手柄
+        if (hypot(docPos.x - state.p1.x, docPos.y - state.p1.y) < hitDist) {
+            return GradientHandleId.START
+        }
+
+        // 3. 终点手柄
+        if (hypot(docPos.x - state.p2.x, docPos.y - state.p2.y) < hitDist) {
+            return GradientHandleId.END
+        }
+
+        // 4. 中心手柄及轴线拖拽
+        val mid = (state.p1 + state.p2) / 2f
+        if (hypot(docPos.x - mid.x, docPos.y - mid.y) < hitDist) {
+            return GradientHandleId.MID_BODY
+        }
+        if (lineLen > 10f) {
+            val d = ShapeGeometry.distanceToSegment(
+                Point2D(docPos.x, docPos.y),
+                Point2D(state.p1.x, state.p1.y),
+                Point2D(state.p2.x, state.p2.y)
+            )
+            if (d < hitDist) {
+                return GradientHandleId.MID_BODY
+            }
+        }
+
+        return GradientHandleId.NONE
+    }
+
+    private fun handleGradientDown(docPos: Offset) {
+        val v = vm ?: return
+        val state = v.gradientState
+        val currentScale = maxOf(0.01f, canvasZoom * canvasFitScale)
+
+        if (state.active) {
+            val hit = hitTestGradientHandle(state, docPos, density, currentScale)
+            if (hit != GradientHandleId.NONE) {
+                state.activeHandle = hit
+                state.dragStartDocPos = docPos
+                state.dragOriginalP1 = state.p1
+                state.dragOriginalP2 = state.p2
+                gradientCreatedOnCurrentTouch = false
+                return
+            }
+            // 未命中现有手柄：先自动提交前序渐变
+            val len = hypot(state.p2.x - state.p1.x, state.p2.y - state.p1.y)
+            if (len > 4f) {
+                v.commitActiveGradient()
+            }
+        }
+
+        // 新建渐变
+        state.reset(docPos, docPos)
+        state.activeHandle = GradientHandleId.END
+        state.dragStartDocPos = docPos
+        state.dragOriginalP1 = docPos
+        state.dragOriginalP2 = docPos
+        gradientCreatedOnCurrentTouch = true
+    }
+
+    private fun handleGradientMove(docPos: Offset) {
+        val v = vm ?: return
+        val state = v.gradientState
+        if (!state.active) return
+
+        when (val handle = state.activeHandle) {
+            GradientHandleId.START -> {
+                state.p1 = docPos
+            }
+            GradientHandleId.END -> {
+                state.p2 = docPos
+            }
+            GradientHandleId.MID_BODY -> {
+                val delta = docPos - state.dragStartDocPos
+                state.p1 = state.dragOriginalP1 + delta
+                state.p2 = state.dragOriginalP2 + delta
+            }
+            else -> {
+                if (handle >= GradientHandleId.STOP_BASE) {
+                    val idx = handle - GradientHandleId.STOP_BASE
+                    if (idx in 1 until state.stops.size - 1) {
+                        val lineVec = state.p2 - state.p1
+                        val lenSq = lineVec.x * lineVec.x + lineVec.y * lineVec.y
+                        if (lenSq > 1f) {
+                            val toPos = docPos - state.p1
+                            val proj = (toPos.x * lineVec.x + toPos.y * lineVec.y) / lenSq
+                            val newPos = proj.coerceIn(0.01f, 0.99f)
+                            val stop = state.stops[idx]
+                            state.stops[idx] = stop.copy(position = newPos)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun handleGradientUp(docPos: Offset) {
+        val v = vm ?: return
+        val state = v.gradientState
+        if (!state.active) return
+
+        state.activeHandle = GradientHandleId.NONE
+        if (gradientCreatedOnCurrentTouch) {
+            gradientCreatedOnCurrentTouch = false
+            val len = hypot(state.p2.x - state.p1.x, state.p2.y - state.p1.y)
+            if (len < 4f) {
+                val defSpan = 150f / maxOf(0.1f, canvasZoom * canvasFitScale)
+                state.p2 = state.p1 + Offset(defSpan, defSpan)
+            }
+        }
     }
 
     override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {

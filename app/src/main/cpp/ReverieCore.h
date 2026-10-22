@@ -549,6 +549,12 @@ public:
     // kind 0=line, 1=rect, 2=ellipse, 3=closed polygon, 4=polyline
     void drawPolygon(const QVector<QPoint> &points, bool closed);
     void gradientFill(int x1, int y1, int x2, int y2, int type = 0, int repeat = 0, bool reverse = false);
+    void gradientFillV3(
+        int x1, int y1, int x2, int y2,
+        int type = 0, int repeat = 0, bool reverse = false,
+        float opacity = 1.0f, const QString &compositeOpId = QString(), bool dither = false,
+        const QVector<QPair<qreal, QColor>> &stops = {}
+    );
     void selectShape(int kind, int x1, int y1, int x2, int y2);
     void selectPolygon(const QVector<QPoint> &points);
     void lassoSelect(const QVector<QPoint> &points);

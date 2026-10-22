@@ -2206,6 +2206,7 @@ class PaintViewModel : ViewModel() {
     var gradientType by mutableIntStateOf(0) // 0: 线性, 1: 径向, 2: 角度
     var gradientRepeat by mutableIntStateOf(0) // 0: 无, 1: 重复, 2: 往返
     var gradientReverse by mutableStateOf(false)
+    val gradientState = GradientState()
 
     var shapeStrokeWidth by mutableDoubleStateOf(4.0)
     var shapeFillMode by mutableIntStateOf(0) // 0: 仅描边, 1: 仅填充, 2: 描边与填充

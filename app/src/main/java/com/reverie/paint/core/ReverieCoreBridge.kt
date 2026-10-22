@@ -385,6 +385,21 @@ object ReverieCoreBridge {
         reverse: Boolean = false,
     )
 
+    external fun gradientFillV3(
+        x1: Int,
+        y1: Int,
+        x2: Int,
+        y2: Int,
+        type: Int,
+        repeat: Int,
+        reverse: Boolean,
+        opacity: Float,
+        blendMode: String,
+        dither: Boolean,
+        stopPositions: FloatArray,
+        stopColors: IntArray,
+    )
+
     external fun selectShape(
         kind: Int,
         x1: Int,

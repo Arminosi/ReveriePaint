@@ -611,6 +611,9 @@ fun PaintingPage(
         if (tool !in shapeTools && tool.group != ToolGroup.SHAPES && vm.shapeState.active) {
             vm.commitActiveShape()
         }
+        if (tool != Tool.GRADIENT && vm.gradientState.active) {
+            vm.commitActiveGradient()
+        }
         if (tool != Tool.TEXT && vm.isTypographyEditing) {
             if (vm.typographyConfig.text.isNotBlank()) {
                 vm.commitTypographyToCanvas()

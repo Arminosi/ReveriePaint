@@ -1018,6 +1018,15 @@ void ReverieCore::drawPolygon(const QVector<QPoint> &points, bool closed)
 
 void ReverieCore::gradientFill(int x1, int y1, int x2, int y2, int type, int repeat, bool reverse)
 {
+    gradientFillV3(x1, y1, x2, y2, type, repeat, reverse, m_brushOpacity, QString(), false, {});
+}
+
+void ReverieCore::gradientFillV3(
+    int x1, int y1, int x2, int y2,
+    int type, int repeat, bool reverse,
+    float opacity, const QString &compositeOpId, bool dither,
+    const QVector<QPair<qreal, QColor>> &stops)
+{
     KisImageSP image = m_document ? m_document : KisImageSP();
     if (!image) return;
     KisPaintDeviceSP device = currentPaintDevice();
@@ -1031,23 +1040,33 @@ void ReverieCore::gradientFill(int x1, int y1, int x2, int y2, int type, int rep
     QImage gradImg(iw, ih, QImage::Format_ARGB32_Premultiplied);
     gradImg.fill(Qt::transparent);
 
-    QPainter qp(&gradImg);
-    qp.setRenderHint(QPainter::Antialiasing, true);
+    QVector<QPair<qreal, QColor>> effectiveStops = stops;
+    if (effectiveStops.isEmpty()) {
+        QColor fgColor(m_brushColor);
+        if (!fgColor.isValid()) fgColor = Qt::black;
+        fgColor.setAlphaF(qBound<qreal>(0.0, m_brushOpacity, 1.0));
 
-    QColor fgColor(m_brushColor);
-    if (!fgColor.isValid()) fgColor = Qt::black;
-    fgColor.setAlphaF(qBound<qreal>(0.0, m_brushOpacity, 1.0));
-
-    QColor bgColor(m_brushSecondaryColor);
-    if (!bgColor.isValid()) {
-        bgColor = QColor(m_brushColor);
-        bgColor.setAlphaF(0.0);
-    } else {
-        bgColor.setAlphaF(qBound<qreal>(0.0, m_brushOpacity, 1.0));
+        QColor bgColor(m_brushSecondaryColor);
+        if (!bgColor.isValid()) {
+            bgColor = QColor(m_brushColor);
+            bgColor.setAlphaF(0.0);
+        } else {
+            bgColor.setAlphaF(qBound<qreal>(0.0, m_brushOpacity, 1.0));
+        }
+        effectiveStops.append(qMakePair(0.0, fgColor));
+        effectiveStops.append(qMakePair(1.0, bgColor));
     }
 
     if (reverse) {
-        std::swap(fgColor, bgColor);
+        QVector<QPair<qreal, QColor>> revStops;
+        revStops.reserve(effectiveStops.size());
+        for (int i = effectiveStops.size() - 1; i >= 0; --i) {
+            revStops.append(qMakePair(1.0 - effectiveStops[i].first, effectiveStops[i].second));
+        }
+        std::sort(revStops.begin(), revStops.end(), [](const QPair<qreal, QColor> &a, const QPair<qreal, QColor> &b) {
+            return a.first < b.first;
+        });
+        effectiveStops = revStops;
     }
 
     QPointF p1(x1, y1);
@@ -1057,30 +1076,127 @@ void ReverieCore::gradientFill(int x1, int y1, int x2, int y2, int type, int rep
     if (repeat == 1) spread = QGradient::RepeatSpread;
     else if (repeat == 2) spread = QGradient::ReflectSpread;
 
-    if (type == 1) { // Radial
-        qreal r = QLineF(p1, p2).length();
-        if (r < 1.0) r = 1.0;
-        QRadialGradient grad(p1, r);
-        grad.setSpread(spread);
-        grad.setColorAt(0.0, fgColor);
-        grad.setColorAt(1.0, bgColor);
-        qp.setBrush(grad);
-    } else if (type == 2) { // Conical
-        qreal angle = -QLineF(p1, p2).angle();
-        QConicalGradient grad(p1, angle);
-        grad.setColorAt(0.0, fgColor);
-        grad.setColorAt(1.0, bgColor);
-        qp.setBrush(grad);
-    } else { // Linear
-        QLinearGradient grad(p1, p2);
-        grad.setSpread(spread);
-        grad.setColorAt(0.0, fgColor);
-        grad.setColorAt(1.0, bgColor);
-        qp.setBrush(grad);
+    if (type == 4) { // Diamond (菱形)
+        const int LUT_SIZE = 1024;
+        QRgb lut[LUT_SIZE];
+        for (int i = 0; i < LUT_SIZE; ++i) {
+            qreal t = (qreal)i / (LUT_SIZE - 1);
+            QColor col = effectiveStops.last().second;
+            if (t <= effectiveStops.first().first) {
+                col = effectiveStops.first().second;
+            } else if (t < effectiveStops.last().first) {
+                for (int s = 0; s < effectiveStops.size() - 1; ++s) {
+                    if (t >= effectiveStops[s].first && t <= effectiveStops[s + 1].first) {
+                        qreal span = effectiveStops[s + 1].first - effectiveStops[s].first;
+                        qreal factor = (span > 0.00001) ? (t - effectiveStops[s].first) / span : 0.0;
+                        int r = effectiveStops[s].second.red() + factor * (effectiveStops[s + 1].second.red() - effectiveStops[s].second.red());
+                        int g = effectiveStops[s].second.green() + factor * (effectiveStops[s + 1].second.green() - effectiveStops[s].second.green());
+                        int b = effectiveStops[s].second.blue() + factor * (effectiveStops[s + 1].second.blue() - effectiveStops[s].second.blue());
+                        int a = effectiveStops[s].second.alpha() + factor * (effectiveStops[s + 1].second.alpha() - effectiveStops[s].second.alpha());
+                        col = QColor(r, g, b, a);
+                        break;
+                    }
+                }
+            }
+            lut[i] = col.rgba();
+        }
+
+        qreal len = std::hypot(p2.x() - p1.x(), p2.y() - p1.y());
+        if (len < 1.0) len = 1.0;
+        qreal ux = (p2.x() - p1.x()) / len;
+        qreal uy = (p2.y() - p1.y()) / len;
+        qreal vx = -uy;
+        qreal vy = ux;
+
+        for (int y = 0; y < ih; ++y) {
+            QRgb *line = reinterpret_cast<QRgb *>(gradImg.scanLine(y));
+            qreal dy = y - p1.y();
+            for (int x = 0; x < iw; ++x) {
+                qreal dx = x - p1.x();
+                qreal projU = dx * ux + dy * uy;
+                qreal projV = dx * vx + dy * vy;
+                qreal dist = (std::abs(projU) + std::abs(projV)) / len;
+                qreal tVal = dist;
+                if (repeat == 1) {
+                    tVal = dist - std::floor(dist);
+                } else if (repeat == 2) {
+                    int floorVal = (int)std::floor(dist);
+                    qreal frac = dist - floorVal;
+                    tVal = (floorVal % 2 == 1) ? (1.0 - frac) : frac;
+                } else {
+                    tVal = qBound<qreal>(0.0, dist, 1.0);
+                }
+                int lutIdx = qBound(0, (int)(tVal * (LUT_SIZE - 1)), LUT_SIZE - 1);
+                line[x] = lut[lutIdx];
+            }
+        }
+    } else {
+        QPainter qp(&gradImg);
+        qp.setRenderHint(QPainter::Antialiasing, true);
+
+        if (type == 1) { // Radial
+            qreal r = QLineF(p1, p2).length();
+            if (r < 1.0) r = 1.0;
+            QRadialGradient grad(p1, r);
+            grad.setSpread(spread);
+            for (const auto &stop : effectiveStops) {
+                grad.setColorAt(qBound<qreal>(0.0, stop.first, 1.0), stop.second);
+            }
+            qp.setBrush(grad);
+        } else if (type == 2) { // Conical
+            qreal angle = -QLineF(p1, p2).angle();
+            QConicalGradient grad(p1, angle);
+            for (const auto &stop : effectiveStops) {
+                grad.setColorAt(qBound<qreal>(0.0, stop.first, 1.0), stop.second);
+            }
+            qp.setBrush(grad);
+        } else if (type == 3) { // Symmetric
+            QPointF dir = p2 - p1;
+            QPointF pStart = p1 - dir;
+            QPointF pEnd = p2;
+            QLinearGradient grad(pStart, pEnd);
+            grad.setSpread(spread);
+            for (const auto &stop : effectiveStops) {
+                qreal origPos = qBound<qreal>(0.0, stop.first, 1.0);
+                grad.setColorAt(0.5 + origPos * 0.5, stop.second);
+                grad.setColorAt(0.5 - origPos * 0.5, stop.second);
+            }
+            qp.setBrush(grad);
+        } else { // Linear (0)
+            QLinearGradient grad(p1, p2);
+            grad.setSpread(spread);
+            for (const auto &stop : effectiveStops) {
+                grad.setColorAt(qBound<qreal>(0.0, stop.first, 1.0), stop.second);
+            }
+            qp.setBrush(grad);
+        }
+        qp.setPen(Qt::NoPen);
+        qp.drawRect(0, 0, iw, ih);
+        qp.end();
     }
-    qp.setPen(Qt::NoPen);
-    qp.drawRect(0, 0, iw, ih);
-    qp.end();
+
+    if (dither) {
+        static const int bayer4x4[4][4] = {
+            {  0,  8,  2, 10 },
+            { 12,  4, 14,  6 },
+            {  3, 11,  1,  9 },
+            { 15,  7, 13,  5 }
+        };
+        for (int y = 0; y < ih; ++y) {
+            QRgb *line = reinterpret_cast<QRgb *>(gradImg.scanLine(y));
+            const int *bRow = bayer4x4[y & 3];
+            for (int x = 0; x < iw; ++x) {
+                QRgb c = line[x];
+                int a = qAlpha(c);
+                if (a == 0) continue;
+                int d = bRow[x & 3] - 8;
+                int r = qBound(0, qRed(c) + d / 4, 255);
+                int g = qBound(0, qGreen(c) + d / 4, 255);
+                int b = qBound(0, qBlue(c) + d / 4, 255);
+                line[x] = qRgba(r, g, b, a);
+            }
+        }
+    }
 
     KisPaintDeviceSP tempSrc = new KisPaintDevice(image->colorSpace());
     tempSrc->convertFromQImage(gradImg, 0);
@@ -1095,8 +1211,10 @@ void ReverieCore::gradientFill(int x1, int y1, int x2, int y2, int type, int rep
     if (pl && pl->alphaLocked()) {
         painter.setChannelFlags(pl->channelLockFlags());
     }
-    painter.setOpacityF(m_brushOpacity);
-    painter.setCompositeOpId(COMPOSITE_OVER);
+    painter.setOpacityF(qBound<qreal>(0.0, opacity, 1.0));
+    QString effectiveOp = (compositeOpId == "normal" || compositeOpId.isEmpty()) ? COMPOSITE_OVER :
+                          ((compositeOpId == "difference") ? COMPOSITE_DIFF : compositeOpId);
+    painter.setCompositeOpId(effectiveOp);
     painter.bitBlt(QPoint(0, 0), tempSrc, QRect(0, 0, iw, ih));
 
     device->setDirty();

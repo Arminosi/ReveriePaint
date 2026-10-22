@@ -418,16 +418,19 @@ internal fun PaintViewModel.updateFillCloseGap(value: Int) {
 
 internal fun PaintViewModel.updateGradientType(value: Int) {
     gradientType = value
+    gradientState.type = GradientType.fromId(value)
     saveToolOptions()
 }
 
 internal fun PaintViewModel.updateGradientRepeat(value: Int) {
     gradientRepeat = value
+    gradientState.repeat = GradientRepeat.fromId(value)
     saveToolOptions()
 }
 
 internal fun PaintViewModel.updateGradientReverse(value: Boolean) {
     gradientReverse = value
+    gradientState.reverse = value
     saveToolOptions()
 }
 

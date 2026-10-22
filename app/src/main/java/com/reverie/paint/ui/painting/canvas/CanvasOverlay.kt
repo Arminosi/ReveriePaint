@@ -26,8 +26,11 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asAndroidPath
@@ -594,11 +597,7 @@ internal fun CanvasOverlay(
                                 )
                             )
                         }
-                        Tool.GRADIENT -> {
-                            drawLine(Color.White, s, e, strokeWidth = 2.dp.toPx() / currentScale)
-                            drawCircle(Color.White, radius = 5.dp.toPx() / currentScale, center = s)
-                            drawCircle(Morandi.accent, radius = 5.dp.toPx() / currentScale, center = e)
-                        }
+                        Tool.GRADIENT -> Unit
                         else -> Unit
                     }
                 }
@@ -926,6 +925,185 @@ internal fun CanvasOverlay(
                             else -> Unit
                         }
                     }
+                }
+
+                // Interactive Gradient Tool Rendering (Handles + High Fidelity Live Preview)
+                val gradientState = vm.gradientState
+                if (gradientState.active && gradientState.p1 != gradientState.p2) {
+                    val scX = if (vm.docWidth > 0) bmp.width.toFloat() / vm.docWidth else 1f
+                    val scY = if (vm.docHeight > 0) bmp.height.toFloat() / vm.docHeight else 1f
+                    val bx = { p: Offset -> Offset(p.x * scX - bmp.width / 2f, p.y * scY - bmp.height / 2f) }
+                    val currentScale = zoom.value * fitScale
+
+                    val fgColor = try {
+                        Color(android.graphics.Color.parseColor(vm.brushColor))
+                    } catch (_: Exception) {
+                        Color.Black
+                    }
+                    val bgColor = try {
+                        Color(android.graphics.Color.parseColor(vm.brushSecondaryColor))
+                    } catch (_: Exception) {
+                        Color.White
+                    }
+
+                    var effectiveStops = gradientState.getEffectiveStops(fgColor, bgColor)
+                    if (gradientState.reverse) {
+                        effectiveStops = effectiveStops.map {
+                            GradientColorStop(1f - it.position, it.colorArgb)
+                        }.sortedBy { it.position }
+                    }
+
+                    val colorStops = if (effectiveStops.size >= 2) {
+                        effectiveStops.map { it.position.coerceIn(0f, 1f) to Color(it.colorArgb) }.toTypedArray()
+                    } else {
+                        arrayOf(0f to Color.Black, 1f to Color.White)
+                    }
+
+                    val tileMode = when (gradientState.repeat) {
+                        GradientRepeat.LOOP -> TileMode.Repeated
+                        GradientRepeat.MIRROR -> TileMode.Mirror
+                        else -> TileMode.Clamp
+                    }
+
+                    val composeBlendMode = when (gradientState.blendMode) {
+                        "multiply" -> BlendMode.Multiply
+                        "screen" -> BlendMode.Screen
+                        "overlay" -> BlendMode.Overlay
+                        "soft_light" -> BlendMode.Softlight
+                        "hard_light" -> BlendMode.Hardlight
+                        "dodge" -> BlendMode.ColorDodge
+                        "burn" -> BlendMode.ColorBurn
+                        else -> BlendMode.SrcOver
+                    }
+
+                    val p1Canvas = bx(gradientState.p1)
+                    val p2Canvas = bx(gradientState.p2)
+
+                    val previewBrush = when (gradientState.type) {
+                        GradientType.RADIAL -> {
+                            val r = maxOf(1f, (p2Canvas - p1Canvas).getDistance())
+                            Brush.radialGradient(colorStops = colorStops, center = p1Canvas, radius = r, tileMode = tileMode)
+                        }
+                        GradientType.CONICAL -> {
+                            Brush.sweepGradient(colorStops = colorStops, center = p1Canvas)
+                        }
+                        GradientType.SYMMETRIC -> {
+                            val dir = p2Canvas - p1Canvas
+                            val symStops = mutableListOf<Pair<Float, Color>>()
+                            effectiveStops.forEach { s ->
+                                val orig = s.position.coerceIn(0f, 1f)
+                                symStops.add(0.5f + orig * 0.5f to Color(s.colorArgb))
+                                symStops.add(0.5f - orig * 0.5f to Color(s.colorArgb))
+                            }
+                            symStops.sortBy { it.first }
+                            Brush.linearGradient(colorStops = symStops.toTypedArray(), start = p1Canvas - dir, end = p2Canvas, tileMode = tileMode)
+                        }
+                        GradientType.DIAMOND -> {
+                            val r = maxOf(1f, (p2Canvas - p1Canvas).getDistance())
+                            Brush.radialGradient(colorStops = colorStops, center = p1Canvas, radius = r, tileMode = tileMode)
+                        }
+                        else -> { // LINEAR
+                            Brush.linearGradient(colorStops = colorStops, start = p1Canvas, end = p2Canvas, tileMode = tileMode)
+                        }
+                    }
+
+                    // 1. 全幅画布渐变预览
+                    drawRect(
+                        brush = previewBrush,
+                        topLeft = Offset(-bmp.width / 2f, -bmp.height / 2f),
+                        size = androidx.compose.ui.geometry.Size(bmp.width.toFloat(), bmp.height.toFloat()),
+                        alpha = gradientState.opacity,
+                        blendMode = composeBlendMode,
+                    )
+
+                    // 2. 渐变轴线与手柄
+                    drawLine(
+                        Color.Black.copy(alpha = 0.6f),
+                        p1Canvas,
+                        p2Canvas,
+                        strokeWidth = 3.5.dp.toPx() / currentScale,
+                    )
+                    drawLine(
+                        Color.White,
+                        p1Canvas,
+                        p2Canvas,
+                        strokeWidth = 1.5.dp.toPx() / currentScale,
+                    )
+
+                    // 轴中点平移手柄
+                    val midPt = (p1Canvas + p2Canvas) / 2f
+                    drawCircle(
+                        Color.Black.copy(alpha = 0.7f),
+                        radius = 7.dp.toPx() / currentScale,
+                        center = midPt,
+                    )
+                    drawCircle(
+                        if (gradientState.activeHandle == GradientHandleId.MID_BODY) Morandi.accent else Color.White,
+                        radius = 5.dp.toPx() / currentScale,
+                        center = midPt,
+                    )
+                    drawCircle(
+                        if (gradientState.activeHandle == GradientHandleId.MID_BODY) Color.White else Morandi.accent,
+                        radius = 2.5.dp.toPx() / currentScale,
+                        center = midPt,
+                    )
+
+                    // 轴上多色标小手柄
+                    effectiveStops.forEachIndexed { idx, s ->
+                        val stopPt = p1Canvas + (p2Canvas - p1Canvas) * s.position
+                        val isSelected = gradientState.activeHandle == GradientHandleId.STOP_BASE + idx
+                        drawCircle(
+                            Color.Black.copy(alpha = 0.7f),
+                            radius = 6.dp.toPx() / currentScale,
+                            center = stopPt,
+                        )
+                        drawCircle(
+                            if (isSelected) Morandi.accent else Color.White,
+                            radius = 4.5.dp.toPx() / currentScale,
+                            center = stopPt,
+                        )
+                        drawCircle(
+                            Color(s.colorArgb),
+                            radius = 3.dp.toPx() / currentScale,
+                            center = stopPt,
+                        )
+                    }
+
+                    // 起点手柄 (P1)
+                    val firstCol = effectiveStops.firstOrNull()?.colorArgb?.let { Color(it) } ?: Color.Black
+                    drawCircle(
+                        Color.Black.copy(alpha = 0.7f),
+                        radius = 9.dp.toPx() / currentScale,
+                        center = p1Canvas,
+                    )
+                    drawCircle(
+                        if (gradientState.activeHandle == GradientHandleId.START) Morandi.accent else Color.White,
+                        radius = 7.dp.toPx() / currentScale,
+                        center = p1Canvas,
+                    )
+                    drawCircle(
+                        firstCol,
+                        radius = 5.dp.toPx() / currentScale,
+                        center = p1Canvas,
+                    )
+
+                    // 终点手柄 (P2)
+                    val lastCol = effectiveStops.lastOrNull()?.colorArgb?.let { Color(it) } ?: Color.White
+                    drawCircle(
+                        Color.Black.copy(alpha = 0.7f),
+                        radius = 9.dp.toPx() / currentScale,
+                        center = p2Canvas,
+                    )
+                    drawCircle(
+                        if (gradientState.activeHandle == GradientHandleId.END) Morandi.accent else Color.White,
+                        radius = 7.dp.toPx() / currentScale,
+                        center = p2Canvas,
+                    )
+                    drawCircle(
+                        lastCol,
+                        radius = 5.dp.toPx() / currentScale,
+                        center = p2Canvas,
+                    )
                 }
 
                 // Interactive Typography Tool Rendering (Handles + WYSIWYG Preview)

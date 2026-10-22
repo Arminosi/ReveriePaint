@@ -78,6 +78,7 @@ import com.reverie.paint.model.RecordingEvents.T_FILL_V3
 import com.reverie.paint.model.RecordingEvents.T_ENCLOSE_FILL
 import com.reverie.paint.model.RecordingEvents.T_GRADIENT
 import com.reverie.paint.model.RecordingEvents.T_GRADIENT_V2
+import com.reverie.paint.model.RecordingEvents.T_GRADIENT_V3
 import com.reverie.paint.model.RecordingEvents.T_REDO
 import com.reverie.paint.model.RecordingEvents.T_CANVAS_COPY
 import com.reverie.paint.model.RecordingEvents.T_CANVAS_CUT
@@ -950,6 +951,30 @@ private fun PaintViewModel.dispatchToolOpLocked(
             val repeat = r.u8()
             val reverse = r.u8() != 0
             ReverieCoreBridge.gradientFill(x1, y1, x2, y2, t, repeat, reverse)
+        }
+
+        T_GRADIENT_V3 -> {
+            val x1 = r.f32().toInt()
+            val y1 = r.f32().toInt()
+            val x2 = r.f32().toInt()
+            val y2 = r.f32().toInt()
+            val t = r.u8()
+            val repeat = r.u8()
+            val reverse = r.u8() != 0
+            val opacity = r.f32()
+            val dither = r.u8() != 0
+            val blendMode = r.str()
+            val numStops = r.u16()
+            val pos = FloatArray(numStops)
+            val cols = IntArray(numStops)
+            for (i in 0 until numStops) {
+                pos[i] = r.f32()
+                cols[i] = r.u32().toInt()
+            }
+            ReverieCoreBridge.gradientFillV3(
+                x1, y1, x2, y2, t, repeat, reverse,
+                opacity, blendMode, dither, pos, cols
+            )
         }
 
         T_UNDO -> {

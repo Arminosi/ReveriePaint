@@ -23,6 +23,7 @@ import com.reverie.paint.model.*
 import com.reverie.paint.model.RecordingEvents.T_CLEAR_SELECTION
 import com.reverie.paint.model.RecordingEvents.T_FILL_V3
 import com.reverie.paint.model.RecordingEvents.T_GRADIENT_V2
+import com.reverie.paint.model.RecordingEvents.T_GRADIENT_V3
 import com.reverie.paint.model.RecordingEvents.T_REDO
 import com.reverie.paint.model.RecordingEvents.T_UNDO
 import com.reverie.paint.model.RecordingEvents.T_CONTIGUOUS_V2
@@ -1075,6 +1076,97 @@ internal fun PaintViewModel.gradientFill(
         }
     }
     runCore { ReverieCoreBridge.gradientFill(x1, y1, x2, y2, type, repeat, reverse) }
+}
+
+internal fun PaintViewModel.gradientFillV3(
+    x1: Int,
+    y1: Int,
+    x2: Int,
+    y2: Int,
+    type: Int = gradientType,
+    repeat: Int = gradientRepeat,
+    reverse: Boolean = gradientReverse,
+    opacity: Float = 1f,
+    blendMode: String = "normal",
+    dither: Boolean = true,
+    stopPositions: FloatArray = floatArrayOf(0f, 1f),
+    stopColors: IntArray = intArrayOf(android.graphics.Color.BLACK, android.graphics.Color.WHITE),
+) {
+    if (recorder.recording) {
+        recorder.toolOp(T_GRADIENT_V3) {
+            it.f32(x1.toFloat())
+            it.f32(y1.toFloat())
+            it.f32(x2.toFloat())
+            it.f32(y2.toFloat())
+            it.u8(type)
+            it.u8(repeat.coerceIn(0, 255))
+            it.u8(if (reverse) 1 else 0)
+            it.f32(opacity)
+            it.u8(if (dither) 1 else 0)
+            it.str(blendMode)
+            val nStops = minOf(stopPositions.size, stopColors.size).coerceIn(0, 65535)
+            it.u16(nStops)
+            for (i in 0 until nStops) {
+                it.f32(stopPositions[i])
+                it.u32(stopColors[i])
+            }
+        }
+    }
+    runCore {
+        ReverieCoreBridge.gradientFillV3(
+            x1, y1, x2, y2, type, repeat, reverse,
+            opacity, blendMode, dither, stopPositions, stopColors
+        )
+    }
+}
+
+internal fun PaintViewModel.commitActiveGradient() {
+    val state = gradientState
+    if (!state.active) return
+    val p1 = state.p1
+    val p2 = state.p2
+    if (p1 == p2) {
+        state.clear()
+        return
+    }
+
+    val fgColor = try {
+        androidx.compose.ui.graphics.Color(android.graphics.Color.parseColor(brushColor))
+    } catch (_: Exception) {
+        androidx.compose.ui.graphics.Color.Black
+    }
+    val bgColor = try {
+        androidx.compose.ui.graphics.Color(android.graphics.Color.parseColor(brushSecondaryColor))
+    } catch (_: Exception) {
+        androidx.compose.ui.graphics.Color.White
+    }
+
+    val effectiveStops = state.getEffectiveStops(fgColor, bgColor)
+    val stopPositions = FloatArray(effectiveStops.size) { effectiveStops[it].position }
+    val stopColors = IntArray(effectiveStops.size) { effectiveStops[it].colorArgb }
+
+    gradientFillV3(
+        x1 = p1.x.toInt(),
+        y1 = p1.y.toInt(),
+        x2 = p2.x.toInt(),
+        y2 = p2.y.toInt(),
+        type = state.type.id,
+        repeat = state.repeat.id,
+        reverse = state.reverse,
+        opacity = state.opacity,
+        blendMode = state.blendMode,
+        dither = state.dither,
+        stopPositions = stopPositions,
+        stopColors = stopColors,
+    )
+
+    state.clear()
+    showActionToast(R.string.toast_shape_created, R.drawable.ic_check)
+}
+
+internal fun PaintViewModel.cancelActiveGradient() {
+    gradientState.clear()
+    showActionToast(R.string.toast_cancelled, R.drawable.ic_x)
 }
 
 internal fun PaintViewModel.selectShape(

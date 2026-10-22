@@ -374,11 +374,14 @@ bool ReverieCore::renderToBuffer(quint8 *buffer, int w, int h, bool forceFull)
                 break;
             }
         }
-        if ((!gate.waitForMerger && !m_nativeProjectionValid) || (m_nativeProjectionValid && hasSpecialCompositeLayer)) {
-            if (m_drawing || hasSpecialCompositeLayer || !m_dirtyRect.isEmpty()) {
-                // 逐块合成离散脏区, 不再先把几处笔迹并成一个大包围盒再整体合成。
-                compositeDirtyRegions(proj);
-            }
+        const bool haveDirtyWork =
+            m_drawing || hasSpecialCompositeLayer || !m_dirtyRect.isEmpty();
+        const bool mustComposite =
+            m_drawing || hasSpecialCompositeLayer ||
+            !m_nativeProjectionValid || gate.waitForMerger;
+        if (haveDirtyWork && mustComposite) {
+            // 逐块合成离散脏区, 不再先把几处笔迹并成一个大包围盒再整体合成。
+            compositeDirtyRegions(proj);
         }
         m_nativeProjectionValid = false;
     }

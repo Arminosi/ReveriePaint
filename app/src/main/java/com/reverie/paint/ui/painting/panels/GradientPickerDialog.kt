@@ -166,21 +166,85 @@ fun GradientPickerDialog(
                         .border(1.dp, Morandi.panelHi, RoundedCornerShape(10.dp)),
                 )
 
-                // 3. 多色标滑动轨道 (支持点击空白处添加色标，点击手柄唤出选色器浮窗，拖动手柄移动位置)
+                // 3. 多色标滑动轨道 (支持点击空白处添加色标，大半径命中手柄防误触，拖动手柄移动位置)
+                val density = androidx.compose.ui.platform.LocalDensity.current
+                val hitThresholdPx = with(density) { 26.dp.toPx() } // ±26dp 触摸保护热区，防误触新建
+
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(34.dp)
+                        .height(36.dp)
                         .onGloballyPositioned { trackWidthPx = it.size.width.toFloat().coerceAtLeast(1f) }
                         .pointerInput(stops) {
-                            detectTapGestures { offset ->
-                                val clickPos = (offset.x / trackWidthPx).coerceIn(0f, 1f)
-                                // 插值计算点击位置的颜色
-                                val interpolatedColor = interpolateColorAt(sortedStops, clickPos)
-                                val newStop = EditableStop(clickPos, interpolatedColor)
-                                stops.add(newStop)
-                                selectedStopIndex = stops.lastIndex
-                                showColorPicker = true
+                            awaitEachGesture {
+                                val down = awaitFirstDown()
+                                val touchX = down.position.x
+
+                                // 寻找距离点击位置最近的色标
+                                var nearestIdx = -1
+                                var minDist = Float.MAX_VALUE
+                                for (i in stops.indices) {
+                                    val hCenter = stops[i].pos * trackWidthPx
+                                    val d = kotlin.math.abs(hCenter - touchX)
+                                    if (d < minDist) {
+                                        minDist = d
+                                        nearestIdx = i
+                                    }
+                                }
+
+                                if (nearestIdx != -1 && minDist <= hitThresholdPx) {
+                                    // 命中了现有色标手柄大热区！在此区域内永远优先操作手柄，绝不误触创建新色标
+                                    selectedStopIndex = nearestIdx
+                                    val targetStop = stops[nearestIdx]
+                                    var isDrag = false
+                                    down.consume()
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                        if (change.pressed) {
+                                            val dragDist = kotlin.math.abs(change.position.x - down.position.x)
+                                            if (!isDrag && dragDist > 6.dp.toPx()) {
+                                                isDrag = true
+                                            }
+                                            if (isDrag) {
+                                                val delta = (change.position.x - change.previousPosition.x) / trackWidthPx
+                                                targetStop.pos = (targetStop.pos + delta).coerceIn(0f, 1f)
+                                                change.consume()
+                                            }
+                                        } else {
+                                            if (!isDrag) {
+                                                // 确定是轻点色标 -> 直接唤出通用颜色选择器浮窗
+                                                selectedStopIndex = nearestIdx
+                                                showColorPicker = true
+                                            }
+                                            break
+                                        }
+                                    }
+                                } else {
+                                    // 距离所有色标都很远的完全空白区域
+                                    var isMoved = false
+                                    down.consume()
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                        if (change.pressed) {
+                                            if (kotlin.math.abs(change.position.x - down.position.x) > 6.dp.toPx()) {
+                                                isMoved = true
+                                            }
+                                        } else {
+                                            if (!isMoved) {
+                                                // 纯粹的轻点空白区域，才创建新色标并打开选色浮窗
+                                                val clickPos = (touchX / trackWidthPx).coerceIn(0f, 1f)
+                                                val interpolatedColor = interpolateColorAt(sortedStops, clickPos)
+                                                val newStop = EditableStop(clickPos, interpolatedColor)
+                                                stops.add(newStop)
+                                                selectedStopIndex = stops.lastIndex
+                                                showColorPicker = true
+                                            }
+                                            break
+                                        }
+                                    }
+                                }
                             }
                         },
                 ) {
@@ -194,12 +258,12 @@ fun GradientPickerDialog(
                             .background(Morandi.panelHi),
                     )
 
-                    // 色标手柄列表
+                    // 色标手柄列表 (纯视觉呈现，手势全由父容器统一分发判定)
                     stops.forEachIndexed { idx, stop ->
                         val isSelected = idx == selectedStopIndex
                         Box(
                             modifier = Modifier
-                                .offset { IntOffset((stop.pos * trackWidthPx - 12.dp.toPx()).toInt(), 3.dp.toPx().toInt()) }
+                                .offset { IntOffset((stop.pos * trackWidthPx - 12.dp.toPx()).toInt(), 4.dp.toPx().toInt()) }
                                 .size(24.dp)
                                 .shadow(if (isSelected) 6.dp else 2.dp, CircleShape)
                                 .clip(CircleShape)
@@ -211,36 +275,7 @@ fun GradientPickerDialog(
                                 )
                                 .padding(3.5.dp)
                                 .clip(CircleShape)
-                                .background(stop.color)
-                                .pointerInput(idx) {
-                                    awaitEachGesture {
-                                        val down = awaitFirstDown()
-                                        selectedStopIndex = idx
-                                        var isDrag = false
-                                        while (true) {
-                                            val event = awaitPointerEvent()
-                                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                                            if (change.pressed) {
-                                                val dragDelta = change.position - down.position
-                                                if (!isDrag && hypot(dragDelta.x, dragDelta.y) > 4f) {
-                                                    isDrag = true
-                                                }
-                                                if (isDrag) {
-                                                    val delta = (change.position.x - change.previousPosition.x) / trackWidthPx
-                                                    stop.pos = (stop.pos + delta).coerceIn(0f, 1f)
-                                                    change.consume()
-                                                }
-                                            } else {
-                                                if (!isDrag) {
-                                                    // 轻点手柄直接开启选色器浮窗
-                                                    selectedStopIndex = idx
-                                                    showColorPicker = true
-                                                }
-                                                break
-                                            }
-                                        }
-                                    }
-                                },
+                                .background(stop.color),
                         )
                     }
                 }

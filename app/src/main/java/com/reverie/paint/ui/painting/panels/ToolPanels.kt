@@ -126,13 +126,10 @@ fun GradientPanel(
 
     ToolFloatPanel(modifier = Modifier, vm = vm, hazeState = hazeState) {
         Column(
-            modifier = Modifier.widthIn(min = 280.dp, max = 360.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -217,7 +214,7 @@ fun GradientPanel(
             ) {
                 Column(
                     modifier = Modifier
-                        .fillMaxWidth()
+                        .widthIn(min = 280.dp, max = 340.dp)
                         .padding(top = 2.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {

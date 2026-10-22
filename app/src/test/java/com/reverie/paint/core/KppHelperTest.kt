@@ -662,4 +662,15 @@ class KppHelperTest {
         val parsed2 = KppHelper.parseKppAttributes(xml2)
         assertEquals(42.0, parsed2.paintOpSize ?: 0.0, 0.001)
     }
+
+    @Test
+    fun `parseKppAttributes 能够正确解析主笔尖 tipAsset`() {
+        val xml1 = """<Preset name="AbrBrush"><param name="brush_definition"><![CDATA[<Brush filename="sample_tip_1.png" scale="0.5"/>]]></param></Preset>"""
+        val parsed1 = KppHelper.parseKppAttributes(xml1)
+        assertEquals("sample_tip_1.png", parsed1.tipAsset)
+
+        val xml2 = """<Preset name="AbrBrush2"><param name="requiredBrushFile"><![CDATA[fallback_tip.gbr]]></param></Preset>"""
+        val parsed2 = KppHelper.parseKppAttributes(xml2)
+        assertEquals("fallback_tip.gbr", parsed2.tipAsset)
+    }
 }

@@ -613,6 +613,7 @@ object KppHelper {
         val maskingSizeRatio: Double? = null,
         val maskingSpacing: Double? = null,
         val maskingTipAsset: String? = null,
+        val tipAsset: String? = null,
         val rotationSensor: String? = null,
         val rotation: Double? = null,
         val scatterSensor: String? = null,
@@ -734,6 +735,9 @@ object KppHelper {
         val maskingBrushDef = Regex("""<param[^>]*name="MaskingBrush/Preset/brush_definition"[^>]*>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?\s*</param>""", RegexOption.DOT_MATCHES_ALL).find(xml)?.groupValues?.getOrNull(1)
         val maskingTipAsset = maskingBrushDef?.let { Regex("""filename="([^"]+)"""").find(it)?.groupValues?.getOrNull(1) }
 
+        val tipAsset = Regex("""<Brush\b[^>]*\bfilename="([^"]+)"""").find(tipXml)?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() }
+            ?: Regex("""<param[^>]*name="requiredBrushFile"[^>]*>(?:<!\[CDATA\[)?([^<\]]+)""").find(xml)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.isNotBlank() }
+
         // Sensor attributes
         val rotationSensor = Regex("""<param[^>]*name="RotationSensor"[^>]*>.*?<params\b[^>]*\bid="([^"]+)"""", RegexOption.DOT_MATCHES_ALL).find(xml)?.groupValues?.getOrNull(1)
         val reverieRotation = Regex("""<param[^>]*name="ReverieRotation"[^>]*>(?:<!\[CDATA\[)?([^<\]]+)""").find(xml)?.groupValues?.getOrNull(1)?.toDoubleOrNull()
@@ -805,6 +809,7 @@ object KppHelper {
             maskingSizeRatio = maskingSizeRatio,
             maskingSpacing = maskingSpacing,
             maskingTipAsset = maskingTipAsset,
+            tipAsset = tipAsset,
             rotationSensor = rotationSensor,
             rotation = reverieRotation,
             scatterSensor = scatterSensor,

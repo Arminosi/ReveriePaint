@@ -583,29 +583,54 @@ import kotlinx.coroutines.withContext
     }
 
     /** Reset all parameters for the current brush back to factory defaults */
+    private fun PaintViewModel.resetSingleBrushPresetState(presetName: String) {
+        val dir = File(appContext.filesDir, "paintoppresets")
+        val isMyb = File(dir, "$presetName.myb").exists() || (appContext.assets.list("paintoppresets")?.contains("$presetName.myb") == true)
+        val ext = if (isMyb) "myb" else "kpp"
+        val target = File(dir, "$presetName.$ext")
+        val assetNames = appContext.assets.list("paintoppresets") ?: emptyArray()
+        val isAssetPreset = assetNames.contains("$presetName.$ext")
+        if (isAssetPreset) {
+            try {
+                appContext.assets.open("paintoppresets/$presetName.$ext").use { input ->
+                    target.outputStream().use { output -> input.copyTo(output) }
+                }
+            } catch (_: Exception) {}
+            brushParams.remove(presetName)
+        } else {
+            // 外部导入预设 (ABR / Bundle): assets 里无母本, 绝不能直接 remove 导致 tipAsset 与出厂尺寸蒸发
+            val parsed = if (target.exists()) KppHelper.parseKppFile(target) else null
+            val pIdx = brushPresets.firstOrNull { it.name == presetName }?.index ?: -1
+            val d = if (pIdx >= 0) ReverieCoreBridge.brushPresetDefaults(pIdx) else DoubleArray(0)
+            val baseSize = parsed?.paintOpSize ?: d.getOrNull(0) ?: 20.0
+            val baseTip = parsed?.tipAsset ?: brushParams[presetName]?.tipAsset ?: ""
+            val defaultParams = BrushParams(
+                size = if (baseSize > 0.0) baseSize else 20.0,
+                opacity = d.getOrNull(1)?.coerceIn(0.0, 1.0) ?: 1.0,
+                flow = d.getOrNull(2)?.coerceIn(0.0, 1.0) ?: 1.0,
+                spacing = d.getOrNull(3)?.coerceIn(0.01, 2.5) ?: 0.15,
+                angle = d.getOrNull(8) ?: 0.0,
+                ratio = parsed?.ratio ?: d.getOrNull(11) ?: 1.0,
+                tipAsset = baseTip,
+                fade = parsed?.fade ?: KppHelper.FADE_SOLID,
+                softness = parsed?.softness ?: KppHelper.SOFTNESS_NEUTRAL,
+                isCustomized = true,
+                dynamicsCustomized = parsed?.sensorXml?.isNotEmpty() == true,
+            )
+            brushParams[presetName] = defaultParams
+        }
+        persistBrushParams()
+        toolBrushStates = toolBrushStates.mapValues { (_, s) ->
+            s.copy(paramMemory = s.paramMemory - presetName)
+        }
+        persistToolBrushStates()
+    }
+
     internal fun PaintViewModel.resetBrushParams() {
         val index = brushPresetIndex
         val preset = brushPresets.firstOrNull { it.index == index }
         if (preset != null) {
-            val dir = File(appContext.filesDir, "paintoppresets")
-            val isMyb = File(dir, "${preset.name}.myb").exists() || (appContext.assets.list("paintoppresets")?.contains("${preset.name}.myb") == true)
-            val ext = if (isMyb) "myb" else "kpp"
-            val target = File(dir, "${preset.name}.$ext")
-            try {
-                val assetNames = appContext.assets.list("paintoppresets") ?: emptyArray()
-                if (assetNames.contains("${preset.name}.$ext")) {
-                    appContext.assets.open("paintoppresets/${preset.name}.$ext").use { input ->
-                        target.outputStream().use { output -> input.copyTo(output) }
-                    }
-                }
-            } catch (_: Exception) {}
-
-            brushParams.remove(preset.name)
-            persistBrushParams()
-            toolBrushStates = toolBrushStates.mapValues { (_, s) ->
-                s.copy(paramMemory = s.paramMemory - preset.name)
-            }
-            persistToolBrushStates()
+            resetSingleBrushPresetState(preset.name)
         }
         if (index >= 0) {
             selectBrushPreset(index)
@@ -676,25 +701,7 @@ import kotlinx.coroutines.withContext
 
     /** Reset a brush preset back to factory default parameters */
     internal fun PaintViewModel.resetBrushPresetToDefault(presetName: String) {
-        val dir = File(appContext.filesDir, "paintoppresets")
-        val isMyb = File(dir, "$presetName.myb").exists() || (appContext.assets.list("paintoppresets")?.contains("$presetName.myb") == true)
-        val ext = if (isMyb) "myb" else "kpp"
-        val target = File(dir, "$presetName.$ext")
-        try {
-            val assetNames = appContext.assets.list("paintoppresets") ?: emptyArray()
-            if (assetNames.contains("$presetName.$ext")) {
-                appContext.assets.open("paintoppresets/$presetName.$ext").use { input ->
-                    target.outputStream().use { output -> input.copyTo(output) }
-                }
-            }
-        } catch (_: Exception) {}
-
-        brushParams.remove(presetName)
-        persistBrushParams()
-        toolBrushStates = toolBrushStates.mapValues { (_, s) ->
-            s.copy(paramMemory = s.paramMemory - presetName)
-        }
-        persistToolBrushStates()
+        resetSingleBrushPresetState(presetName)
 
         val preset = brushPresets.firstOrNull { it.name == presetName }
         if (preset != null && preset.index == brushPresetIndex) {
@@ -1077,10 +1084,48 @@ import kotlinx.coroutines.withContext
                 )
             } else {
                 ReverieCoreBridge.setBrushCompositeOp(effectiveCompOp)
-                if (saved?.tipAsset?.isNotEmpty() == true) {
-                    ReverieCoreBridge.setBrushTipAsset(saved.tipAsset)
+                val effTip = saved?.tipAsset?.takeIf { it.isNotEmpty() } ?: parsed.tipAsset
+                if (!effTip.isNullOrEmpty()) {
+                    ReverieCoreBridge.setBrushTipAsset(effTip)
                 } else {
                     ReverieCoreBridge.setBrushTipAsset("")
+                }
+                if (saved?.dynamicsCustomized == true) {
+                    if (saved.dynamicOptions.isNotEmpty()) {
+                        for ((opt, xml) in saved.dynamicOptions) {
+                            val sensorId = Regex("""id="([^"]+)"""").find(xml)?.groupValues?.getOrNull(1) ?: "pressure"
+                            val curve = Regex("""<curve>([^<]*)</curve>""").find(xml)?.groupValues?.getOrNull(1) ?: "0,0;1,1;"
+                            val enabledAttr = Regex("""enabled="([^"]+)"""").find(xml)?.groupValues?.getOrNull(1)?.toBooleanStrictOrNull()
+                            val strengthAttr = Regex("""strength="([^"]+)"""").find(xml)?.groupValues?.getOrNull(1)?.toDoubleOrNull()
+                            val strength = strengthAttr ?: when (opt.lowercase()) {
+                                "size" -> saved.pressureSize
+                                "opacity" -> saved.pressureOpacity
+                                "flow" -> saved.pressureFlow
+                                else -> 1.0
+                            }
+                            val isEnabled = enabledAttr ?: when (opt.lowercase()) {
+                                "size" -> saved.pressureEnabled && saved.pressureSize > 0.001
+                                "opacity" -> saved.pressureEnabled && saved.pressureOpacity > 0.001
+                                "flow" -> saved.pressureEnabled && saved.pressureFlow > 0.001
+                                else -> true
+                            }
+                            ReverieCoreBridge.setBrushOptionDynamics(
+                                opt,
+                                isEnabled,
+                                sensorId,
+                                curve,
+                                strength,
+                            )
+                        }
+                    } else {
+                        ReverieCoreBridge.setBrushPressureDynamics(
+                            saved.pressureEnabled,
+                            saved.pressureSize,
+                            saved.pressureOpacity,
+                            saved.pressureFlow,
+                            saved.pressureCurve,
+                        )
+                    }
                 }
             }
             fetchBrushOutlinePolygons()
@@ -1849,7 +1894,7 @@ import kotlinx.coroutines.withContext
                         author = "外部创作者 (ABR)",
                         isAuthorLocked = true,
                         description = "导入自 Photoshop ABR 笔刷包: $packBaseName",
-                        isCustomized = false,
+                        isCustomized = true,
                         dynamicsCustomized = hasDynamics,
                         smudgeCustomized = false,
                     )

@@ -1341,12 +1341,16 @@ internal fun PaintViewModel.applyTransform(
         }
     }
     val copyOnly = transformCopyOnly
+    val wasSelectionPending = isSelectionTransformPending
     runCore(render = true, after = {
         notifyLayerChanged(pixelChanged = true)
         refreshSelection()
         transformPreviewBitmap = null
         transformCopyOnly = false
         isSelectionTransformPending = false
+        if (wasSelectionPending) {
+            clearSelection()
+        }
     }) {
         val targets = layers.toIntArray()
         ReverieCoreBridge.applyTransformLayersEx(
@@ -1395,10 +1399,15 @@ internal fun PaintViewModel.applyPerspectiveTransform(
             it.f64(origH)
         }
     }
+    val wasSelectionPending = isSelectionTransformPending
     runCore(render = true, after = {
         notifyLayerChanged(pixelChanged = true)
         refreshSelection()
         transformPreviewBitmap = null
+        isSelectionTransformPending = false
+        if (wasSelectionPending) {
+            clearSelection()
+        }
     }) {
         ReverieCoreBridge.applyPerspectiveTransform(
             x0,
@@ -1448,10 +1457,15 @@ internal fun PaintViewModel.applyWarpMeshTransform(
     val tx = DoubleArray(count) { transfPoints[it].x.toDouble() }
     val ty = DoubleArray(count) { transfPoints[it].y.toDouble() }
 
+    val wasSelectionPending = isSelectionTransformPending
     runCore(render = true, after = {
         notifyLayerChanged(pixelChanged = true)
         refreshSelection()
         transformPreviewBitmap = null
+        isSelectionTransformPending = false
+        if (wasSelectionPending) {
+            clearSelection()
+        }
     }) {
         ReverieCoreBridge.applyWarpMeshTransform(
             ox,

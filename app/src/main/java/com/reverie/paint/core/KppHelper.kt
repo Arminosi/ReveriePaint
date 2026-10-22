@@ -622,6 +622,7 @@ object KppHelper {
         val pressureSize: Double? = null,
         val pressureOpacity: Double? = null,
         val pressureFlow: Double? = null,
+        val paintOpSize: Double? = null,
         /**
          * 动力学曲线原文: optionKey(如 Size/Opacity/Flow/Rotation) -> `<Key>Sensor` param 全文。
          * 读回后灌回 brushDynamicOptions, UI 显示的曲线才与引擎实际生效的一致。
@@ -780,6 +781,9 @@ object KppHelper {
             if (!body.isNullOrEmpty()) sensorXml[key] = body
         }
 
+        val paintOpSize = Regex("""<param[^>]*name="paintopSize"[^>]*>(?:<!\[CDATA\[)?([^<\]]+)""").find(xml)?.groupValues?.getOrNull(1)?.toDoubleOrNull()
+            ?: Regex("""<MaskGenerator\b[^>]*\bdiameter="([^"]+)"""").find(tipXml)?.groupValues?.getOrNull(1)?.toDoubleOrNull()
+
         return KppParsedAttributes(
             fade = fade,
             softness = softness,
@@ -811,6 +815,7 @@ object KppHelper {
             pressureSize = pressureSize,
             pressureOpacity = pressureOpacity,
             pressureFlow = pressureFlow,
+            paintOpSize = paintOpSize,
         )
     }
 

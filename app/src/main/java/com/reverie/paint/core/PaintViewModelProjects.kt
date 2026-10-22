@@ -478,6 +478,10 @@ internal fun PaintViewModel.loadProject(p: com.reverie.paint.model.Project) {
             }
             isBlockingLoading = false
             startPaintingTimer()
+            val curPreset = brushPresetIndex
+            if (curPreset >= 0) {
+                selectBrushPreset(curPreset)
+            }
             if (isRecovered) {
                 showActionToast(R.string.toast_project_restored_autosave, R.drawable.ic_save)
             } else if (isHealed) {
@@ -1352,6 +1356,10 @@ internal fun PaintViewModel.startPainting(
                 android.os.SystemClock.uptimeMillis() + PaintViewModel.NEW_CANVAS_FRONT_BUFFER_QUIET_MS
             isBlockingLoading = false
             startPaintingTimer()
+            val curPreset = brushPresetIndex
+            if (curPreset >= 0) {
+                selectBrushPreset(curPreset)
+            }
             if (animation) {
                 anim.enabled = true
                 anim.panelOpen = true

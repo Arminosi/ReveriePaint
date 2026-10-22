@@ -740,8 +740,8 @@ import kotlinx.coroutines.withContext
 
     internal fun resolvePresetSize(engineSize: Double, savedSize: Double?): Double {
         if (engineSize.isFinite() && engineSize > 1.0) return engineSize
-        if (savedSize == null || !savedSize.isFinite() || savedSize <= 1.0) return engineSize
-        return savedSize
+        if (savedSize != null && savedSize.isFinite() && savedSize > 1.0) return savedSize
+        return if (engineSize.isFinite()) engineSize else 20.0
     }
 
     internal fun PaintViewModel.selectBrushPreset(index: Int) {
@@ -877,7 +877,7 @@ import kotlinx.coroutines.withContext
                 val parsed = if (kppFile?.exists() == true) KppHelper.parseKppFile(kppFile) else KppHelper.KppParsedAttributes()
 
                 if (d.size >= 8) {
-                    brushSize = resolvePresetSize(d[0], saved?.size)
+                    brushSize = resolvePresetSize(d[0], saved?.size ?: parsed.paintOpSize)
                     brushOpacity = d[1].coerceIn(0.0, 1.0)
                     brushFlow = d[2].coerceIn(0.0, 1.0)
                     val rawSp = d[3]
@@ -890,7 +890,7 @@ import kotlinx.coroutines.withContext
                     brushColorRate = d[6]
                     brushSmudgeMode = 0
                 } else if (d.size >= 3) {
-                    brushSize = resolvePresetSize(d[0], saved?.size)
+                    brushSize = resolvePresetSize(d[0], saved?.size ?: parsed.paintOpSize)
                     brushOpacity = d[1].coerceIn(0.0, 1.0)
                     brushFlow = d[2].coerceIn(0.0, 1.0)
                     brushSpacing = 0.1
@@ -980,18 +980,22 @@ import kotlinx.coroutines.withContext
                 } catch (_: Exception) {
                 }
             }
+            val kppFile = preset?.name?.let { File(File(appContext.filesDir, "paintoppresets"), "$it.kpp") }
+            val parsed = if (kppFile?.exists() == true) KppHelper.parseKppFile(kppFile) else KppHelper.KppParsedAttributes()
+            val d = if (index >= 0) ReverieCoreBridge.brushPresetDefaults(index) else DoubleArray(0)
             val mem = toolBrushStates[currentToolId]?.paramMemory?.get(preset?.name)
             val effSize = mem?.getOrNull(0) ?: (if (isCustomized) saved?.size else null)
-            val effOpacity = mem?.getOrNull(1) ?: (if (isCustomized) saved?.opacity else null)
-            val effFlow = mem?.getOrNull(2) ?: (if (isCustomized) saved?.flow else null)
-            if (effSize != null && effSize.isFinite()) {
-                ReverieCoreBridge.setBrushSize(effSize)
+            val finalSize = effSize ?: resolvePresetSize(d.getOrNull(0) ?: 0.0, saved?.size ?: parsed.paintOpSize)
+            if (finalSize.isFinite() && finalSize > 0.0) {
+                ReverieCoreBridge.setBrushSize(finalSize)
             }
+            val effOpacity = mem?.getOrNull(1) ?: (if (isCustomized) saved?.opacity else null) ?: d.getOrNull(1)?.takeIf { it.isFinite() }
+            val effFlow = mem?.getOrNull(2) ?: (if (isCustomized) saved?.flow else null) ?: d.getOrNull(2)?.takeIf { it.isFinite() }
             if (effOpacity != null && effOpacity.isFinite()) {
-                ReverieCoreBridge.setBrushOpacity(effOpacity)
+                ReverieCoreBridge.setBrushOpacity(effOpacity.coerceIn(0.0, 1.0))
             }
             if (effFlow != null && effFlow.isFinite()) {
-                ReverieCoreBridge.setBrushFlow(effFlow)
+                ReverieCoreBridge.setBrushFlow(effFlow.coerceIn(0.0, 1.0))
             }
             if (saved != null && isCustomized) {
                 if (saved.spacingCustomized) {

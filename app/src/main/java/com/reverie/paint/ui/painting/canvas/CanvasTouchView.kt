@@ -611,9 +611,10 @@ class CanvasTouchView(context: Context) : View(context) {
             return
         }
         val v = vm
-        val bmp = v?.displayBitmap ?: docBitmap
-        val bmpW = (bmp?.width ?: v?.renderW?.takeIf { it > 0 } ?: v?.docWidth ?: 1).toFloat()
-        val bmpH = (bmp?.height ?: v?.renderH?.takeIf { it > 0 } ?: v?.docHeight ?: 1).toFloat()
+        val tiles = v?.displayTiles?.drawable()
+        val bmp = if (tiles != null) null else (v?.displayBitmap ?: docBitmap)?.takeIf { !it.isRecycled }
+        val bmpW = (tiles?.grid?.width ?: bmp?.width ?: v?.docWidth?.takeIf { it > 0 } ?: 1).toFloat()
+        val bmpH = (tiles?.grid?.height ?: bmp?.height ?: v?.docHeight?.takeIf { it > 0 } ?: 1).toFloat()
         val docW = (if (v != null && v.docWidth > 0) v.docWidth else bmpW.toInt()).toFloat()
         val docH = (if (v != null && v.docHeight > 0) v.docHeight else bmpH.toInt()).toFloat()
         val scX = bmpW / docW
@@ -5370,8 +5371,9 @@ class CanvasTouchView(context: Context) : View(context) {
                 } else {
                     val now = android.os.SystemClock.uptimeMillis()
                     val currentScale = maxOf(0.01f, canvasZoom * canvasFitScale)
-                    val bmp = v.displayBitmap ?: docBitmap
-                    val bmpW = (bmp?.width ?: v.renderW.takeIf { it > 0 } ?: v.docWidth).toFloat()
+                    val tiles = v.displayTiles.drawable()
+                    val bmp = if (tiles != null) null else (v.displayBitmap ?: docBitmap)?.takeIf { !it.isRecycled }
+                    val bmpW = (tiles?.grid?.width ?: bmp?.width ?: v.docWidth.takeIf { it > 0 } ?: 1).toFloat()
                     val docW = (if (v.docWidth > 0) v.docWidth else bmpW.toInt()).toFloat()
                     val bmpPerDoc = (bmpW / docW).coerceAtLeast(0.001f)
                     val snapDistThreshold = (24f * density) / (currentScale * bmpPerDoc)
@@ -6835,8 +6837,9 @@ class CanvasTouchView(context: Context) : View(context) {
                     }
                     lassoPoints.clear()
                 } else {
-                    val bmp = v.displayBitmap ?: docBitmap
-                    val bmpW = (bmp?.width ?: v.renderW.takeIf { it > 0 } ?: v.docWidth).toFloat()
+                    val tiles = v.displayTiles.drawable()
+                    val bmp = if (tiles != null) null else (v.displayBitmap ?: docBitmap)?.takeIf { !it.isRecycled }
+                    val bmpW = (tiles?.grid?.width ?: bmp?.width ?: v.docWidth.takeIf { it > 0 } ?: 1).toFloat()
                     val docW = (if (v.docWidth > 0) v.docWidth else bmpW.toInt()).toFloat()
                     val bmpPerDoc = (bmpW / docW).coerceAtLeast(0.001f)
                     val currentScale = maxOf(0.01f, canvasZoom * canvasFitScale)

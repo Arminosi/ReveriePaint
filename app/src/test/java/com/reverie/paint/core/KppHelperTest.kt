@@ -651,4 +651,15 @@ class KppHelperTest {
         assertTrue("SizeUseCurve 应为 true", updatedXml.contains("""name="SizeUseCurve"><![CDATA[true]]></param>"""))
         assertTrue("FlowUseCurve 应为 false (压感流量为0)", updatedXml.contains("""name="FlowUseCurve"><![CDATA[false]]></param>"""))
     }
+
+    @Test
+    fun `parseKppAttributes 能够正确解析 paintOpSize 参数与 MaskGenerator 直径`() {
+        val xml1 = """<Preset name="Test" paintopid="paintbrush"><param name="paintopSize" type="string"><![CDATA[88.5]]></param></Preset>"""
+        val parsed1 = KppHelper.parseKppAttributes(xml1)
+        assertEquals(88.5, parsed1.paintOpSize ?: 0.0, 0.001)
+
+        val xml2 = """<Preset name="Test2" paintopid="paintbrush"><param name="brush_definition"><![CDATA[<MaskGenerator diameter="42.0" type="circle"/>]]></param></Preset>"""
+        val parsed2 = KppHelper.parseKppAttributes(xml2)
+        assertEquals(42.0, parsed2.paintOpSize ?: 0.0, 0.001)
+    }
 }

@@ -181,9 +181,13 @@ internal fun CanvasOverlay(
         val hasActiveSelection = (vm.hasSelection && !isTransform) || isSelecting
         val animFraction = if (hasActiveSelection) selAnimFraction.value else 0f
 
+        val tiles = vm.displayTiles.drawable()
+        val displayBmp = if (tiles != null) null else vm.displayBitmap?.takeIf { !it.isRecycled }
+        val bmpW = tiles?.grid?.width ?: displayBmp?.width ?: vm.docWidth.takeIf { it > 0 } ?: 1
+        val bmpH = tiles?.grid?.height ?: displayBmp?.height ?: vm.docHeight.takeIf { it > 0 } ?: 1
         val bmp = object {
-            val width: Int = if (vm.renderW > 0) vm.renderW else vm.docWidth
-            val height: Int = if (vm.renderH > 0) vm.renderH else vm.docHeight
+            val width: Int = bmpW
+            val height: Int = bmpH
         }
         val imgW = bmp.width.toFloat()
         val imgH = bmp.height.toFloat()

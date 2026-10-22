@@ -4,6 +4,12 @@
 
 package com.reverie.paint.ui.painting.panels
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,6 +18,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -118,9 +126,13 @@ fun GradientPanel(
 
     ToolFloatPanel(modifier = Modifier, vm = vm, hazeState = hazeState) {
         Column(
+            modifier = Modifier.widthIn(min = 280.dp, max = 360.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -197,49 +209,64 @@ fun GradientPanel(
                 }
             }
 
-            // 展开高级属性 (重复模式、混合模式、反向、防色彩断层抖动、独立不透明度)
-            if (propsOpen) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+            // 展开高级属性 (平滑垂直展开动画，两行布局规避横向挤爆)
+            androidx.compose.animation.AnimatedVisibility(
+                visible = propsOpen,
+                enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.expandVertically(),
+                exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.shrinkVertically(),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 2.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    // 重复模式下拉
-                    ToolBubbleDropdown(
-                        items = gradientRepeatOptions,
-                        selected = repeat,
-                        onSelect = onRepeat,
-                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        // 重复模式下拉
+                        ToolBubbleDropdown(
+                            items = gradientRepeatOptions,
+                            selected = repeat,
+                            onSelect = onRepeat,
+                        )
 
-                    // 混合模式下拉
-                    ToolBubbleDropdown(
-                        items = gradientBlendOptions,
-                        selected = state.blendMode,
-                        onSelect = { state.blendMode = it },
-                    )
+                        // 混合模式下拉
+                        ToolBubbleDropdown(
+                            items = gradientBlendOptions,
+                            selected = state.blendMode,
+                            onSelect = { state.blendMode = it },
+                        )
 
-                    // 反向按钮
-                    ToolActionButton(
-                        iconRes = R.drawable.ic_refresh,
-                        label = androidx.compose.ui.res.stringResource(R.string.gradient_reverse),
-                        active = reverse,
-                        onClick = { onReverse(!reverse) },
-                    )
+                        // 反向按钮
+                        ToolActionButton(
+                            iconRes = R.drawable.ic_refresh,
+                            label = androidx.compose.ui.res.stringResource(R.string.gradient_reverse),
+                            active = reverse,
+                            onClick = { onReverse(!reverse) },
+                        )
 
-                    // 防色彩断层仿色抖动
-                    ToolFloatChip(
-                        label = androidx.compose.ui.res.stringResource(R.string.gradient_dither),
-                        selected = state.dither,
-                        onClick = { state.dither = !state.dither },
+                        // 防色彩断层仿色抖动
+                        ToolFloatChip(
+                            label = androidx.compose.ui.res.stringResource(R.string.gradient_dither),
+                            selected = state.dither,
+                            onClick = { state.dither = !state.dither },
+                        )
+                    }
+
+                    ToolFloatSlider(
+                        label = androidx.compose.ui.res.stringResource(R.string.gradient_opacity),
+                        valueText = "${(state.opacity * 100).toInt()}%",
+                        range = 1f..100f,
+                        value = (state.opacity * 100f).coerceIn(1f, 100f),
+                        onValue = { state.opacity = it / 100f },
+                        labelWidth = 56.dp,
                     )
                 }
-
-                ToolFloatSlider(
-                    label = androidx.compose.ui.res.stringResource(R.string.gradient_opacity),
-                    valueText = "${(state.opacity * 100).toInt()}%",
-                    range = 1f..100f,
-                    value = (state.opacity * 100f).coerceIn(1f, 100f),
-                    onValue = { state.opacity = it / 100f },
-                )
             }
         }
     }

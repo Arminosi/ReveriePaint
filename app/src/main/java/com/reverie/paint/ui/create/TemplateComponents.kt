@@ -150,10 +150,10 @@ fun TemplateStudioSection(
                 val targetCat = if (selectedCategory == TemplateManager.CATEGORY_ALL) TemplateManager.CATEGORY_UNCATEGORIZED else selectedCategory
                 val imported = TemplateManager.importExternalTemplate(context, uri, targetCat)
                 if (imported != null) {
-                    Toast.makeText(context, context.getString(R.string.template_import_success, imported.name), Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, context.resources.getString(R.string.template_import_success, imported.name), Toast.LENGTH_SHORT).show()
                     refreshData()
                 } else {
-                    Toast.makeText(context, context.getString(R.string.template_import_failed), Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, context.resources.getString(R.string.template_import_failed), Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -428,7 +428,7 @@ fun TemplateStudioSection(
                                             if (newProject != null) {
                                                 vm.loadProject(newProject)
                                             } else {
-                                                Toast.makeText(context, context.getString(R.string.template_save_failed), Toast.LENGTH_SHORT).show()
+                                                Toast.makeText(context, context.resources.getString(R.string.template_save_failed), Toast.LENGTH_SHORT).show()
                                             }
                                         }
                                     }

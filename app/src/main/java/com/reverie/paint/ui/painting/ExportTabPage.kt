@@ -717,7 +717,7 @@ private fun StaticExportSection(
                 onDismiss = { showSaveTemplateDialog = false },
                 onSuccess = {
                     showSaveTemplateDialog = false
-                    Toast.makeText(context, context.getString(R.string.template_save_success), Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, context.resources.getString(R.string.template_save_success), Toast.LENGTH_SHORT).show()
                     onClose()
                 },
             )
@@ -935,7 +935,7 @@ private fun SaveAsTemplateDialog(
                                     if (result != null) {
                                         onSuccess()
                                     } else {
-                                        Toast.makeText(context, context.getString(R.string.template_save_failed), Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, context.resources.getString(R.string.template_save_failed), Toast.LENGTH_SHORT).show()
                                     }
                                 }
                             },
@@ -1470,10 +1470,11 @@ private fun AnimationExportSection(
 
     // 导出动画时的模态进度弹窗
     if (isExporting) {
+        val cancelingText = stringResource(R.string.export_anim_canceling)
         Dialog(
             onDismissRequest = {
                 exportCancelled = true
-                exportStage = context.getString(R.string.export_anim_canceling)
+                exportStage = cancelingText
             },
         ) {
             Column(
@@ -1528,11 +1529,11 @@ private fun AnimationExportSection(
                 }
                 Spacer(Modifier.height(4.dp))
                 ReTextButton(
-                    text = if (exportCancelled) stringResource(R.string.export_anim_canceling) else stringResource(R.string.export_anim_cancel_btn),
+                    text = if (exportCancelled) cancelingText else stringResource(R.string.export_anim_cancel_btn),
                     textColor = if (exportCancelled) Morandi.subText.copy(alpha = 0.5f) else Morandi.subText,
                     onClick = {
                         exportCancelled = true
-                        exportStage = context.getString(R.string.export_anim_canceling)
+                        exportStage = cancelingText
                     },
                 )
             }

@@ -66,6 +66,13 @@ private fun getFillSampleOptions(): List<ToolDropdownItemData<Int>> = listOf(
     ToolDropdownItemData(1, R.drawable.ic_layers, androidx.compose.ui.res.stringResource(R.string.selection_all_layers)),
 )
 
+@Composable
+private fun getGradientSourceOptions(): List<ToolDropdownItemData<Int>> = listOf(
+    ToolDropdownItemData(0, R.drawable.ic_circle, androidx.compose.ui.res.stringResource(R.string.gradient_dynamic_fg_trans)),
+    ToolDropdownItemData(1, R.drawable.ic_palette, androidx.compose.ui.res.stringResource(R.string.gradient_dynamic_fg_bg)),
+    ToolDropdownItemData(2, R.drawable.ic_sliders, androidx.compose.ui.res.stringResource(R.string.gradient_custom_presets)),
+)
+
 /** Gradient tool options: type, repeat, reverse, multi-stops, blend mode, opacity, handles confirm/cancel */
 @Composable
 fun GradientPanel(
@@ -89,9 +96,16 @@ fun GradientPanel(
         try { Color(android.graphics.Color.parseColor(vm.brushSecondaryColor)) } catch (_: Exception) { Color.White }
     }
 
+    val gradientSourceOptions = getGradientSourceOptions()
     val gradientTypeOptions = getGradientTypeOptions()
     val gradientRepeatOptions = getGradientRepeatOptions()
     val gradientBlendOptions = getGradientBlendOptions()
+
+    val currentSourceMode = when {
+        state.isDynamicFgTrans -> 0
+        state.isDynamicFgBg -> 1
+        else -> 2
+    }
 
     if (showPresetDialog) {
         GradientPickerDialog(
@@ -105,13 +119,12 @@ fun GradientPanel(
     ToolFloatPanel(modifier = Modifier, vm = vm, hazeState = hazeState) {
         Column(
             verticalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.width(if (propsOpen) 320.dp else androidx.compose.ui.unit.Dp.Unspecified),
         ) {
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // 渐变色预览胶囊 (点击打开色板库弹窗)
+                // 渐变色预览胶囊 (点击打开色标与预设弹窗)
                 val effectiveStops = state.getEffectiveStops(fgColor, bgColor)
                 val brushColors = if (effectiveStops.size >= 2) {
                     effectiveStops.map { it.position to Color(it.colorArgb) }.toTypedArray()
@@ -121,48 +134,42 @@ fun GradientPanel(
 
                 Box(
                     modifier = Modifier
-                        .height(32.dp)
-                        .width(48.dp)
+                        .height(30.dp)
+                        .width(44.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .background(androidx.compose.ui.graphics.Brush.horizontalGradient(colorStops = brushColors))
                         .border(1.dp, Morandi.panelHi, RoundedCornerShape(8.dp))
-                        .noRippleClickable { showPresetDialog = true },
+                        .noRippleClickable {
+                            if (state.isDynamicFgTrans || state.isDynamicFgBg) {
+                                state.setCustomStops(state.getEffectiveStops(fgColor, bgColor))
+                            }
+                            showPresetDialog = true
+                        },
                 )
 
-                // 动态快捷槽: 前->透
-                ToolFloatChip(
-                    label = androidx.compose.ui.res.stringResource(R.string.gradient_dynamic_fg_trans),
-                    selected = state.isDynamicFgTrans,
-                    onClick = { state.setDynamicFgTrans() },
+                // 色彩来源下拉: 前->透 / 前->背 / 自定义预设
+                ToolBubbleDropdown(
+                    items = gradientSourceOptions,
+                    selected = currentSourceMode,
+                    onSelect = { mode ->
+                        when (mode) {
+                            0 -> state.setDynamicFgTrans()
+                            1 -> state.setDynamicFgBg()
+                            2 -> {
+                                if (state.isDynamicFgTrans || state.isDynamicFgBg) {
+                                    state.setCustomStops(state.getEffectiveStops(fgColor, bgColor))
+                                }
+                                showPresetDialog = true
+                            }
+                        }
+                    },
                 )
 
-                // 动态快捷槽: 前->背
-                ToolFloatChip(
-                    label = androidx.compose.ui.res.stringResource(R.string.gradient_dynamic_fg_bg),
-                    selected = state.isDynamicFgBg,
-                    onClick = { state.setDynamicFgBg() },
-                )
-
-                // 渐变类型下拉 (5种类型)
+                // 渐变形状类型下拉 (5种类型)
                 ToolBubbleDropdown(
                     items = gradientTypeOptions,
                     selected = type,
                     onSelect = onType,
-                )
-
-                // 重复模式下拉
-                ToolBubbleDropdown(
-                    items = gradientRepeatOptions,
-                    selected = repeat,
-                    onSelect = onRepeat,
-                )
-
-                // 反向按钮
-                ToolActionButton(
-                    iconRes = R.drawable.ic_refresh,
-                    label = androidx.compose.ui.res.stringResource(R.string.gradient_reverse),
-                    active = reverse,
-                    onClick = { onReverse(!reverse) },
                 )
 
                 // 高级属性展开 (Sliders)
@@ -190,19 +197,35 @@ fun GradientPanel(
                 }
             }
 
-            // 展开高级属性 (不透明度、混合模式、防断层仿色抖动)
+            // 展开高级属性 (重复模式、混合模式、反向、防色彩断层抖动、独立不透明度)
             if (propsOpen) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    // 重复模式下拉
+                    ToolBubbleDropdown(
+                        items = gradientRepeatOptions,
+                        selected = repeat,
+                        onSelect = onRepeat,
+                    )
+
+                    // 混合模式下拉
                     ToolBubbleDropdown(
                         items = gradientBlendOptions,
                         selected = state.blendMode,
                         onSelect = { state.blendMode = it },
                     )
 
+                    // 反向按钮
+                    ToolActionButton(
+                        iconRes = R.drawable.ic_refresh,
+                        label = androidx.compose.ui.res.stringResource(R.string.gradient_reverse),
+                        active = reverse,
+                        onClick = { onReverse(!reverse) },
+                    )
+
+                    // 防色彩断层仿色抖动
                     ToolFloatChip(
                         label = androidx.compose.ui.res.stringResource(R.string.gradient_dither),
                         selected = state.dither,

@@ -265,6 +265,29 @@ fun PaintingPage(
     // 快捷键触发的视口/面板命令 (VM 不持有视口状态, 只发一次性命令 token)
     LaunchedEffect(vm.uiCommandTick) {
         val cmd = vm.pendingUiCommand ?: return@LaunchedEffect
+        val viewportStep = com.reverie.paint.model.CanvasViewportStep.fromCommand(cmd)
+        if (viewportStep != null) {
+            val view = canvasTouchView
+            if (vm.isViewTransformLocked) {
+                vm.showActionToast(R.string.toast_view_locked, R.drawable.ic_lock)
+            } else if (view?.isInteracting != true && view?.isTransformActive != true) {
+                val next = viewportStep.apply(
+                    view?.canvasZoom ?: zoom, view?.canvasRotation ?: rotation,
+                    view?.canvasPanX ?: panX, view?.canvasPanY ?: panY, locked = false,
+                )
+                if (next != null) {
+                    // 通过现有入口取消复位/吸附动画，避免下一帧又被旧动画覆盖。
+                    view?.applyViewTransform(next.zoom, next.rotation, next.panX, next.panY)
+                    zoom = next.zoom
+                    rotation = next.rotation
+                    panX = next.panX
+                    panY = next.panY
+                    flashIndicator()
+                }
+            }
+            vm.consumeUiCommand()
+            return@LaunchedEffect
+        }
         when (cmd) {
             "zoom_in" -> {
                 zoom = (zoom * 1.2f).coerceAtMost(16f)

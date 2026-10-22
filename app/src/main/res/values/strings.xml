@@ -913,6 +913,10 @@
     <string name="toast_canvas_flip_h_done">已完全水平翻转画布</string>
     <string name="toast_canvas_flip_v_done">已完全垂直翻转画布</string>
     <string name="quick_action_reset_view">居中回正</string>
+    <string name="quick_action_zoom_in">放大画布</string>
+    <string name="quick_action_zoom_out">缩小画布</string>
+    <string name="quick_action_rotate_ccw">左转 15°</string>
+    <string name="quick_action_rotate_cw">右转 15°</string>
     <string name="quick_action_undo">撤销</string>
     <string name="quick_action_redo">重做</string>
     <string name="quick_action_toggle_eraser">画笔/橡皮</string>

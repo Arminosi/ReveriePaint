@@ -1476,6 +1476,10 @@ class PaintViewModel : ViewModel() {
             com.reverie.paint.model.QuickAction.RESET_VIEW -> {
                 requestUiCommand("reset_view")
             }
+            com.reverie.paint.model.QuickAction.ZOOM_IN -> requestUiCommand(CanvasViewportStep.ZOOM_IN.command)
+            com.reverie.paint.model.QuickAction.ZOOM_OUT -> requestUiCommand(CanvasViewportStep.ZOOM_OUT.command)
+            com.reverie.paint.model.QuickAction.ROTATE_CCW -> requestUiCommand(CanvasViewportStep.ROTATE_CCW.command)
+            com.reverie.paint.model.QuickAction.ROTATE_CW -> requestUiCommand(CanvasViewportStep.ROTATE_CW.command)
             com.reverie.paint.model.QuickAction.UNDO -> {
                 undo()
             }

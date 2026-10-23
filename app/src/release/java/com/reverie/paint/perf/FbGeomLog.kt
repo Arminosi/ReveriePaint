@@ -4,7 +4,9 @@
 
 package com.reverie.paint.perf
 
+import android.graphics.Bitmap
 import com.reverie.paint.model.CanvasPose
+import com.reverie.paint.model.HoleMaskGrid
 
 /**
  * 前缓冲真墨几何日志在**正式版里不存在**: 与 debug 版同签名的空实现
@@ -65,5 +67,32 @@ internal object FbGeomLog {
         canvasBounds: IntArray,
         clippedCount: Int,
     ) {
+    }
+
+    const val identityCheckEnabled: Boolean = false
+    const val timingEnabled: Boolean = false
+
+    fun holeMaskBuilt(gen: Int, w: Int, h: Int, holePixels: Long, coverage: Float, buildNs: Long) {
+    }
+
+    fun holeArm(strokeSeq: Long, mode: Int, arm: Int, coverage: Float) {
+    }
+
+    fun holePacket(strokeSeq: Long, rects: Int, hitRects: Int, hitArea: Long, testNs: Long, decision: Int) {
+    }
+
+    fun holeRedrawRequested() {
+    }
+
+    fun holeWindowDraw(ns: Long) {
+    }
+
+    fun frontPresented(ns: Long) {
+    }
+
+    fun holeStrokeEnd(strokeSeq: Long) {
+    }
+
+    fun identityCheck(layer: Bitmap, grid: HoleMaskGrid, rects: IntArray, count: Int) {
     }
 }

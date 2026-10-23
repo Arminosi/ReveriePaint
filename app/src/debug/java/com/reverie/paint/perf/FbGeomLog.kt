@@ -4,12 +4,14 @@
 
 package com.reverie.paint.perf
 
+import android.graphics.Bitmap
 import android.os.SystemClock
 import android.util.Log
 import com.reverie.paint.core.PerfTrace
 import com.reverie.paint.core.stylus.FrontBufferProbe
 import com.reverie.paint.model.CanvasPose
 import com.reverie.paint.model.FrontBufferReadyGate
+import com.reverie.paint.model.HoleMaskGrid
 
 /**
  * 前缓冲真墨的几何日志 (开发/真机定位用, **debug 构建专属**; release 源集是同签名空实现)。
@@ -193,6 +195,159 @@ internal object FbGeomLog {
         if (bakedCount > n) sb.append(" (+").append(bakedCount - n).append(" more)")
         Log.i(TAG, sb.toString())
     }
+
+    // ================= H-min 孔洞 (H-7) =================
+    //
+    //     adb shell setprop debug.reverie.perf 1
+    //     adb logcat -s FbGeomLog:I
+    //     ev=hole_mask  gen=.. 1600x2560 holePx=.. cov=0.031 build=1.84ms      (后台线程, 几何变化后)
+    //     ev=hole_arm   seq=.. mode=hmin arm=WITH_MASK cov=0.031
+    //     ev=hole_end   seq=.. packets=.. hit=.. rects=.. hitRects=.. hitArea=..px
+    //                   test=avg/max us window=n avg/max us front=n avg/max us handback=.. idViolations=..
+    //
+    // 一致性自检 (逐包扫备份层孔洞像素必须全 0, 很慢, 只为验收):
+    //     adb shell setprop debug.reverie.fb_identity_check 1   (重启应用生效)
+    //     ev=identity_mismatch seq=.. rect=l,t-r,b bad=.. (每笔最多 8 行)
+
+    /** 一致性自检开关 (进程内只读一次, 不依赖 PerfTrace)。 */
+    val identityCheckEnabled: Boolean by lazy { PerfTrace.debugPropInt("debug.reverie.fb_identity_check", 0) == 1 }
+
+    /** 热路径计时是否值得取 nanoTime。 */
+    val timingEnabled: Boolean get() = PerfTrace.enabled
+
+    private val holeLock = Any()
+    private var hSeq = 0L
+    private var hPackets = 0L
+    private var hHitPackets = 0L
+    private var hRects = 0L
+    private var hHitRects = 0L
+    private var hHitArea = 0L
+    private var hTestNs = 0L
+    private var hTestMax = 0L
+    private var hWindowN = 0L
+    private var hWindowNs = 0L
+    private var hWindowMax = 0L
+    private var hFrontN = 0L
+    private var hFrontNs = 0L
+    private var hFrontMax = 0L
+    private var hHandback = 0L
+    private var hRedrawReq = 0L
+    private var hIdBad = 0L
+    private var hIdLines = 0
+    private var idRow: IntArray = IntArray(0)
+
+    fun holeMaskBuilt(gen: Int, w: Int, h: Int, holePixels: Long, coverage: Float, buildNs: Long) {
+        if (!PerfTrace.enabled) return
+        Log.i(TAG, "ev=hole_mask gen=$gen ${w}x$h holePx=$holePixels cov=${fmt3(coverage)} build=${ms(buildNs)}ms")
+    }
+
+    fun holeArm(strokeSeq: Long, mode: Int, arm: Int, coverage: Float) {
+        if (!PerfTrace.enabled) return
+        synchronized(holeLock) {
+            hSeq = strokeSeq
+            hPackets = 0; hHitPackets = 0; hRects = 0; hHitRects = 0; hHitArea = 0
+            hTestNs = 0; hTestMax = 0; hWindowN = 0; hWindowNs = 0; hWindowMax = 0
+            hFrontN = 0; hFrontNs = 0; hFrontMax = 0; hHandback = 0; hRedrawReq = 0; hIdBad = 0; hIdLines = 0
+        }
+        val m = when (mode) { 1 -> "hmin"; 2 -> "e"; else -> "off" }
+        val a = when (arm) { 0 -> "NO_HOLES"; 1 -> "WITH_MASK"; else -> "NORMAL" }
+        Log.i(TAG, "ev=hole_arm seq=$strokeSeq mode=$m arm=$a cov=${fmt3(coverage)}")
+    }
+
+    /** 渲染线程, 每包一次 (只累加)。[decision] 见 FrontBufferHolePolicy.PACKET_*。 */
+    fun holePacket(strokeSeq: Long, rects: Int, hitRects: Int, hitArea: Long, testNs: Long, decision: Int) {
+        if (!PerfTrace.enabled) return
+        synchronized(holeLock) {
+            if (strokeSeq != hSeq) return
+            hPackets++
+            hRects += rects
+            if (hitRects > 0) hHitPackets++
+            hHitRects += hitRects
+            hHitArea += hitArea
+            hTestNs += testNs
+            if (testNs > hTestMax) hTestMax = testNs
+            if (decision == 2) hHandback++
+        }
+    }
+
+    fun holeRedrawRequested() {
+        if (!PerfTrace.enabled) return
+        synchronized(holeLock) { hRedrawReq++ }
+    }
+
+    /** UI 线程: 按住且有孔洞时主窗口 onDraw 的耗时 (录制侧)。 */
+    fun holeWindowDraw(ns: Long) {
+        if (!PerfTrace.enabled) return
+        synchronized(holeLock) {
+            hWindowN++
+            hWindowNs += ns
+            if (ns > hWindowMax) hWindowMax = ns
+        }
+    }
+
+    /** GL 线程: 有孔洞的笔画每个前缓冲包的绘制耗时 (CPU 侧, 不含 GPU)。 */
+    fun frontPresented(ns: Long) {
+        if (!PerfTrace.enabled) return
+        synchronized(holeLock) {
+            hFrontN++
+            hFrontNs += ns
+            if (ns > hFrontMax) hFrontMax = ns
+        }
+    }
+
+    fun holeStrokeEnd(strokeSeq: Long) {
+        if (!PerfTrace.enabled) return
+        val line = synchronized(holeLock) {
+            if (strokeSeq != hSeq || hPackets == 0L && hFrontN == 0L) return
+            hSeq = -1
+            "ev=hole_end seq=$strokeSeq packets=$hPackets hit=$hHitPackets rects=$hRects hitRects=$hHitRects " +
+                "hitArea=${hHitArea}px ratio=${fmt3(if (hPackets > 0) hHitPackets.toFloat() / hPackets else 0f)} " +
+                "test=${us(avg(hTestNs, hPackets))}/${us(hTestMax)}us " +
+                "window=$hWindowN ${us(avg(hWindowNs, hWindowN))}/${us(hWindowMax)}us " +
+                "front=$hFrontN ${us(avg(hFrontNs, hFrontN))}/${us(hFrontMax)}us " +
+                "redrawReq=$hRedrawReq handback=$hHandback idViolations=$hIdBad"
+        }
+        Log.i(TAG, line)
+    }
+
+    /**
+     * GL 线程, 仅 [identityCheckEnabled]: 前缓冲备份层 [layer] (与前缓冲逐像素相同) 在孔洞像素上
+     * 必须完全透明。违反则记一行 (每笔最多 8 行) 并计数。
+     */
+    fun identityCheck(layer: Bitmap, grid: HoleMaskGrid, rects: IntArray, count: Int) {
+        if (!identityCheckEnabled) return
+        val lw = layer.width
+        val lh = layer.height
+        for (i in 0 until count) {
+            val d = i * 4
+            val l = rects[d].coerceIn(0, lw)
+            val t = rects[d + 1].coerceIn(0, lh)
+            val r = rects[d + 2].coerceIn(0, lw)
+            val b = rects[d + 3].coerceIn(0, lh)
+            if (r <= l || b <= t || !grid.anyExact(l, t, r, b)) continue
+            val w = r - l
+            if (idRow.size < w) idRow = IntArray(w)
+            var bad = 0
+            for (y in t until b) {
+                layer.getPixels(idRow, 0, w, l, y, w, 1)
+                for (x in 0 until w) {
+                    if (idRow[x] ushr 24 != 0 && grid.isHole(l + x, y)) bad++
+                }
+            }
+            if (bad > 0) {
+                val log = synchronized(holeLock) {
+                    hIdBad += bad
+                    hIdLines++ < 8
+                }
+                if (log) Log.w(TAG, "ev=identity_mismatch seq=$hSeq rect=$l,$t-$r,$b bad=$bad")
+            }
+        }
+    }
+
+    private fun avg(sum: Long, n: Long): Long = if (n > 0) sum / n else 0L
+    private fun us(ns: Long): String = String.format(java.util.Locale.US, "%.1f", ns / 1000f)
+    private fun ms(ns: Long): String = String.format(java.util.Locale.US, "%.2f", ns / 1_000_000f)
+    private fun fmt3(v: Float): String = String.format(java.util.Locale.US, "%.3f", v)
 
     private fun fmt(v: Float): String = String.format(java.util.Locale.US, "%.2f", v)
 }

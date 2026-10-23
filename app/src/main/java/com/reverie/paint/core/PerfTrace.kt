@@ -1054,6 +1054,10 @@ object PerfTrace {
     internal fun debugPropInt(key: String, def: Int): Int =
         runCatching { SystemPropertiesCompat.getInt(key, def) }.getOrDefault(def)
 
+    /** 字符串 property (未设/不可读时返回 [def])。 */
+    internal fun debugPropString(key: String, def: String): String =
+        runCatching { SystemPropertiesCompat.getString(key, def) }.getOrDefault(def)
+
     /** 允许用系统属性临时打开, 免去为了量一次数据重新出包 */
     fun refreshFromSystemProp() {
         isEnabledByProp = runCatching {
@@ -1086,6 +1090,12 @@ private object SystemPropertiesCompat {
         Class.forName("android.os.SystemProperties")
             .getMethod("get", String::class.java, String::class.java)
     }.getOrNull()
+
+    fun getString(key: String, def: String): String {
+        val m = getStringMethod ?: return def
+        val raw = runCatching { m.invoke(null, key, def) as? String }.getOrNull()
+        return if (raw.isNullOrEmpty()) def else raw
+    }
 
     /** 整数 property; 反射不可用或值非法时返回 [def] */
     fun getInt(key: String, def: Int): Int {

@@ -49,4 +49,13 @@ internal object CanvasDecorDraw {
             ),
         )
     }
+
+    /**
+     * 孔洞掩码用的蚂蚁线 (H-1): 不画虚线, 用两条线里更宽的黑线宽度画实线 —— 窗口里流动的虚线
+     * 无论相位怎么变都落在这条实线之内, 掩码不必随动画重建。
+     */
+    fun DrawScope.drawSelectionAntsMask(outlinePath: Path, scale: Float) {
+        val blackStrokeW = 1.4.dp.toPx() / scale
+        drawPath(path = outlinePath, color = Color.Black, style = Stroke(width = blackStrokeW))
+    }
 }

@@ -60,4 +60,12 @@ class FrontBufferHolePolicyTest {
         assertTrue(FrontBufferHolePolicy.clearAfterCommit(3, 2))
         assertTrue(FrontBufferHolePolicy.clearAfterCommit(1, -4))
     }
+
+    @Test
+    fun snapLinesOnlyWithAssistedSnapModes() {
+        assertFalse(FrontBufferHolePolicy.snapLinesPossible(false, true, true))
+        assertFalse(FrontBufferHolePolicy.snapLinesPossible(true, false, false))
+        assertTrue(FrontBufferHolePolicy.snapLinesPossible(true, true, false))
+        assertTrue(FrontBufferHolePolicy.snapLinesPossible(true, false, true))
+    }
 }

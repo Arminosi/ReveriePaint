@@ -61,6 +61,13 @@ object FrontBufferHolePolicy {
         return ARM_WITH_MASK
     }
 
+    /**
+     * 辅助绘图是否可能画动态吸附线 (透视 2D / 等距 / 二维网格)。吸附线贴着墨走, 孔洞会覆盖笔迹
+     * 主体, 这类笔画按 "其他覆盖层" 处理 (走常规路径)。
+     */
+    fun snapLinesPossible(assistedDrawing: Boolean, perspective2d: Boolean, isoOrGrid: Boolean): Boolean =
+        assistedDrawing && (perspective2d || isoOrGrid)
+
     fun decidePacket(mode: Int, hit: Boolean): Int = when {
         !hit || mode == MODE_OFF -> PACKET_PLAIN
         mode == MODE_E -> PACKET_HANDBACK

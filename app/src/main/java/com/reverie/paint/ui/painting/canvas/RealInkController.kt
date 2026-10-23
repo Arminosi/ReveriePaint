@@ -17,6 +17,7 @@ import com.reverie.paint.core.PaintViewModel
 import com.reverie.paint.core.PublishedTiles
 import com.reverie.paint.core.RealInkSink
 import com.reverie.paint.model.CanvasPose
+import com.reverie.paint.model.FrontBufferHolePolicy
 import com.reverie.paint.model.RealInkHoldPolicy
 import com.reverie.paint.model.RealInkPresent
 import com.reverie.paint.model.UiClipSnapshot
@@ -83,6 +84,27 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
 
     /** L-01: 动态吸附导引线快照 (UI 线程每次 MOVE 写, GL 线程读)。 */
     val guideSnapshot = DynamicGuideSnapshot()
+
+    /**
+     * H-1: 这一笔的孔洞掩码 (落笔时由视图按 [FrontBufferHolePolicy.decideArm] 给出, 笔画期间不变)。
+     * null = 当前没有覆盖层, 与无孔洞路径逐字节相同。
+     */
+    @Volatile
+    var strokeHoles: HoleMask? = null
+        private set
+
+    @Volatile
+    var holeMode: Int = FrontBufferHolePolicy.MODE_OFF
+        private set
+
+    // 渲染线程: 本帧命中孔洞的屏幕并集 (与面板孔径交集合并成一次窗口失效)。
+    private val invalidateBounds = IntArray(4)
+
+    /** 落笔判定前由视图调用 (UI 线程)。 */
+    fun setStrokeHoles(mask: HoleMask?, mode: Int) {
+        strokeHoles = mask
+        holeMode = mode
+    }
 
     /** 落笔时抓的 UI 避让区快照 (不可变; 覆盖层置顶, 墨不能盖到 UI 上)。 */
     @Volatile
@@ -163,6 +185,7 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
         guideSnapshot.clear()
         if (!hold) {
             held = false
+            strokeHoles = null
             uiClips = UiClipSnapshot.EMPTY
             cursorR = 0f
             tipWidth = 0f
@@ -193,6 +216,17 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
         symCursorCount = 0
     }
 
+    /**
+     * E 模式命中孔洞 (任一线程): 松开按住, 窗口全量重画接管这一笔剩余部分; 前缓冲上若已有墨,
+     * 等窗口追平那一帧提交后再清 (与抬笔同一机制)。
+     */
+    private fun handBack() {
+        FbGeomLog.holeStrokeEnd(strokeSeq)
+        release()
+        if (view.frontBufferOverlay?.hasInk == true) finishFrame(false)
+        view.postInvalidate()
+    }
+
     /** 中途释放并登记一次追赶: 主画布下一帧画完后清前缓冲, 避免停顿期间旧墨留在面板上。 */
     fun releaseAndCatchUp() {
         release()
@@ -220,9 +254,22 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
         if (e < 0) return
         // 前缓冲是单缓冲: 在 onDraw 录制期间立刻清, 覆盖层 <1ms 就透明了, 主画布这一帧却要等
         // 下一拍 VSYNC 才上屏, 中间漏出旧画布 (抬笔闪一下)。所以推迟到这一帧提交之后。
-        val clearAction = Runnable {
-            val current = synchronized(epochLock) { epoch }
-            if (!held && current == e) view.frontBufferOverlay?.clearInk()
+        val extra = FrontBufferFeatureFlags.clearDelayFrames
+        val clearAction = object : Runnable {
+            var commits = 0
+
+            override fun run() {
+                val current = synchronized(epochLock) { epoch }
+                if (held || current != e) return
+                commits++
+                // H-4: 窗口帧提交之后再多等 [extra] 个 VSYNC (默认 0 = 原行为)。postOnAnimation 不依赖
+                // 视图再画一帧, 空闲时也会按时触发。
+                if (FrontBufferHolePolicy.clearAfterCommit(commits, extra)) {
+                    view.frontBufferOverlay?.clearInk()
+                } else {
+                    view.postOnAnimation(this)
+                }
+            }
         }
         val vto = view.viewTreeObserver
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && vto.isAlive) {
@@ -236,6 +283,8 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
 
     /** 预测笔尖: 返回 true 时 [out] = `x, y, 直径`, `colorOut[0]` = 颜色。零分配。 */
     fun predictedTip(out: FloatArray, colorOut: IntArray): Boolean {
+        // H-3 严格同一性: 预测圆点是窗口里不存在的像素, 默认不画 (debug.reverie.fb_strict=0 恢复)。
+        if (FrontBufferFeatureFlags.strict) return false
         if (!held || view.isTransformActive || view.overlayPanelsOpen) return false
         val w = tipWidth
         val x = tipX
@@ -312,6 +361,7 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
     }
 
     override fun onStrokeCommitted() {
+        FbGeomLog.holeStrokeEnd(strokeSeq)
         release()
         // 收尾之后未必还有新像素的帧 (没有新脏区就不会走到 finishFrame), 而按住期间主画布一直
         // 没失效: 这里主动登记一次追赶并失效画布, 视图画完这一帧再清前缓冲。
@@ -415,6 +465,30 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
             // 整帧没有一块落在视口里: 没什么可贴, 丢弃本次快照免得越滚越大。
             return false
         }
+        // H-1/H-2: 逐块判定是否命中孔洞 (积分图 O(1) 排除, 只扫边界块; 零分配)。没有掩码时整段跳过。
+        val holes = strokeHoles
+        var holeHitBits = 0
+        if (holes != null) {
+            val t0 = if (FbGeomLog.timingEnabled) System.nanoTime() else 0L
+            val g = holes.grid
+            var hitArea = 0L
+            for (i in 0 until baked) {
+                val d = i * 4
+                if (g.anyExact(screenRects[d], screenRects[d + 1], screenRects[d + 2], screenRects[d + 3])) {
+                    holeHitBits = holeHitBits or (1 shl i)
+                    hitArea += (screenRects[d + 2] - screenRects[d]).toLong() * (screenRects[d + 3] - screenRects[d + 1])
+                }
+            }
+            val decision = FrontBufferHolePolicy.decidePacket(holeMode, holeHitBits != 0)
+            FbGeomLog.holePacket(seq, baked, Integer.bitCount(holeHitBits), hitArea,
+                if (t0 != 0L) System.nanoTime() - t0 else 0L, decision)
+            if (decision == FrontBufferHolePolicy.PACKET_HANDBACK) {
+                // E: 这一包不贴, 整笔交还常规路径 (窗口全量重画, 前缓冲旧墨待追平后清)。
+                // 本帧快照已经在显示瓦片里, 主画布重画即包含它, 不必归还积压。
+                handBack()
+                return false
+            }
+        }
         var minL = Int.MAX_VALUE
         var minT = Int.MAX_VALUE
         var maxR = Int.MIN_VALUE
@@ -479,6 +553,7 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
                 cursorX, cursorY, cursorR, cursorStyle, strokeWantsOverlayExtras,
                 clipsSnapshot, slot.busy, minL, minT, canvasBounds,
                 symCursorX, symCursorY, symCursorCount,
+                holes, holeHitBits,
             )
         if (!shown) {
             slot.busy.set(false)
@@ -492,6 +567,15 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
         // 孔径内前缓冲已被 clipOut 为全透明，必须唤醒主窗口 HWUI 在该交集区域
         // 重绘 CanvasTouchView，让真实圆角、软阴影与 50% 面板原生合成在新墨之上。
         // 未侵入时不触发任何主画布失效，PublishedTiles 保持 100% TILE_UNDRAWN。
+        // H-min: 命中孔洞的块同理 —— 前缓冲先上屏 (上面已提交), 再让窗口在命中区重画 (孔洞内的
+        // 墨与覆盖层由窗口合成)。两类区域并成一个矩形, 每帧至多一次 postInvalidateOnAnimation
+        // (同一 VSYNC 内多次调用由 Choreographer 合并)。都未命中时不触发任何主画布失效。
+        val inv = invalidateBounds
+        inv[0] = Int.MAX_VALUE
+        inv[1] = Int.MAX_VALUE
+        inv[2] = Int.MIN_VALUE
+        inv[3] = Int.MIN_VALUE
+        var needInvalidate = false
         if (!clipsSnapshot.isEmpty) {
             clipOverlapBounds[0] = Int.MAX_VALUE
             clipOverlapBounds[1] = Int.MAX_VALUE
@@ -512,13 +596,27 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
                 }
             }
             if (hasClipOverlap) {
-                view.postInvalidateOnAnimation(
-                    clipOverlapBounds[0].coerceAtLeast(0),
-                    clipOverlapBounds[1].coerceAtLeast(0),
-                    clipOverlapBounds[2].coerceAtMost(viewW),
-                    clipOverlapBounds[3].coerceAtMost(viewH),
-                )
+                RealInkPresent.unionInto(inv, clipOverlapBounds[0], clipOverlapBounds[1], clipOverlapBounds[2],
+                    clipOverlapBounds[3])
+                needInvalidate = true
             }
+        }
+        if (holeHitBits != 0) {
+            for (i in 0 until baked) {
+                if (holeHitBits and (1 shl i) == 0) continue
+                val d = i * 4
+                RealInkPresent.unionInto(inv, screenRects[d], screenRects[d + 1], screenRects[d + 2], screenRects[d + 3])
+            }
+            needInvalidate = true
+            FbGeomLog.holeRedrawRequested()
+        }
+        if (needInvalidate) {
+            view.postInvalidateOnAnimation(
+                inv[0].coerceAtLeast(0),
+                inv[1].coerceAtLeast(0),
+                inv[2].coerceAtMost(viewW),
+                inv[3].coerceAtMost(viewH),
+            )
         }
         return true
     }

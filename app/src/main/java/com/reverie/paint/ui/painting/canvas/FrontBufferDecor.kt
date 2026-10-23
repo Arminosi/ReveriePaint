@@ -135,8 +135,30 @@ internal class FrontBufferDecorRecorder(private val view: CanvasTouchView) {
         keyPose = null
     }
 
-    /** 按当前状态录一份; 什么都不可见时返回 null。 */
-    fun record(v: PaintViewModel, pose: CanvasPose, isTransform: Boolean): FrontBufferDecor? {
+    /**
+     * 当前是否有任何画在画布之上的装饰可见 (与 [record] 同一判据, 不录制, 只做几次比较)。
+     * 落笔时掩码过期, 用它区分"没有装饰 → 无孔洞直接按住"和"有装饰 → 这一笔走常规路径"。
+     */
+    fun anyVisible(v: PaintViewModel, pose: CanvasPose, isTransform: Boolean): Boolean {
+        if (view.width <= 0 || view.height <= 0) return false
+        if (CanvasDecorGeometry.pixelGridDrawn(v.pixelGridEnabled, pose.scale)) return true
+        val imgW = CanvasDecorGeometry.overlayBitmapSize(v.renderW, v.docWidth)
+        val imgH = CanvasDecorGeometry.overlayBitmapSize(v.renderH, v.docHeight)
+        if (imgW <= 0 || imgH <= 0) return false
+        if (CanvasDecorGeometry.guidesVisible(v.drawingGuide)) return true
+        return v.selectionOutlinePath != null && CanvasDecorGeometry.selectionOutlineVisible(
+            hasSelection = v.hasSelection,
+            isTransform = isTransform,
+            isSelecting = false,
+            selectionMode = v.selectionMode,
+        )
+    }
+
+    /**
+     * 按当前状态录一份; 什么都不可见时返回 null。[forMask] = true 时录孔洞掩码的源:
+     * 蚂蚁线画成覆盖全部虚线相位的实线 ([CanvasDecorDraw.drawSelectionAntsMask]), 其余与窗口同一函数。
+     */
+    fun record(v: PaintViewModel, pose: CanvasPose, isTransform: Boolean, forMask: Boolean = false): FrontBufferDecor? {
         val w = view.width
         val h = view.height
         hasKey = true
@@ -195,7 +217,11 @@ internal class FrontBufferDecorRecorder(private val view: CanvasTouchView) {
                             scale(pose.scale, pose.scale, pivot = Offset.Zero) {
                                 scale(pose.signX, pose.signY, pivot = Offset.Zero) {
                                     if (antsOn) {
-                                        with(CanvasDecorDraw) { drawSelectionAnts(outline!!, pose.scale, 0f) }
+                                        if (forMask) {
+                                            with(CanvasDecorDraw) { drawSelectionAntsMask(outline!!, pose.scale) }
+                                        } else {
+                                            with(CanvasDecorDraw) { drawSelectionAnts(outline!!, pose.scale, 0f) }
+                                        }
                                     }
                                     drawDrawingGuides(
                                         vm = v,

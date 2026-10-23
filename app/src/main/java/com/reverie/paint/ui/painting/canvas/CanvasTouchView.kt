@@ -316,6 +316,12 @@ class CanvasTouchView(context: Context) : View(context) {
     }
     private var localIsHovering = false
     private var localIsTouching = false
+
+    /** 运笔中 (孔洞掩码构建据此推迟到抬笔后)。 */
+    internal val strokeInProgress: Boolean get() = localIsTouching
+
+    /** H-1: 前缓冲孔洞掩码 (几何变化后在后台构建, 落笔只取现成的)。 */
+    internal val holeMasks by lazy(LazyThreadSafetyMode.NONE) { FrontBufferHoleMaskBuilder(this) }
     private var localPressure = 1f
     private var localCursorAngle = 0f
     private var lastCursorMoveDocX = Float.NaN
@@ -2521,6 +2527,7 @@ class CanvasTouchView(context: Context) : View(context) {
 
     override fun onDetachedFromWindow() {
         vm?.panelOcclusion?.onChanged = null
+        holeMasks.shutdown()
         android.view.Choreographer.getInstance().removeFrameCallback(fbGeomFrameCallback)
         fbGeomSampling = false
         fbGeomCounter.reset()
@@ -2602,6 +2609,12 @@ class CanvasTouchView(context: Context) : View(context) {
             }
         }
         if (!PerfHud.enabled) {
+            if (realInk.held && realInk.strokeHoles != null && com.reverie.paint.perf.FbGeomLog.timingEnabled) {
+                val th = System.nanoTime()
+                drawCanvas(canvas)
+                com.reverie.paint.perf.FbGeomLog.holeWindowDraw(System.nanoTime() - th)
+                return
+            }
             drawCanvas(canvas)
             return
         }
@@ -2859,6 +2872,11 @@ class CanvasTouchView(context: Context) : View(context) {
             canvas.restore()
             // 画布已经画出这一帧的瓦片: 抬笔后的真墨追赶到此为止, 这一帧提交后清前缓冲。
             realInk.clearIfViewCaughtUp()
+            // H-1: 装饰几何变了就 (防抖) 重建孔洞掩码 —— 只做引用/数值比较, 构建在后台线程。
+            // 按住运笔时窗口不重画, 这里也不会跑。
+            if (!realInk.held && !localIsTouching && FrontBufferFeatureFlags.holeMode != FrontBufferHolePolicy.MODE_OFF) {
+                realInk.pose?.let { holeMasks.scheduleIfStale(v, it) }
+            }
         }
 
         // Phase 2B: AGSL 形变预览覆盖层。引擎在"主机侧绘制"模式下不生成也不叠加 CPU 预览,
@@ -3135,6 +3153,9 @@ class CanvasTouchView(context: Context) : View(context) {
         // 3. 光标及对称参考线绘制 (Cursor & Guides)
         // 依据用户的光标模式设置独立渲染
         // =========================================================================
+        // H-3: 按住真墨时孔洞内的光标由窗口画 (与前缓冲同一函数/同一参数, 只取孔洞部分)。
+        drawHoleCursor(canvas)
+
         if (v.brushStudioOpen || v.moreSettingsOpen || overlayPanelsOpen) return
         if (!hasLocalCursorPos) return
         // 局部非空 Offset 为内联值类, 无堆分配
@@ -3165,6 +3186,7 @@ class CanvasTouchView(context: Context) : View(context) {
                 effTool() == Tool.ERASER && tool != Tool.ERASER -> v.getToolEffectiveSize("eraser").toFloat()
                 else -> v.brushSize.toFloat()
             }
+            val holdEmaSnapshot = smoothedCursorPressure
             val pressureFraction = if (localIsTouching) {
                 if (v.frontBufferPredictionEnabled) {
                     // 前缓冲预测: 预测压力 + EMA 阻尼 (防光标环呼吸抖动)
@@ -3185,6 +3207,9 @@ class CanvasTouchView(context: Context) : View(context) {
                 1f
             }
             val brushRadiusScreen = (cursorBrushSize * scale * 0.5f * pressureFraction).coerceAtLeast(2f)
+            // 按住期间这段 EMA 归前缓冲光标 (noteHoldCursor) 独占: 窗口因孔洞/UI 裁剪重画时不能
+            // 再推进一次, 否则前缓冲光标半径会随窗口重画频率变化。
+            if (realInk.held) smoothedCursorPressure = holdEmaSnapshot
             // 半径取"环半径"与"十字/点光标尺寸"的较大者: 后三种样式画的是小十字/圆点, 半径只有
             // 几个 dp, 但同样需要被覆盖
             lqRingValid = true
@@ -3298,6 +3323,75 @@ class CanvasTouchView(context: Context) : View(context) {
                 }
             }
         }
+    }
+
+    private val holeCursorPainter by lazy(LazyThreadSafetyMode.NONE) { HoldCursorPainter(density) }
+    private val holeCursorBox = IntArray(4)
+    private val holeCursorDstIn = Paint().apply {
+        xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_IN)
+        isFilterBitmap = false
+    }
+
+    // 上一次因光标压孔而失效的屏幕框 (noteHoldCursor 用来擦掉旧位置)
+    private var holeCursorBoxValid = false
+    private var holeCursorL = 0
+    private var holeCursorT = 0
+    private var holeCursorR = 0
+    private var holeCursorB = 0
+
+    private fun drawHoleCursor(canvas: Canvas) {
+        if (!realInk.held) return
+        val holes = realInk.strokeHoles ?: return
+        val bmp = holes.bitmap ?: return
+        val r = realInk.cursorR
+        if (r <= 0f || bmp.isRecycled) return
+        val b = holeCursorBox
+        if (!HoldCursorPainter.bounds(realInk.cursorX, realInk.cursorY, holeCursorPainter.half(r), realInk.symCursorX,
+                realInk.symCursorY, realInk.symCursorCount, b)
+        ) {
+            return
+        }
+        if (!holes.grid.anyExact(b[0], b[1], b[2], b[3])) return
+        canvas.saveLayer(b[0].toFloat(), b[1].toFloat(), b[2].toFloat(), b[3].toFloat(), null)
+        // 前缓冲在 UI 避让区外才画光标, 避让区里由下面的常规分支画; 这里同样避开, 免得叠两次。
+        val clips = uiClipSnapshot
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            for (i in 0 until clips.count) canvas.clipOutRect(clips.left(i), clips.top(i), clips.right(i), clips.bottom(i))
+        }
+        holeCursorPainter.drawAll(canvas, realInk.cursorX, realInk.cursorY, r, realInk.cursorStyle, realInk.symCursorX,
+            realInk.symCursorY, realInk.symCursorCount)
+        canvas.drawBitmap(bmp, 0f, 0f, holeCursorDstIn)
+        canvas.restore()
+    }
+
+    /**
+     * 按住期间光标框压到孔洞 (或上一次压到) 时让窗口重画这两个框; 其余情况零额外工作。
+     * 判定用 O(1) 的保守 [com.reverie.paint.model.HoleMaskGrid.anyInRect]。UI 线程。
+     */
+    private fun invalidateHoleCursor() {
+        val holes = realInk.strokeHoles
+        var hit = false
+        val b = holeCursorBox
+        if (holes != null && realInk.held && realInk.cursorR > 0f &&
+            HoldCursorPainter.bounds(realInk.cursorX, realInk.cursorY, holeCursorPainter.half(realInk.cursorR),
+                realInk.symCursorX, realInk.symCursorY, realInk.symCursorCount, b)
+        ) {
+            hit = holes.grid.anyInRect(b[0], b[1], b[2], b[3])
+        }
+        if (!hit && !holeCursorBoxValid) return
+        var l = Int.MAX_VALUE
+        var t = Int.MAX_VALUE
+        var r = Int.MIN_VALUE
+        var bt = Int.MIN_VALUE
+        if (holeCursorBoxValid) {
+            l = holeCursorL; t = holeCursorT; r = holeCursorR; bt = holeCursorB
+        }
+        if (hit) {
+            l = minOf(l, b[0]); t = minOf(t, b[1]); r = maxOf(r, b[2]); bt = maxOf(bt, b[3])
+            holeCursorL = b[0]; holeCursorT = b[1]; holeCursorR = b[2]; holeCursorB = b[3]
+        }
+        holeCursorBoxValid = hit
+        postInvalidateOnAnimation(maxOf(l, 0), maxOf(t, 0), minOf(r, width), minOf(bt, height))
     }
 
     private fun sampleColorAtScreenPos(screenPos: Offset) {
@@ -3547,14 +3641,42 @@ class CanvasTouchView(context: Context) : View(context) {
         rebuildUiExclusionSnapshot()
         ensureViewTransform()
         latchFrontBufferReady(v)
-        val allowed = v.frontBufferPredictionEnabled && (!hasSymmetry || v.mirrorGate.isQueueing) &&
+        var allowed = v.frontBufferPredictionEnabled && (!hasSymmetry || v.mirrorGate.isQueueing) &&
             v.displayTiles.drawable() != null && FrontBufferProbe.realInkHoldAllowed() &&
             strokeFbReady && !v.anim.shiftTraceActive
+        // H-1: 覆盖层 (参考线/对称轴/像素网格/选区蚂蚁线...) 在前缓冲上挖孔, 由窗口画孔内。
+        val holeMode = FrontBufferFeatureFlags.holeMode
+        var holeArm = FrontBufferHolePolicy.ARM_NO_HOLES
+        var holeMask: HoleMask? = null
+        var holeCov = 0f
+        if (allowed && holeMode != FrontBufferHolePolicy.MODE_OFF) {
+            val pose = realInk.pose
+            val other = holeOtherOverlayActive(v)
+            val mask = if (pose != null && !other) holeMasks.readyFor(v, pose) else null
+            val visible = when {
+                mask != null -> !mask.isEmpty
+                pose != null -> holeMasks.anyDecorVisible(v, pose)
+                else -> true
+            }
+            holeCov = mask?.grid?.coverage ?: 0f
+            holeArm = FrontBufferHolePolicy.decideArm(
+                holeMode, visible, mask != null, holeCov, FrontBufferFeatureFlags.holeMaxCoverage, other,
+            )
+            if (holeArm == FrontBufferHolePolicy.ARM_NORMAL) allowed = false
+            if (holeArm == FrontBufferHolePolicy.ARM_WITH_MASK) holeMask = mask
+            // 掩码过期 (刚平移/缩放完还没建好): 这一笔走常规路径, 抬笔后自动补建。
+            if (mask == null && visible && pose != null && !other) holeMasks.scheduleIfStale(v, pose)
+        }
+        realInk.setStrokeHoles(holeMask, holeMode)
         val t = effTool()
         val cursorMode = if (t == Tool.ERASER) v.eraserCursorMode else v.brushCursorMode
         val cursorWhileDrawing = (cursorMode == 1 || cursorMode == 3) && v.cursorStyleMode != 4
         val extras = cursorWhileDrawing || predictedTipEligible(v)
         val armed = realInk.arm(allowed, extras, uiClipSnapshot)
+        if (holeMode != FrontBufferHolePolicy.MODE_OFF) {
+            com.reverie.paint.perf.FbGeomLog.holeArm(realInk.currentStrokeSeq, holeMode, holeArm, holeCov)
+        }
+        holeCursorBoxValid = false
         if (com.reverie.paint.core.PerfTrace.enabled) logFrontBufferReady(v, armed)
         if (armed) {
             noteHoldCursor(x, y, pressure)
@@ -3566,6 +3688,21 @@ class CanvasTouchView(context: Context) : View(context) {
                 invalidate(l, t, r, b)
             }
         }
+    }
+
+    /**
+     * 孔洞方案处理不了的覆盖层: 非笔刷类工具的工具覆盖层, 以及辅助绘图的动态吸附线
+     * (吸附线就在墨的正下方随笔移动, 挖孔等于挖掉大半笔迹)。这些笔画走常规路径。
+     */
+    private fun holeOtherOverlayActive(v: PaintViewModel): Boolean {
+        val t = effTool()
+        if (t != Tool.BRUSH && t != Tool.ERASER && t != Tool.SMUDGE) return true
+        val g = v.drawingGuide
+        return FrontBufferHolePolicy.snapLinesPossible(
+            g.assistedDrawing,
+            g.mode == GuideMode.PERSPECTIVE && !g.perspective3d,
+            g.mode == GuideMode.ISOMETRIC || g.mode == GuideMode.GRID_2D,
+        )
     }
 
     private val holdGuideSeg = FloatArray(DynamicGuidePainter.SEG_SIZE)
@@ -3639,6 +3776,7 @@ class CanvasTouchView(context: Context) : View(context) {
         if (!realInk.held || v == null) {
             realInk.cursorR = 0f
             realInk.symCursorCount = 0
+            if (holeCursorBoxValid) invalidateHoleCursor()
             return
         }
         val t = effTool()
@@ -3649,6 +3787,7 @@ class CanvasTouchView(context: Context) : View(context) {
         if (!showWhileDrawing || style == 4 || (t != Tool.BRUSH && t != Tool.ERASER && t != Tool.SMUDGE)) {
             realInk.cursorR = 0f
             realInk.symCursorCount = 0
+            if (holeCursorBoxValid) invalidateHoleCursor()
             return
         }
         val scale = (canvasZoom * canvasFitScale).coerceAtLeast(0.001f)
@@ -3680,6 +3819,7 @@ class CanvasTouchView(context: Context) : View(context) {
         } else {
             realInk.symCursorCount = 0
         }
+        if (realInk.strokeHoles != null || holeCursorBoxValid) invalidateHoleCursor()
     }
 
     /** 刷新缓存的视图变换 (参数未变化时内部直接返回, 几乎零开销) */

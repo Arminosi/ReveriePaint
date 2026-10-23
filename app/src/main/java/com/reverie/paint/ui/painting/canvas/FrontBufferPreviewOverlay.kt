@@ -6,8 +6,10 @@ package com.reverie.paint.ui.painting.canvas
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapShader
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.ComposeShader
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
@@ -16,6 +18,7 @@ import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
+import android.graphics.Shader
 import android.os.Build
 import android.util.AttributeSet
 import android.util.Log
@@ -28,6 +31,7 @@ import com.reverie.paint.core.stylus.FrontBufferProbe
 import com.reverie.paint.model.CanvasPose
 import com.reverie.paint.model.RealInkPresent
 import com.reverie.paint.model.UiClipSnapshot
+import com.reverie.paint.perf.FbGeomLog
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** 单包最大 dab 戳印数 (预分配, 热路径零分配)。 */
@@ -96,6 +100,12 @@ class FrontBufferPathPacket(
     /** UI 裁剪矩形 (l, t, r, b), 共 [uiClipCount] 项; 只在 GL 线程读取。 */
     val uiClipRects: FloatArray = FloatArray(MAX_UI_CLIPS * 4)
     var uiClipCount: Int = 0
+
+    /** H-1: 这一笔的孔洞掩码 (null = 无孔洞, 与旧路径逐字节相同)。 */
+    internal var holeMask: HoleMask? = null
+
+    /** 第 i 块离散脏区命中孔洞时第 i 位为 1; 只有这些块走掩码贴图。 */
+    var holeHitBits: Int = 0
 }
 
 /**
@@ -117,6 +127,7 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
         private const val TAG = "FrontBufferOverlay"
         private const val POOL_SIZE = 8
         private const val POOL_MASK = POOL_SIZE - 1
+        private const val HOLE_SHADER_CACHE = 4
     }
 
     private var frontRenderer: Any? = null // 保持引用以兼容 API < 29
@@ -219,19 +230,30 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
 
     private var prevOverlayValid = false
     private val prevOverlay = RectF()
-    private val cursorBlack = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeWidth = 2.2f
-        color = Color.BLACK
-    }
-    private val cursorWhite = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeWidth = 1.2f
-        color = Color.WHITE
-    }
-    private val cursorFillBlack = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK }
-    private val cursorFillWhite = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
     private val density = resources.displayMetrics.density
+    private val cursorPainter = HoldCursorPainter(density)
+
+    // ---- H-1 孔洞 (GL 线程) ----
+    // 命中孔洞的脏区一次画完 "墨 × (1 - 掩码)" (ComposeShader DST_OUT + SRC): 单次合成, 前缓冲上
+    // 不存在"先贴墨再挖洞"的中间态 (单缓冲直接扫描输出, 两步写会被扫到半帧)。着色器按槽位图缓存。
+    private val holeInkPaint = Paint().apply {
+        xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC)
+        isFilterBitmap = false
+        isAntiAlias = false
+    }
+    private val holeDstOutPaint = Paint().apply {
+        xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
+        isFilterBitmap = false
+        isAntiAlias = false
+    }
+    private var holeMaskBitmap: Bitmap? = null
+    private var holeMaskShader: BitmapShader? = null
+    private val holeSlotBitmaps = arrayOfNulls<Bitmap>(HOLE_SHADER_CACHE)
+    private val holeSlotShaders = arrayOfNulls<BitmapShader>(HOLE_SHADER_CACHE)
+    private val holeComposeShaders = arrayOfNulls<ComposeShader>(HOLE_SHADER_CACHE)
+    private var holeCacheNext = 0
+    private val holeLocalMatrix = Matrix()
+    private val holeCursorBox = IntArray(4)
 
     init {
         // 设为完全透明与顶层覆盖
@@ -549,7 +571,7 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
      *
      * 返回 false 时 [slotBusy] 的所有权仍在调用方; 返回 true 后由本层在 GPU 光栅化完成时归还。
      */
-    fun renderInkScreenRegions(
+    internal fun renderInkScreenRegions(
         screenBitmap: Bitmap,
         screenRects: IntArray,
         bmpRects: IntArray,
@@ -568,6 +590,8 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
         symCursorX: FloatArray? = null,
         symCursorY: FloatArray? = null,
         symCursorCount: Int = 0,
+        holes: HoleMask? = null,
+        holeHitBits: Int = 0,
     ): Boolean {
         if (!isRendererInitialized) return false
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
@@ -602,11 +626,15 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
             packet.wantsExtras = wantsExtras
             // 每次提交无条件重置: 空快照也必须写 0, 不能残留上一包的裁剪矩形。
             packet.uiClipCount = uiClips.copyInto(packet.uiClipRects, MAX_UI_CLIPS)
+            packet.holeMask = if (holes?.bitmap != null) holes else null
+            packet.holeHitBits = if (packet.holeMask != null) holeHitBits else 0
             packet.inkSlotBusy = slotBusy
             return submitInkPacket(packet)
         } catch (t: Throwable) {
             packet.inkSlotBusy = null
             packet.inkBitmap = null
+            packet.holeMask = null
+            packet.holeHitBits = 0
             packet.uiClipCount = 0
             packet.inFlight.set(false)
             Log.w(TAG, "renderInkScreenRegions error: ${t.message}")
@@ -742,6 +770,8 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
     /** 归还一个包的槽位图 (同一个包只归还一次, 重复调用是空操作)。 */
     private fun releaseInkRef(packet: FrontBufferPathPacket) {
         packet.inkBitmap = null
+        packet.holeMask = null
+        packet.holeHitBits = 0
         val slot = packet.inkSlotBusy ?: return
         packet.inkSlotBusy = null
         slot.set(false)
@@ -751,6 +781,16 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
 
     @RequiresApi(Build.VERSION_CODES.Q)
     private fun drawInkPacket(canvas: Canvas, bufferWidth: Int, bufferHeight: Int, param: FrontBufferPathPacket) {
+        if (param.holeMask == null || !FbGeomLog.timingEnabled) {
+            drawInkPacketImpl(canvas, bufferWidth, bufferHeight, param)
+            return
+        }
+        val t0 = System.nanoTime()
+        drawInkPacketImpl(canvas, bufferWidth, bufferHeight, param)
+        FbGeomLog.frontPresented(System.nanoTime() - t0)
+    }
+
+    private fun drawInkPacketImpl(canvas: Canvas, bufferWidth: Int, bufferHeight: Int, param: FrontBufferPathPacket) {
         // 缓冲尺寸变了: 前缓冲整层作废, 备份层也必须丢掉重来。
         if (bufferWidth != strokeBufferW || bufferHeight != strokeBufferH) {
             strokeBufferW = bufferWidth
@@ -772,7 +812,8 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
         val willDrawCursor = param.cursorR > 0f && param.cursorX.isFinite() && param.cursorY.isFinite() &&
             param.cursorStyle != 4
         val willDrawTip = probePredictedTip()
-        val needsBackup = param.wantsExtras || willDrawCursor || willDrawTip || prevOverlayValid
+        val needsBackup = param.wantsExtras || willDrawCursor || willDrawTip || prevOverlayValid ||
+            (param.holeMask != null && FbGeomLog.identityCheckEnabled)
         val layer = if (needsBackup) ensureStrokeLayer(bufferWidth, bufferHeight) else null
         if (layer != null && prevOverlayValid) erasePrevOverlay(canvas, layer, param)
 
@@ -810,6 +851,8 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
             if (inkL <= inkR) clipOutUi(canvas, param, inkL, inkT, inkR, inkB)
             blitInk(canvas, param, bmp)
             canvas.restore()
+            val hm = param.holeMask
+            if (hm != null && layer != null) FbGeomLog.identityCheck(layer, hm.grid, param.screenRects, param.rectCount)
         }
         var overlayL = Float.MAX_VALUE
         var overlayT = Float.MAX_VALUE
@@ -898,8 +941,13 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
             val cb = blitClip[3]
             blitSrc.set(cl - param.slotOriginX, ct - param.slotOriginY, cr - param.slotOriginX, cb - param.slotOriginY)
             blitDst.set(cl.toFloat(), ct.toFloat(), cr.toFloat(), cb.toFloat())
+            val holePaint = if (param.holeHitBits and (1 shl i) != 0) holeInkPaintFor(param, bitmap) else null
             if (axisAligned) {
-                canvas.drawBitmap(bitmap, blitSrc, blitDst, screenInkPaint)
+                if (holePaint != null) {
+                    canvas.drawRect(blitDst, holePaint)
+                } else {
+                    canvas.drawBitmap(bitmap, blitSrc, blitDst, screenInkPaint)
+                }
                 continue
             }
             val bl = param.bmpRects[s]
@@ -912,9 +960,51 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
             canvas.clipRect(bl - pose.halfW, bt - pose.halfH, br - pose.halfW, bb - pose.halfH)
             canvas.concat(inverseMatrix)
             canvas.clipRect(blitDst)
-            canvas.drawBitmap(bitmap, blitSrc, blitDst, screenInkPaint)
+            if (holePaint != null) {
+                canvas.drawRect(blitDst, holePaint)
+            } else {
+                canvas.drawBitmap(bitmap, blitSrc, blitDst, screenInkPaint)
+            }
             canvas.restore()
         }
+    }
+
+    /**
+     * 命中孔洞那几块的贴图 Paint: 着色 = 槽位图 (平移到屏幕原点) DST_OUT 掩码, SRC 写入。
+     * 屏幕坐标与槽位像素整数对齐、不过滤, 非孔洞像素与 drawBitmap 逐字节相同, 孔洞像素写 0。
+     * 掩码/槽位图不变时复用着色器 (槽位四缓冲轮换, 缓存 4 份), 热路径只改局部矩阵。
+     */
+    private fun holeInkPaintFor(param: FrontBufferPathPacket, bitmap: Bitmap): Paint? {
+        val mask = param.holeMask?.bitmap ?: return null
+        if (mask.isRecycled) return null
+        if (holeMaskBitmap !== mask) {
+            holeMaskBitmap = mask
+            holeMaskShader = BitmapShader(mask, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+            for (k in 0 until HOLE_SHADER_CACHE) {
+                holeSlotBitmaps[k] = null
+                holeSlotShaders[k] = null
+                holeComposeShaders[k] = null
+            }
+        }
+        var idx = -1
+        for (k in 0 until HOLE_SHADER_CACHE) {
+            if (holeSlotBitmaps[k] === bitmap) {
+                idx = k
+                break
+            }
+        }
+        if (idx < 0) {
+            idx = holeCacheNext
+            holeCacheNext = (holeCacheNext + 1) % HOLE_SHADER_CACHE
+            val ink = BitmapShader(bitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+            holeSlotBitmaps[idx] = bitmap
+            holeSlotShaders[idx] = ink
+            holeComposeShaders[idx] = ComposeShader(ink, holeMaskShader!!, PorterDuff.Mode.DST_OUT)
+        }
+        holeLocalMatrix.setTranslate(param.slotOriginX.toFloat(), param.slotOriginY.toFloat())
+        holeSlotShaders[idx]!!.setLocalMatrix(holeLocalMatrix)
+        holeInkPaint.shader = holeComposeShaders[idx]
+        return holeInkPaint
     }
 
     private fun isAxisAligned(pose: CanvasPose): Boolean {
@@ -1047,39 +1137,24 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
     private fun drawHoldCursor(canvas: Canvas, param: FrontBufferPathPacket) {
         val r = param.cursorR
         if (r <= 0f) return
-        drawSingleCursor(canvas, param.cursorX, param.cursorY, r, param.cursorStyle)
-        for (i in 0 until param.symCursorCount) {
-            drawSingleCursor(canvas, param.symCursorX[i], param.symCursorY[i], r, param.cursorStyle)
+        val mask = param.holeMask
+        val maskBmp = mask?.bitmap
+        if (mask != null && maskBmp != null && !maskBmp.isRecycled &&
+            HoldCursorPainter.bounds(param.cursorX, param.cursorY, cursorPainter.half(r), param.symCursorX,
+                param.symCursorY, param.symCursorCount, holeCursorBox) &&
+            mask.grid.anyExact(holeCursorBox[0], holeCursorBox[1], holeCursorBox[2], holeCursorBox[3])
+        ) {
+            // H-3: 光标压到孔洞 —— 离屏层里画完再挖掉孔洞, 一次合成上屏 (孔洞内的光标由主窗口画)。
+            val b = holeCursorBox
+            canvas.saveLayer(b[0].toFloat(), b[1].toFloat(), b[2].toFloat(), b[3].toFloat(), null)
+            cursorPainter.drawAll(canvas, param.cursorX, param.cursorY, r, param.cursorStyle,
+                param.symCursorX, param.symCursorY, param.symCursorCount)
+            canvas.drawBitmap(maskBmp, 0f, 0f, holeDstOutPaint)
+            canvas.restore()
+            return
         }
-    }
-
-    private fun drawSingleCursor(canvas: Canvas, x: Float, y: Float, r: Float, cursorStyle: Int) {
-        if (!x.isFinite() || !y.isFinite()) return
-        val d = density
-        when (cursorStyle) {
-            1 -> {
-                val len = 7f * d
-                canvas.drawLine(x - len, y, x + len, y, cursorBlack)
-                canvas.drawLine(x, y - len, x, y + len, cursorBlack)
-                canvas.drawLine(x - len, y, x + len, y, cursorWhite)
-                canvas.drawLine(x, y - len, x, y + len, cursorWhite)
-            }
-            2 -> {
-                canvas.drawCircle(x, y, 3f * d, cursorFillBlack)
-                canvas.drawCircle(x, y, 1.8f * d, cursorFillWhite)
-            }
-            else -> {
-                canvas.drawCircle(x, y, r + 0.8f, cursorBlack)
-                canvas.drawCircle(x, y, r, cursorWhite)
-                if (cursorStyle == 5) {
-                    val len = 4.5f * d
-                    canvas.drawLine(x - len, y, x + len, y, cursorBlack)
-                    canvas.drawLine(x, y - len, x, y + len, cursorBlack)
-                    canvas.drawLine(x - len, y, x + len, y, cursorWhite)
-                    canvas.drawLine(x, y - len, x, y + len, cursorWhite)
-                }
-            }
-        }
+        cursorPainter.drawAll(canvas, param.cursorX, param.cursorY, r, param.cursorStyle,
+            param.symCursorX, param.symCursorY, param.symCursorCount)
     }
 
     /** 落笔 (UI 线程): 新的一笔, 下一包前作废上一笔残留的光标账本。 */

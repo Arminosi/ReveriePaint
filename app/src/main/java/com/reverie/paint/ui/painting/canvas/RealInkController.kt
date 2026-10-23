@@ -9,6 +9,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
 import android.os.Build
@@ -450,10 +451,11 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
         var allBaked = true
         for (i in 0 until baked) {
             val d = i * 4
-            // 槽位图跨帧复用: 先把本块要贴的屏幕范围清成透明, 再按 pose 烤, 不把陈旧像素贴上屏。
-            clearSlotRect(screenRects[d] - minL, screenRects[d + 1] - minT, screenRects[d + 2] - minL,
-                screenRects[d + 3] - minT)
-            if (!bakeRect(tiles, p, bmpRects[d], bmpRects[d + 1], bmpRects[d + 2], bmpRects[d + 3], minL, minT)) {
+            // 槽位图跨帧复用: 本块要贴的屏幕范围必须先清成透明再按 pose 烤, 不把陈旧像素贴上屏;
+            // 轴对齐且烘焙矩形完整盖住时由 bakeRect 内的裁剪清屏一次完成 (省掉重复的整块 CLEAR)。
+            if (!bakeRect(tiles, p, bmpRects[d], bmpRects[d + 1], bmpRects[d + 2], bmpRects[d + 3], minL, minT,
+                    screenRects[d], screenRects[d + 1], screenRects[d + 2], screenRects[d + 3])
+            ) {
                 allBaked = false
                 break
             }
@@ -547,8 +549,8 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
 
     /**
      * 把位图矩形 `[bl, bt, br, bb)` 按屏幕分辨率烤进槽位图 (原点对齐屏幕 `originX, originY`)。
-     * 与 onDraw 同一套变换; 只画脏区外扩后的源子矩形相交的瓦片。不铺棋盘格: 没有文档像素的
-     * 地方保持透明, SRC 之后由下层主画布透出。
+     * 与 onDraw 同一套变换; 只画脏区外扩后的源子矩形相交的瓦片。文档矩形内先铺与主画布同源的
+     * 棋盘格 (H-5), 文档外保持透明, SRC 之后由下层主画布透出。
      */
     private fun bakeRect(
         tiles: PublishedTiles,
@@ -559,8 +561,17 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
         bb: Int,
         originX: Int,
         originY: Int,
+        sl: Int,
+        st: Int,
+        sr: Int,
+        sb: Int,
     ): Boolean {
         if (!RealInkPresent.bakeSrcRect(bl, bt, br, bb, p.scale, p.bmpW, p.bmpH, bakeSrc)) return false
+        if (!RealInkPresent.bakeCoversScreenRect(p, bakeSrc[0].toFloat(), bakeSrc[1].toFloat(), bakeSrc[2].toFloat(),
+                bakeSrc[3].toFloat(), sl, st, sr, sb)
+        ) {
+            clearSlotRect(sl - originX, st - originY, sr - originX, sb - originY)
+        }
         bakeSrcRect.set(bakeSrc[0], bakeSrc[1], bakeSrc[2], bakeSrc[3])
         bakeDstRect.set(bakeSrc[0] - p.halfW, bakeSrc[1] - p.halfH, bakeSrc[2] - p.halfW, bakeSrc[3] - p.halfH)
         val c = bakeCanvas
@@ -570,7 +581,15 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
         c.scale(p.scale, p.scale)
         c.scale(p.signX, p.signY)
         c.clipRect(bakeDstRect)
-        c.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+        // H-5: 透明文档时先按主画布同源的棋盘格 (同一 Paint/着色器, 同一文档坐标变换) 以 SRC 铺底,
+        // 再叠瓦片 —— 槽位里的文档像素与主窗口"棋盘格 + 瓦片"逐像素同构且不透明, 前缓冲 SRC
+        // 贴上去不会透出主窗口里的旧墨。拿不到棋盘格时退回 CLEAR (原行为)。
+        val checker = checkerBakePaint()
+        if (checker != null) {
+            c.drawRect(bakeDstRect, checker)
+        } else {
+            c.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+        }
         val filter = interpolate
         bakePaint.isFilterBitmap = filter
         val grid = tiles.grid
@@ -589,6 +608,19 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
         }
         c.restore()
         return drew
+    }
+
+    private var checkerSource: Paint? = null
+    private var checkerBake: Paint? = null
+
+    /** 主画布棋盘格 Paint 的 SRC 副本 (着色器同一实例; 源换了才重建, 渲染线程独占)。 */
+    private fun checkerBakePaint(): Paint? {
+        val src = view.checkerboardPaint ?: return null
+        if (src !== checkerSource) {
+            checkerSource = src
+            checkerBake = Paint(src).apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC) }
+        }
+        return checkerBake
     }
 
     private fun claimSlot(): InkSlot? {

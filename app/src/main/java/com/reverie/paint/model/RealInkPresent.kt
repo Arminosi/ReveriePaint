@@ -126,6 +126,54 @@ object RealInkPresent {
         return !isEmptyRect(out)
     }
 
+    /**
+     * 烘焙源子矩形 `[sl, st, sr, sb)` 经 pose 映射到屏幕后, 是否在**轴对齐** (旋转为 90° 整数倍)
+     * 时把屏幕整数矩形 `[l, t, r, b)` 完整盖住 (每个像素中心都在映射矩形内, 留 [EPS] 余量)。
+     *
+     * 成立时 bakeRect 在该矩形上的裁剪 CLEAR / SRC 棋盘格已覆盖槽位里这一块的每个像素,
+     * 预先的 clearSlotRect 是重复清屏, 可以跳过。旋转非 90° 倍数或盖不全时返回 false (照旧先清)。
+     */
+    fun bakeCoversScreenRect(
+        pose: CanvasPose,
+        sl: Float,
+        st: Float,
+        sr: Float,
+        sb: Float,
+        l: Int,
+        t: Int,
+        r: Int,
+        b: Int,
+    ): Boolean {
+        if (sr <= sl || sb <= st || r <= l || b <= t) return false
+        val rot = ((pose.rotation % 360f) + 360f) % 360f
+        val q = Math.round(rot / 90f)
+        if (kotlin.math.abs(rot - q * 90f) > 1e-3f) return false
+        val quarter = ((q % 4) + 4) % 4
+        val cosR = when (quarter) { 0 -> 1f; 2 -> -1f; else -> 0f }
+        val sinR = when (quarter) { 1 -> 1f; 3 -> -1f; else -> 0f }
+        val sx = pose.scale * pose.signX
+        val sy = pose.scale * pose.signY
+        var minX = Float.MAX_VALUE
+        var minY = Float.MAX_VALUE
+        var maxX = -Float.MAX_VALUE
+        var maxY = -Float.MAX_VALUE
+        for (i in 0 until 4) {
+            val x = if (i == 0 || i == 2) sl else sr
+            val y = if (i < 2) st else sb
+            val ux = (x - pose.halfW) * sx
+            val uy = (y - pose.halfH) * sy
+            val px = ux * cosR - uy * sinR + pose.centerX
+            val py = ux * sinR + uy * cosR + pose.centerY
+            if (px < minX) minX = px
+            if (px > maxX) maxX = px
+            if (py < minY) minY = py
+            if (py > maxY) maxY = py
+        }
+        return minX <= l - EPS && minY <= t - EPS && maxX >= r + EPS && maxY >= b + EPS
+    }
+
+    private const val EPS = 0.01f
+
     /** 空矩形判据: `[left, top, right, bottom]` 且 right/bottom 为开区间。 */
     fun isEmptyRect(a: IntArray): Boolean = a[2] <= a[0] || a[3] <= a[1]
 

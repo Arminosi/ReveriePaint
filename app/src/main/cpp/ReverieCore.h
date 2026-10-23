@@ -1010,6 +1010,10 @@ private:
     // Returns true when a flush painted ink in this call.
     bool appendStrokeSample(const QPointF &imgPos, qreal pressure, qreal tiltX = 0.0, qreal tiltY = 0.0, qreal rotation = 0.0, qreal timeSeconds = -1.0);
     void endStrokeBatch();
+    // 描边图层的外扩：strokeSize + 4。非描边图层为 0。
+    int strokeLayerMargin() const;
+    // experimentbrush 抬笔补最后一段扇形。必须在 endStrokeBatch 之前调用。
+    void flushExperimentTail();
 
     struct StrokeSample {
         QPointF imgPos;
@@ -1537,6 +1541,8 @@ private:
     // cancel - taps and no-paint strokes never create an undo command.
     KisTransaction *m_strokeTxn = nullptr;
     bool m_strokeTxnActive = false;
+    // experimentbrush 抬笔补最后不超过约 40ms 的扇形。默认开，不接 UI。
+    bool m_fillTailFlushEnabled = true;
     // 调整层配置组装 (ReverieCoreAdjustment.cpp)
     static KisFilterConfigurationSP reverieMakeConfig(int filterType, double p1, double p2, double p3, double p4,
                                                       const QByteArray &lut = QByteArray());

@@ -913,6 +913,10 @@
     <string name="toast_canvas_flip_h_done">Canvas Flipped Horizontally</string>
     <string name="toast_canvas_flip_v_done">Canvas Flipped Vertically</string>
     <string name="quick_action_reset_view">Center &amp; Reset</string>
+    <string name="quick_action_zoom_in">Zoom in</string>
+    <string name="quick_action_zoom_out">Zoom out</string>
+    <string name="quick_action_rotate_ccw">Left 15°</string>
+    <string name="quick_action_rotate_cw">Right 15°</string>
     <string name="quick_action_undo">Undo</string>
     <string name="quick_action_redo">Redo</string>
     <string name="quick_action_toggle_eraser">Brush / Eraser</string>

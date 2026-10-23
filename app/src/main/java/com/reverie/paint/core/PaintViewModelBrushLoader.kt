@@ -56,6 +56,7 @@ internal fun PaintViewModel.loadBrushPresets(force: Boolean = false) {
                 val d = copyBundledBrushAssets()
                 // 必须在引擎加载任何预设之前清掉历史重复参数键
                 migrateDuplicatedPresetParams(d.first)
+                bootstrapBrushStore(d.first)
                 d
             }
             loadBrushPresetsAfterAssets(dirs.first, dirs.second)
@@ -64,6 +65,33 @@ internal fun PaintViewModel.loadBrushPresets(force: Boolean = false) {
             isBrushPresetsLoading = false
         }
     }
+}
+
+/**
+ * 笔刷存储 v2 启动编排（执行文档 W-04）：同步出厂快照 → 迁移（W-07）→ materializeAll。
+ * 失败或迁移未完成时 [com.reverie.paint.core.brushstore.BrushStoreBootstrap.active] 为 false，VM 继续走旧路径。
+ */
+private fun PaintViewModel.bootstrapBrushStore(presetDir: File) {
+    val ctx = appContext
+    val stamp = try {
+        val pi = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
+        "${com.reverie.paint.BuildConfig.VERSION_CODE}:${pi.lastUpdateTime}"
+    } catch (_: Throwable) {
+        "${com.reverie.paint.BuildConfig.VERSION_CODE}"
+    }
+    com.reverie.paint.core.brushstore.BrushStoreBootstrap.run(
+        filesDir = ctx.filesDir,
+        presetDir = presetDir,
+        enabled = com.reverie.paint.core.brushstore.BrushStoreFlags.isEnabled(ctx),
+        installStamp = stamp,
+        readAssets = {
+            val am = ctx.assets
+            (am.list("paintoppresets") ?: emptyArray())
+                .filter { com.reverie.paint.core.brushstore.BrushStoreBootstrap.isFactoryPreset(it) }
+                .associateWith { n -> am.open("paintoppresets/$n").use { it.readBytes() } }
+        },
+        migrate = { !com.reverie.paint.core.brushstore.BrushStoreFlags.needsMigration(ctx) },
+    )
 }
 
 /**

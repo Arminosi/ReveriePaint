@@ -110,6 +110,20 @@ object BrushIdentity {
         }
     }
 
+    /** 批量注册（只落盘一次）；内置同步时用 */
+    fun registerAll(entries: Collection<Entry>) {
+        if (entries.isEmpty()) return
+        synchronized(lock) {
+            for (entry in entries) {
+                byId[entry.id]?.let { byName.remove(it.name) }
+                byName[entry.name]?.let { if (it != entry.id) byId.remove(it) }
+                byId[entry.id] = entry
+                byName[entry.name] = entry.id
+            }
+            persistLocked()
+        }
+    }
+
     fun rename(id: String, newName: String): Boolean {
         synchronized(lock) {
             val e = byId[id] ?: return false

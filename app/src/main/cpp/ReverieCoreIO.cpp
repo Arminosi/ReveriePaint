@@ -1259,6 +1259,8 @@ static bool loadKraNodesDom(const QDomElement &parentElem,
         const int opacity = qBound(0, el.attribute("opacity", "255").toInt(), 255);
         KisNodeSP node;
         const bool isGroup = (nodeType == "grouplayer");
+        // paintlayer 分支已在 stage 前应用过 x/y, 避免重复设置
+        bool offsetApplied = false;
 
         const bool isMask = (el.tagName().toLower() == "mask") ||
                             (nodeType == "transparencymask") ||
@@ -1271,6 +1273,11 @@ static bool loadKraNodesDom(const QDomElement &parentElem,
             if (isMask) {
                 pl->setProperty("reverie_is_transparency_mask", true);
             }
+            // offset 必须先于像素写回生效: LayerPixelLoader 用画布坐标写像素
+            // (convertFromQImage), 若 offset 晚到, 内容会被再平移一次 (见 t35 实证)。
+            pl->setX(el.attribute("x", "0").toInt());
+            pl->setY(el.attribute("y", "0").toInt());
+            offsetApplied = true;
             const QString fn = el.attribute("filename");
             const bool loaded = stageLayerDataFromStore(store, loader, pl->paintDevice(), docName, fn, layerIndexCounter++);
             if (isMask && !loaded) {
@@ -1286,8 +1293,10 @@ static bool loadKraNodesDom(const QDomElement &parentElem,
             node->setUserLocked(el.attribute("locked", "0") == "1");
             const int colorLabel = el.attribute("colorlabel", el.attribute("color_label", "0")).toInt();
             node->setColorLabelIndex(colorLabel);
-            node->setX(el.attribute("x", "0").toInt());
-            node->setY(el.attribute("y", "0").toInt());
+            if (!offsetApplied) {
+                node->setX(el.attribute("x", "0").toInt());
+                node->setY(el.attribute("y", "0").toInt());
+            }
             if (isMask) {
                 node->setProperty("reverie_is_transparency_mask", true);
             }
@@ -1337,6 +1346,9 @@ static bool loadKraNodesDom(const QDomElement &parentElem,
                         const int mOpacity = qBound(0, childMask.attribute("opacity", "255").toInt(), 255);
                         KisPaintLayerSP tmask = new KisPaintLayer(image, mName, mOpacity, cs);
                         tmask->setProperty("reverie_is_transparency_mask", true);
+                        // offset 必须先于像素写回 (见上方 paintlayer 分支说明)
+                        tmask->setX(childMask.attribute("x", "0").toInt());
+                        tmask->setY(childMask.attribute("y", "0").toInt());
                         const QString mFn = childMask.attribute("filename");
                         const bool mLoaded = stageLayerDataFromStore(store, loader, tmask->paintDevice(), docName, mFn, layerIndexCounter++);
                         if (!mLoaded) {
@@ -1345,8 +1357,6 @@ static bool loadKraNodesDom(const QDomElement &parentElem,
                         tmask->setVisible(childMask.attribute("visible", "1") != "0");
                         tmask->setOpacity(quint8(mOpacity));
                         tmask->setUserLocked(childMask.attribute("locked", "0") == "1");
-                        tmask->setX(childMask.attribute("x", "0").toInt());
-                        tmask->setY(childMask.attribute("y", "0").toInt());
                         image->addNode(tmask, node);
                     }
                 }

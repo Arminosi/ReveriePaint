@@ -85,6 +85,9 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
     /** L-01: 动态吸附导引线快照 (UI 线程每次 MOVE 写, GL 线程读)。 */
     val guideSnapshot = DynamicGuideSnapshot()
 
+    /** 渲染线程读 [guideSnapshot] 的暂存 (零分配)。 */
+    private val guideReadSeg = FloatArray(DynamicGuidePainter.SEG_SIZE)
+
     /**
      * H-1: 这一笔的孔洞掩码 (落笔时由视图按 [FrontBufferHolePolicy.decideArm] 给出, 笔画期间不变)。
      * null = 当前没有覆盖层, 与无孔洞路径逐字节相同。
@@ -554,6 +557,7 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
                 clipsSnapshot, slot.busy, minL, minT, canvasBounds,
                 symCursorX, symCursorY, symCursorCount,
                 holes, holeHitBits,
+                guideSnapshot.read(guideReadSeg), guideReadSeg,
             )
         if (!shown) {
             slot.busy.set(false)

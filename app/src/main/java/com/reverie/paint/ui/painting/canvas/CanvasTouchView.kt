@@ -3147,7 +3147,12 @@ class CanvasTouchView(context: Context) : View(context) {
         // =========================================================================
         val dynamicGuideKind = computeDynamicGuide(v, dynamicGuideSeg)
         if (dynamicGuideKind == DYNAMIC_GUIDE_ABORT_FRAME) return
-        dynamicGuidePainter.draw(canvas, dynamicGuideKind, dynamicGuideSeg)
+        if (realInk.held) {
+            // 按住真墨: 孔洞外由前缓冲画导引线 (同一画笔/同一几何), 窗口只补孔洞内与 UI 避让区内。
+            drawHeldGuide(canvas, dynamicGuideKind, dynamicGuideSeg)
+        } else {
+            dynamicGuidePainter.draw(canvas, dynamicGuideKind, dynamicGuideSeg)
+        }
 
         // =========================================================================
         // 3. 光标及对称参考线绘制 (Cursor & Guides)
@@ -3671,12 +3676,14 @@ class CanvasTouchView(context: Context) : View(context) {
         val t = effTool()
         val cursorMode = if (t == Tool.ERASER) v.eraserCursorMode else v.brushCursorMode
         val cursorWhileDrawing = (cursorMode == 1 || cursorMode == 3) && v.cursorStyleMode != 4
-        val extras = cursorWhileDrawing || predictedTipEligible(v)
+        // 吸附导引线由前缓冲画, 擦旧位置要靠备份层: 可能出现导引线的笔画从首帧起维护备份层。
+        val extras = cursorWhileDrawing || predictedTipEligible(v) || snapGuidePossible(v)
         val armed = realInk.arm(allowed, extras, uiClipSnapshot)
         if (holeMode != FrontBufferHolePolicy.MODE_OFF) {
             com.reverie.paint.perf.FbGeomLog.holeArm(realInk.currentStrokeSeq, holeMode, holeArm, holeCov)
         }
         holeCursorBoxValid = false
+        resetHeldGuide()
         if (com.reverie.paint.core.PerfTrace.enabled) logFrontBufferReady(v, armed)
         if (armed) {
             noteHoldCursor(x, y, pressure)
@@ -3691,12 +3698,17 @@ class CanvasTouchView(context: Context) : View(context) {
     }
 
     /**
-     * 孔洞方案处理不了的覆盖层: 非笔刷类工具的工具覆盖层, 以及辅助绘图的动态吸附线
-     * (吸附线就在墨的正下方随笔移动, 挖孔等于挖掉大半笔迹)。这些笔画走常规路径。
+     * 孔洞方案处理不了的覆盖层: 非笔刷类工具的工具覆盖层。这些笔画走常规路径。
+     * 辅助绘图的动态吸附线不在此列: 它画在墨之上, 由前缓冲在孔洞外画、窗口在孔洞内画 (见
+     * [drawHeldGuide] / [invalidateHeldGuide]), 不挖孔。
      */
-    private fun holeOtherOverlayActive(v: PaintViewModel): Boolean {
+    private fun holeOtherOverlayActive(@Suppress("UNUSED_PARAMETER") v: PaintViewModel): Boolean {
         val t = effTool()
-        if (t != Tool.BRUSH && t != Tool.ERASER && t != Tool.SMUDGE) return true
+        return t != Tool.BRUSH && t != Tool.ERASER && t != Tool.SMUDGE
+    }
+
+    /** 这一笔可能出现动态吸附导引线 (2D 透视 / 等轴测 / 2D 网格 且开了辅助绘图)。 */
+    private fun snapGuidePossible(v: PaintViewModel): Boolean {
         val g = v.drawingGuide
         return FrontBufferHolePolicy.snapLinesPossible(
             g.assistedDrawing,
@@ -3706,14 +3718,114 @@ class CanvasTouchView(context: Context) : View(context) {
     }
 
     private val holdGuideSeg = FloatArray(DynamicGuidePainter.SEG_SIZE)
+    private var holdGuidePrevKind = DynamicGuidePainter.KIND_NONE
+    private val holdGuidePrevSeg = FloatArray(DynamicGuidePainter.SEG_SIZE)
+    private val holdGuidePrevBox = IntArray(4)
+    private val holdGuideBox = IntArray(4)
+    private val holdGuideScratch = FloatArray(4)
 
     /** 动态吸附导引线 (与 onDraw 同一个 [computeDynamicGuide]) 写进前缓冲快照。零分配。 */
     private fun snapshotHoldGuide(v: PaintViewModel) {
-        val kind = computeDynamicGuide(v, holdGuideSeg)
-        realInk.guideSnapshot.write(
-            if (kind == DYNAMIC_GUIDE_ABORT_FRAME) DynamicGuidePainter.KIND_NONE else kind,
-            holdGuideSeg,
-        )
+        val raw = computeDynamicGuide(v, holdGuideSeg)
+        val kind = if (raw == DYNAMIC_GUIDE_ABORT_FRAME) DynamicGuidePainter.KIND_NONE else raw
+        realInk.guideSnapshot.write(kind, holdGuideSeg)
+        invalidateHeldGuide(kind)
+    }
+
+    /**
+     * 按住期间窗口只画"导引线 ∩ (孔洞 ∪ UI 避让区)"; 导引线变了就重画新旧两处的这部分。
+     * 孔洞判定沿线段每 8px 一次 O(1) [com.reverie.paint.model.HoleMaskGrid.anyInRect];
+     * 没有孔洞也不压避让区时零失效。UI 线程, 零分配。
+     */
+    private fun invalidateHeldGuide(kind: Int) {
+        val seg = holdGuideSeg
+        val visible = kind == DynamicGuidePainter.KIND_LINE || kind == DynamicGuidePainter.KIND_LINE_VP
+        if (visible && kind == holdGuidePrevKind) {
+            var same = true
+            for (i in 0 until DynamicGuidePainter.SEG_SIZE) if (seg[i] != holdGuidePrevSeg[i]) { same = false; break }
+            if (same) return
+        }
+        val acc = holdGuideBox
+        DynamicGuideFootprint.resetAcc(acc)
+        if (visible && realInk.held) {
+            val pad = dynamicGuidePainter.linePad
+            val vpHalf = dynamicGuidePainter.vpHalf
+            val holes = realInk.strokeHoles
+            if (holes != null) {
+                DynamicGuideFootprint.accumulateSegmentHoleHits(holes.grid, seg[0], seg[1], seg[2], seg[3], pad, acc,
+                    holdGuideScratch)
+                if (kind == DynamicGuidePainter.KIND_LINE_VP) {
+                    DynamicGuideFootprint.accumulateBoxHoleHit(holes.grid, seg[4], seg[5], vpHalf, acc)
+                }
+            }
+            val clips = uiClipSnapshot
+            for (i in 0 until clips.count) {
+                val l = clips.left(i)
+                val t = clips.top(i)
+                val r = clips.right(i)
+                val b = clips.bottom(i)
+                DynamicGuideFootprint.accumulateSegmentRectHit(seg[0], seg[1], seg[2], seg[3], pad, l, t, r, b, acc,
+                    holdGuideScratch)
+                if (kind == DynamicGuidePainter.KIND_LINE_VP) {
+                    DynamicGuideFootprint.accumulateSegmentRectHit(seg[4], seg[5], seg[4], seg[5], vpHalf, l, t, r, b,
+                        acc, holdGuideScratch)
+                }
+            }
+        }
+        val prev = holdGuidePrevBox
+        val curEmpty = DynamicGuideFootprint.isEmptyAcc(acc)
+        val prevEmpty = DynamicGuideFootprint.isEmptyAcc(prev)
+        holdGuidePrevKind = if (visible) kind else DynamicGuidePainter.KIND_NONE
+        if (visible) System.arraycopy(seg, 0, holdGuidePrevSeg, 0, DynamicGuidePainter.SEG_SIZE)
+        if (curEmpty && prevEmpty) return
+        var l = Int.MAX_VALUE
+        var t = Int.MAX_VALUE
+        var r = Int.MIN_VALUE
+        var b = Int.MIN_VALUE
+        if (!prevEmpty) { l = prev[0]; t = prev[1]; r = prev[2]; b = prev[3] }
+        if (!curEmpty) {
+            l = minOf(l, acc[0]); t = minOf(t, acc[1]); r = maxOf(r, acc[2]); b = maxOf(b, acc[3])
+        }
+        System.arraycopy(acc, 0, prev, 0, 4)
+        val il = maxOf(l, 0)
+        val it = maxOf(t, 0)
+        val ir = minOf(r, width)
+        val ib = minOf(b, height)
+        if (ir > il && ib > it) postInvalidateOnAnimation(il, it, ir, ib)
+    }
+
+    private fun resetHeldGuide() {
+        holdGuidePrevKind = DynamicGuidePainter.KIND_NONE
+        DynamicGuideFootprint.resetAcc(holdGuidePrevBox)
+    }
+
+    /**
+     * 按住期间窗口画的那一半导引线: UI 避让区内 (前缓冲在那里被 clipOut) 照常画, 其余只画孔洞内
+     * (二值掩码 DST_IN, 与前缓冲的 DST_OUT 像素互补)。两半拼起来与关低延迟时的 [DynamicGuidePainter.draw]
+     * 一致。没有孔洞且不压避让区时什么都不画。
+     */
+    private fun drawHeldGuide(canvas: Canvas, kind: Int, seg: FloatArray) {
+        if (kind != DynamicGuidePainter.KIND_LINE && kind != DynamicGuidePainter.KIND_LINE_VP) return
+        val clips = uiClipSnapshot
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            for (i in 0 until clips.count) {
+                canvas.save()
+                canvas.clipRect(clips.left(i), clips.top(i), clips.right(i), clips.bottom(i))
+                // 避让区彼此重叠时只在第一个里画, 不叠两次。
+                for (j in 0 until i) canvas.clipOutRect(clips.left(j), clips.top(j), clips.right(j), clips.bottom(j))
+                dynamicGuidePainter.draw(canvas, kind, seg)
+                canvas.restore()
+            }
+        }
+        val holes = realInk.strokeHoles ?: return
+        val bmp = holes.bitmap ?: return
+        if (bmp.isRecycled) return
+        canvas.save()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            for (i in 0 until clips.count) canvas.clipOutRect(clips.left(i), clips.top(i), clips.right(i), clips.bottom(i))
+        }
+        dynamicGuidePainter.drawMasked(canvas, kind, seg, bmp, android.graphics.PorterDuff.Mode.DST_IN)
+        canvas.restore()
     }
 
     /** 预测笔尖圆点只给纯色高不透明的一级预测笔刷 (半透明/水彩/纹理笔刷上画点会露馅)。 */

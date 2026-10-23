@@ -106,6 +106,10 @@ class FrontBufferPathPacket(
 
     /** 第 i 块离散脏区命中孔洞时第 i 位为 1; 只有这些块走掩码贴图。 */
     var holeHitBits: Int = 0
+
+    /** 动态吸附导引线 ([DynamicGuidePainter.KIND_NONE] = 不画), 屏幕坐标段见 [DynamicGuidePainter.SEG_SIZE]。 */
+    var guideKind: Int = DynamicGuidePainter.KIND_NONE
+    val guideSeg: FloatArray = FloatArray(DynamicGuidePainter.SEG_SIZE)
 }
 
 /**
@@ -230,6 +234,24 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
 
     private var prevOverlayValid = false
     private val prevOverlay = RectF()
+
+    // ---- 动态吸附导引线 (GL 线程; 上一包画在前缓冲上的位置, 下一包先按足迹从备份层拷回) ----
+    private val guidePainter = DynamicGuidePainter(resources.displayMetrics.density)
+    private var prevGuideKind = DynamicGuidePainter.KIND_NONE
+    private val prevGuideSeg = FloatArray(DynamicGuidePainter.SEG_SIZE)
+    private val guideRestorePaint = Paint().apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.SQUARE
+        isAntiAlias = false
+        isFilterBitmap = false
+        xfermode = android.graphics.PorterDuffXfermode(PorterDuff.Mode.SRC)
+    }
+    private var guideRestoreFor: Bitmap? = null
+
+    private fun invalidatePrevOverlay() {
+        prevOverlayValid = false
+        prevGuideKind = DynamicGuidePainter.KIND_NONE
+    }
     private val density = resources.displayMetrics.density
     private val cursorPainter = HoldCursorPainter(density)
 
@@ -283,13 +305,13 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
                             param.isClear -> {
                                 canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
                                 clearStrokeLayerDirty()
-                                prevOverlayValid = false
+                                invalidatePrevOverlay()
                             }
                             param.ink -> drawInkPacket(canvas, bufferWidth, bufferHeight, param)
                             else -> {
                                 // #81 预览: 单缓冲清屏, 只画当前最新的前沿段。
                                 canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
-                                prevOverlayValid = false
+                                invalidatePrevOverlay()
                                 drawPreviewPacket(canvas, param)
                             }
                         }
@@ -316,7 +338,7 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
                         // 多缓冲层保持透明清空，正式墨迹由底层的 CanvasTouchView / Krita 负责
                         canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
                         clearStrokeLayerDirty()
-                        prevOverlayValid = false
+                        invalidatePrevOverlay()
                     } finally {
                         // commit 静默点 (与前缓冲绘制同一串行 GL 线程, cancelPending 已执行):
                         // 所有 pending 包永不到达前缓冲回调, 在此批量释放 inFlight,
@@ -592,6 +614,8 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
         symCursorCount: Int = 0,
         holes: HoleMask? = null,
         holeHitBits: Int = 0,
+        guideKind: Int = DynamicGuidePainter.KIND_NONE,
+        guideSeg: FloatArray? = null,
     ): Boolean {
         if (!isRendererInitialized) return false
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
@@ -628,6 +652,12 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
             packet.uiClipCount = uiClips.copyInto(packet.uiClipRects, MAX_UI_CLIPS)
             packet.holeMask = if (holes?.bitmap != null) holes else null
             packet.holeHitBits = if (packet.holeMask != null) holeHitBits else 0
+            if (guideSeg != null && (guideKind == DynamicGuidePainter.KIND_LINE || guideKind == DynamicGuidePainter.KIND_LINE_VP)) {
+                packet.guideKind = guideKind
+                System.arraycopy(guideSeg, 0, packet.guideSeg, 0, DynamicGuidePainter.SEG_SIZE)
+            } else {
+                packet.guideKind = DynamicGuidePainter.KIND_NONE
+            }
             packet.inkSlotBusy = slotBusy
             return submitInkPacket(packet)
         } catch (t: Throwable) {
@@ -635,6 +665,7 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
             packet.inkBitmap = null
             packet.holeMask = null
             packet.holeHitBits = 0
+            packet.guideKind = DynamicGuidePainter.KIND_NONE
             packet.uiClipCount = 0
             packet.inFlight.set(false)
             Log.w(TAG, "renderInkScreenRegions error: ${t.message}")
@@ -797,7 +828,7 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
             strokeBufferH = bufferHeight
             canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
             strokeLayerDirty.setEmpty()
-            prevOverlayValid = false
+            invalidatePrevOverlay()
             strokeLayer = null
             strokeCanvas = null
         }
@@ -807,15 +838,19 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
         strokeStartPending = false
         // 清屏之后的首包: 备份层是上一笔的, 作废 (只清记过账的区域)。
         if (reset) clearStrokeLayerDirty()
-        if (reset || start) prevOverlayValid = false
+        if (reset || start) invalidatePrevOverlay()
 
         val willDrawCursor = param.cursorR > 0f && param.cursorX.isFinite() && param.cursorY.isFinite() &&
             param.cursorStyle != 4
         val willDrawTip = probePredictedTip()
+        val willDrawGuide = param.guideKind == DynamicGuidePainter.KIND_LINE ||
+            param.guideKind == DynamicGuidePainter.KIND_LINE_VP
         val needsBackup = param.wantsExtras || willDrawCursor || willDrawTip || prevOverlayValid ||
+            willDrawGuide || prevGuideKind != DynamicGuidePainter.KIND_NONE ||
             (param.holeMask != null && FbGeomLog.identityCheckEnabled)
         val layer = if (needsBackup) ensureStrokeLayer(bufferWidth, bufferHeight) else null
         if (layer != null && prevOverlayValid) erasePrevOverlay(canvas, layer, param)
+        if (layer != null && prevGuideKind != DynamicGuidePainter.KIND_NONE) erasePrevGuide(canvas, layer, param)
 
         val bmp = param.inkBitmap
         var inkL = Float.MAX_VALUE
@@ -853,6 +888,15 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
             canvas.restore()
             val hm = param.holeMask
             if (hm != null && layer != null) FbGeomLog.identityCheck(layer, hm.grid, param.screenRects, param.rectCount)
+        }
+        // 动态吸附导引线: 窗口里画在墨之上、光标之下 (CanvasTouchView 第 2.5 段), 这里同序。
+        // 只画孔洞外与 UI 避让区外 (孔内/避让区内由窗口画), 不进备份层 (下一包从备份层按足迹拷回)。
+        if (willDrawGuide && layer != null) {
+            drawGuide(canvas, param, bufferWidth, bufferHeight)
+            prevGuideKind = param.guideKind
+            System.arraycopy(param.guideSeg, 0, prevGuideSeg, 0, DynamicGuidePainter.SEG_SIZE)
+        } else {
+            prevGuideKind = DynamicGuidePainter.KIND_NONE
         }
         var overlayL = Float.MAX_VALUE
         var overlayT = Float.MAX_VALUE
@@ -1081,6 +1125,44 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
     }
 
     /** 记下这一帧光标/预测圆点占的屏幕范围, 下一帧只擦这一小块。 */
+    @RequiresApi(Build.VERSION_CODES.Q)
+    private fun drawGuide(canvas: Canvas, param: FrontBufferPathPacket, w: Int, h: Int) {
+        canvas.save()
+        clipOutUi(canvas, param, 0f, 0f, w.toFloat(), h.toFloat())
+        val mask = param.holeMask?.bitmap
+        if (mask != null && !mask.isRecycled) {
+            guidePainter.drawMasked(canvas, param.guideKind, param.guideSeg, mask, PorterDuff.Mode.DST_OUT)
+        } else {
+            guidePainter.draw(canvas, param.guideKind, param.guideSeg)
+        }
+        canvas.restore()
+    }
+
+    /**
+     * 擦掉上一包的导引线: 沿它的足迹 (比最粗的光晕再宽 2px, 方头, 无抗锯齿) 从备份层 SRC 拷回;
+     * 灭点圆按方框拷回。备份层孔内本就是 0, UI 避让区照旧避开。只碰足迹像素, 不整屏拷。
+     */
+    @RequiresApi(Build.VERSION_CODES.Q)
+    private fun erasePrevGuide(canvas: Canvas, layer: Bitmap, param: FrontBufferPathPacket) {
+        if (guideRestoreFor !== layer) {
+            guideRestoreFor = layer
+            guideRestorePaint.shader = BitmapShader(layer, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+        }
+        val seg = prevGuideSeg
+        canvas.save()
+        clipOutUi(canvas, param, 0f, 0f, layer.width.toFloat(), layer.height.toFloat())
+        guideRestorePaint.style = Paint.Style.STROKE
+        guideRestorePaint.strokeWidth = guidePainter.linePad * 2f
+        canvas.drawLine(seg[0], seg[1], seg[2], seg[3], guideRestorePaint)
+        if (prevGuideKind == DynamicGuidePainter.KIND_LINE_VP) {
+            val hh = guidePainter.vpHalf
+            guideRestorePaint.style = Paint.Style.FILL
+            canvas.drawRect(seg[4] - hh, seg[5] - hh, seg[4] + hh, seg[5] + hh, guideRestorePaint)
+        }
+        canvas.restore()
+        prevGuideKind = DynamicGuidePainter.KIND_NONE
+    }
+
     private fun rememberOverlayBounds(param: FrontBufferPathPacket, cursorDrawn: Boolean) {
         var has = false
         if (cursorDrawn) {
@@ -1120,7 +1202,7 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
         strokeLayer = created
         strokeCanvas = Canvas(created)
         strokeLayerDirty.setEmpty()
-        prevOverlayValid = false
+        invalidatePrevOverlay()
         return created
     }
 

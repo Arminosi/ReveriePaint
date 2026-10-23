@@ -62,8 +62,8 @@ object FrontBufferHolePolicy {
     }
 
     /**
-     * 辅助绘图是否可能画动态吸附线 (透视 2D / 等距 / 二维网格)。吸附线贴着墨走, 孔洞会覆盖笔迹
-     * 主体, 这类笔画按 "其他覆盖层" 处理 (走常规路径)。
+     * 辅助绘图是否可能画动态吸附线 (透视 2D / 等距 / 二维网格)。吸附线画在墨之上 (窗口第 2.5 段),
+     * 按住时由前缓冲在孔洞外画、窗口在孔洞内补 (不挖孔); 为能擦掉旧位置, 这类笔画从首帧起维护备份层。
      */
     fun snapLinesPossible(assistedDrawing: Boolean, perspective2d: Boolean, isoOrGrid: Boolean): Boolean =
         assistedDrawing && (perspective2d || isoOrGrid)

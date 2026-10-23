@@ -60,6 +60,11 @@ internal class DisplayTileState {
     var published: PublishedTiles? = null
         private set
 
+    /** 发布代际: 每次发布新网格 / 清空网格自增 (渲染线程写, 日志读; L-03 FbGeomLog)。 */
+    @Volatile
+    var generation = 0
+        private set
+
     // 重建中的网格: 尺寸/文档变化时新网格先在这里填像素, 全部写完之后才在帧末发布 ——
     // 未填像素的新网格一旦被 onDraw 读到, 画面上就是"画布裂成几块"。只在渲染线程读写。
     var staging: PublishedTiles? = null
@@ -152,6 +157,7 @@ internal class DisplayTileState {
         val s = staging ?: return
         published = s
         staging = null
+        generation++
     }
 
     /** 渲染线程: 已有完整网格时丢掉多余的暂存。 */
@@ -161,6 +167,7 @@ internal class DisplayTileState {
 
     /** 渲染线程: 丢掉全部网格与池 (切回整图路径 / 换文档)。 */
     fun clear() {
+        if (published != null || staging != null) generation++
         published = null
         staging = null
         needsFullWrite = BooleanArray(0)

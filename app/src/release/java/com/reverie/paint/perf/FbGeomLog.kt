@@ -15,6 +15,42 @@ internal object FbGeomLog {
     fun strokeBegin(strokeSeq: Long, held: Boolean, viewW: Int, viewH: Int, pose: CanvasPose?) {
     }
 
+    fun strokeReady(
+        strokeSeq: Long,
+        held: Boolean,
+        decision: Int,
+        mask: Int,
+        inferredMask: Int,
+        gateEnabled: Boolean,
+        msSinceQuietStart: Long,
+        msUntilFallback: Long,
+        surfaceX: Int,
+        surfaceY: Int,
+        surfaceW: Int,
+        surfaceH: Int,
+        viewW: Int,
+        viewH: Int,
+        stableFrames: Int,
+        refreshHz: Float,
+        targetRefreshHz: Float,
+        renderW: Int,
+        renderH: Int,
+        gridW: Int,
+        gridH: Int,
+        tileGeneration: Int,
+        bufferInvalid: Boolean,
+        zoom: Float,
+        fitScale: Float,
+        panX: Float,
+        panY: Float,
+        rotation: Float,
+        renderScheduled: Boolean,
+        renderFollowUp: Boolean,
+        renderInFlight: Boolean,
+        loading: Boolean,
+    ) {
+    }
+
     fun presentFrame(
         pendingCount: Int,
         bakedCount: Int,

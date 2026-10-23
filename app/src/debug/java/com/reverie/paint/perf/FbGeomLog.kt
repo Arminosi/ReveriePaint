@@ -9,6 +9,7 @@ import android.util.Log
 import com.reverie.paint.core.PerfTrace
 import com.reverie.paint.core.stylus.FrontBufferProbe
 import com.reverie.paint.model.CanvasPose
+import com.reverie.paint.model.FrontBufferReadyGate
 
 /**
  * 前缓冲真墨的几何日志 (开发/真机定位用, **debug 构建专属**; release 源集是同签名空实现)。
@@ -49,6 +50,105 @@ internal object FbGeomLog {
         }
         Log.i(TAG, sb.toString())
     }
+
+    /**
+     * 落笔时的前缓冲就绪门控快照 (L-02/L-03)。UI 线程, 每笔一行, 紧跟 stroke_begin。
+     *
+     *     ev=stroke_ready seq=.. held=.. decision=READY_EVENTS|READY_FALLBACK|NOT_READY gate=on
+     *       mask=0x1f/0x1f missing=[..] inferred=[idle,hz] t=+812ms fallbackIn=2388ms
+     *       sv=0,0 1600x2560 view=1600x2560 stable=5 hz=120.0/120.0
+     *       render=4096x3072 grid=4096x3072 gen=3 invalid=false
+     *       proj[zoom=..,fit=..,pan=..,..,rot=..] merger[sched=..,followUp=..,inFlight=..] loading=false
+     *
+     * `t` 是距静默窗起点 (进画布 / 工程加载完成) 的毫秒数。
+     */
+    fun strokeReady(
+        strokeSeq: Long,
+        held: Boolean,
+        decision: Int,
+        mask: Int,
+        inferredMask: Int,
+        gateEnabled: Boolean,
+        msSinceQuietStart: Long,
+        msUntilFallback: Long,
+        surfaceX: Int,
+        surfaceY: Int,
+        surfaceW: Int,
+        surfaceH: Int,
+        viewW: Int,
+        viewH: Int,
+        stableFrames: Int,
+        refreshHz: Float,
+        targetRefreshHz: Float,
+        renderW: Int,
+        renderH: Int,
+        gridW: Int,
+        gridH: Int,
+        tileGeneration: Int,
+        bufferInvalid: Boolean,
+        zoom: Float,
+        fitScale: Float,
+        panX: Float,
+        panY: Float,
+        rotation: Float,
+        renderScheduled: Boolean,
+        renderFollowUp: Boolean,
+        renderInFlight: Boolean,
+        loading: Boolean,
+    ) {
+        if (!PerfTrace.enabled) return
+        val sb = StringBuilder(384)
+        sb.append("ev=stroke_ready seq=").append(strokeSeq)
+        sb.append(" held=").append(held)
+        sb.append(" decision=").append(
+            when (decision) {
+                FrontBufferReadyGate.READY_EVENTS -> "READY_EVENTS"
+                FrontBufferReadyGate.READY_FALLBACK -> "READY_FALLBACK"
+                else -> "NOT_READY"
+            },
+        )
+        sb.append(" gate=").append(if (gateEnabled) "on" else "off")
+        sb.append(" mask=0x").append(Integer.toHexString(mask))
+            .append("/0x").append(Integer.toHexString(FrontBufferReadyGate.ALL))
+        sb.append(" missing=[")
+        appendConds(sb, mask.inv() and FrontBufferReadyGate.ALL)
+        sb.append("] inferred=[")
+        appendConds(sb, inferredMask)
+        sb.append(']')
+        sb.append(" t=+").append(msSinceQuietStart).append("ms")
+        sb.append(" fallbackIn=").append(if (msUntilFallback > 0L) msUntilFallback else 0L).append("ms")
+        sb.append(" sv=").append(surfaceX).append(',').append(surfaceY)
+            .append(' ').append(surfaceW).append('x').append(surfaceH)
+        sb.append(" view=").append(viewW).append('x').append(viewH)
+        sb.append(" stable=").append(stableFrames)
+        sb.append(" hz=").append(fmt(refreshHz)).append('/').append(fmt(targetRefreshHz))
+        sb.append(" render=").append(renderW).append('x').append(renderH)
+        sb.append(" grid=").append(gridW).append('x').append(gridH)
+        sb.append(" gen=").append(tileGeneration)
+        sb.append(" invalid=").append(bufferInvalid)
+        sb.append(" proj[zoom=").append(fmt(zoom))
+        sb.append(",fit=").append(fmt(fitScale))
+        sb.append(",pan=").append(fmt(panX)).append(',').append(fmt(panY))
+        sb.append(",rot=").append(fmt(rotation)).append(']')
+        sb.append(" merger[sched=").append(renderScheduled)
+        sb.append(",followUp=").append(renderFollowUp)
+        sb.append(",inFlight=").append(renderInFlight).append(']')
+        sb.append(" loading=").append(loading)
+        Log.i(TAG, sb.toString())
+    }
+
+    private fun appendConds(sb: StringBuilder, bits: Int) {
+        var first = true
+        for (i in COND_NAMES.indices) {
+            if (bits and (1 shl i) == 0) continue
+            if (!first) sb.append(',')
+            sb.append(COND_NAMES[i])
+            first = false
+        }
+    }
+
+    /** 与 FrontBufferReadyGate.COND_* 位序一致。 */
+    private val COND_NAMES = arrayOf("tiles", "idle", "geom", "hz", "notLoading")
 
     /** 每一帧真墨贴图一行 (限频)。渲染线程调用。 */
     fun presentFrame(

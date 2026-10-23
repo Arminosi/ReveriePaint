@@ -3398,6 +3398,49 @@ class CanvasTouchView(context: Context) : View(context) {
         fbGeomCounter.feed(sx, sy, sw, sh, width, height, p0, p1)
     }
 
+    /** L-03: 落笔时的就绪门控快照写进 FbGeomLog (只在 PerfTrace 打开时调用)。 */
+    private fun logFrontBufferReady(v: PaintViewModel, held: Boolean) {
+        val now = SystemClock.uptimeMillis()
+        val quietUntil = v.frontBufferQuietUntilMs
+        val fb = frontBufferOverlay
+        if (fb != null) fb.getLocationOnScreen(fbGeomLoc) else { fbGeomLoc[0] = 0; fbGeomLoc[1] = 0 }
+        val tiles = v.displayTiles.drawable()
+        com.reverie.paint.perf.FbGeomLog.strokeReady(
+            strokeSeq = realInk.currentStrokeSeq,
+            held = held,
+            decision = strokeFbDecision,
+            mask = strokeFbMask,
+            inferredMask = FrontBufferReadyGate.INFERRED,
+            gateEnabled = FrontBufferFeatureFlags.readyGate,
+            msSinceQuietStart = if (quietUntil > 0L) now - (quietUntil - PaintViewModel.NEW_CANVAS_FRONT_BUFFER_QUIET_MS) else -1L,
+            msUntilFallback = quietUntil - now,
+            surfaceX = fbGeomLoc[0],
+            surfaceY = fbGeomLoc[1],
+            surfaceW = fb?.width ?: -1,
+            surfaceH = fb?.height ?: -1,
+            viewW = width,
+            viewH = height,
+            stableFrames = fbGeomCounter.stableFrames,
+            refreshHz = currentRefreshHz(),
+            targetRefreshHz = cachedTargetRefreshHz(),
+            renderW = v.renderW,
+            renderH = v.renderH,
+            gridW = tiles?.grid?.width ?: 0,
+            gridH = tiles?.grid?.height ?: 0,
+            tileGeneration = v.displayTiles.generation,
+            bufferInvalid = v.displayBufferInvalid,
+            zoom = canvasZoom,
+            fitScale = canvasFitScale,
+            panX = canvasPanX,
+            panY = canvasPanY,
+            rotation = canvasRotation,
+            renderScheduled = v.renderScheduled,
+            renderFollowUp = v.renderFollowUpPending,
+            renderInFlight = v.renderInFlight,
+            loading = v.isBlockingLoading,
+        )
+    }
+
     private fun cachedTargetRefreshHz(): Float {
         if (fbTargetRefreshHz > 0f) return fbTargetRefreshHz
         if (Build.VERSION.SDK_INT < 30) return 0f
@@ -3452,7 +3495,9 @@ class CanvasTouchView(context: Context) : View(context) {
         val cursorMode = if (t == Tool.ERASER) v.eraserCursorMode else v.brushCursorMode
         val cursorWhileDrawing = (cursorMode == 1 || cursorMode == 3) && v.cursorStyleMode != 4
         val extras = cursorWhileDrawing || predictedTipEligible(v)
-        if (realInk.arm(allowed, extras, uiClipSnapshot)) {
+        val armed = realInk.arm(allowed, extras, uiClipSnapshot)
+        if (com.reverie.paint.core.PerfTrace.enabled) logFrontBufferReady(v, armed)
+        if (armed) {
             refreshHoldDecor(v, force = true)
             noteHoldCursor(x, y, pressure)
             if (prevCursorRectValid) {

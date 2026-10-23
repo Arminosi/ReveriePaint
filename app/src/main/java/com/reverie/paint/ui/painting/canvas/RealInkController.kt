@@ -149,6 +149,9 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
     @Volatile
     private var strokeSeq = 0L
 
+    /** 最近一次 [arm] 分配的笔画序号 (UI 线程读, 日志对齐用)。 */
+    val currentStrokeSeq: Long get() = strokeSeq
+
     // ================= UI 线程 =================
 
     /**

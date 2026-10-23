@@ -373,7 +373,11 @@ private fun PaintViewModel.applyReplayPresetSetupLocked(target: Int) {
  *  sessions that mutated the preset table mid-way (add/remove/rename shifts
  *  native indexes) still land on the right brush; fall back to the recorded
  *  native index when the name no longer exists. */
-private fun PaintViewModel.replayPresetSelectLocked(idx: Int, name: String) {
+private fun PaintViewModel.replayPresetSelectLocked(
+    idx: Int,
+    name: String,
+    v2: com.reverie.paint.core.brushstore.PlaybackPresetCache.Select? = null,
+) {
     val byName = if (name.isNotEmpty()) brushPresets.firstOrNull { it.name == name } else null
     val target = byName?.index ?: idx
     if (target < 0) return
@@ -385,7 +389,17 @@ private fun PaintViewModel.replayPresetSelectLocked(idx: Int, name: String) {
             ReverieCoreBridge.touchStrokeCancel()
         }
         currentReplayPreset = target
-        applyReplayPresetSetupLocked(target)
+        if (v2 != null) {
+            // W-12：新录制只加载有效字节（+ 橡皮擦标志），不叠加 brushParams 的 setter
+            val p = brushPresets.firstOrNull { it.index == target }
+            val isEraser = p != null &&
+                (p.group == "橡皮擦" || p.name.startsWith("a)_Eraser", ignoreCase = true) || p.name.contains("Eraser", ignoreCase = true))
+            com.reverie.paint.core.brushstore.PlaybackPresetCache.replay(
+                com.reverie.paint.core.brushstore.BrushEngineApplier.NativeEngine, target, v2, isEraser,
+            )
+        } else {
+            applyReplayPresetSetupLocked(target)
+        }
     }
 }
 
@@ -1017,6 +1031,11 @@ private fun PaintViewModel.dispatchToolOpLocked(
             val idx = r.u16()
             val name = r.str()
             replayPresetSelectLocked(if (idx == 0xFFFF) -1 else idx, name)
+        }
+
+        com.reverie.paint.model.RecordingEvents.T_PRESET_SELECT_V2 -> {
+            val sel = com.reverie.paint.core.brushstore.PlaybackPresetCache.read(r)
+            replayPresetSelectLocked(sel.index, sel.name, sel)
         }
 
         T_TEXT -> {

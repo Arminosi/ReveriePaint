@@ -623,9 +623,17 @@ import kotlinx.coroutines.withContext
             // rebuilt mid-session by BrushStudio mutations), and the context
             // diff reset forces the next stroke to re-send the full parameter
             // context (preset load resets native params during replay).
-            recorder.toolOp(com.reverie.paint.model.RecordingEvents.T_PRESET_SELECT) {
-                it.u16(if (index < 0) 0xFFFF else index.coerceIn(0, 0xFFFE))
-                it.str(preset.name)
+            // W-12：v2 管理的预设额外记 presetId + 有效字节 md5（字节进 playback_cache），回放不再逐个 setter 补参数
+            val v2Select = com.reverie.paint.core.brushstore.PlaybackPresetCache.recordSelect(index, preset.name)
+            if (v2Select != null) {
+                recorder.toolOp(com.reverie.paint.model.RecordingEvents.T_PRESET_SELECT_V2) {
+                    com.reverie.paint.core.brushstore.PlaybackPresetCache.write(it, v2Select)
+                }
+            } else {
+                recorder.toolOp(com.reverie.paint.model.RecordingEvents.T_PRESET_SELECT) {
+                    it.u16(if (index < 0) 0xFFFF else index.coerceIn(0, 0xFFFE))
+                    it.str(preset.name)
+                }
             }
             recorder.resetContextDiff()
         }

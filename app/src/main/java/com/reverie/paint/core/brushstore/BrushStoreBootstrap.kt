@@ -24,6 +24,11 @@ object BrushStoreBootstrap {
     var presetDir: File? = null
         private set
 
+    /** 当前 brush_store 根目录（run 成功后有效；回放缓存等放在其下） */
+    @Volatile
+    var storeRootDir: File? = null
+        private set
+
     fun storeRoot(filesDir: File): File = File(filesDir, STORE_DIR)
 
     fun openStores(storeRoot: File) {
@@ -118,6 +123,7 @@ object BrushStoreBootstrap {
             }
             val results = EffectivePresetBuilder.materializeAll(presetDir)
             this.presetDir = presetDir
+            this.storeRootDir = root
             active = true
             BrushDiagnostics.log(
                 "store_ready",
@@ -136,6 +142,7 @@ object BrushStoreBootstrap {
     fun resetForTest() {
         active = false
         presetDir = null
+        storeRootDir = null
         PresetReadback.clearBaselineCache()
     }
 

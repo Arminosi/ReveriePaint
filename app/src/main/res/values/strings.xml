@@ -2996,5 +2996,10 @@
     <string name="gesture_trigger_single_finger_long_press">单指长按</string>
     <string name="gesture_trigger_quick_pinch">快速双捏</string>
     <string name="gesture_trigger_none">无</string>
+    <string name="brush_gate_mypaint">MyPaint 笔刷（.myb）不支持此项</string>
+    <string name="brush_gate_colorsmudge_only">仅涂抹引擎（colorsmudge）的笔刷有效，当前笔刷引擎不读取此项</string>
+    <string name="brush_gate_no_brush_def">当前笔刷引擎没有笔尖定义，此项不起作用</string>
+    <string name="brush_gate_auto_tip_only">图片笔尖不支持（仅作用于参数化笔尖）</string>
+    <string name="brush_possibly_modified_hint">此笔刷的原始文件可能曾被旧版本修改，重置将回到迁移时的状态。</string>
 </resources>
 

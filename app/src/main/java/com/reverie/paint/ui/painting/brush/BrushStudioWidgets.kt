@@ -153,6 +153,48 @@ internal fun StudioSectionHeader(title: String, textSub: Color) {
     )
 }
 
+/** W-16：当前笔刷下某控件不适用时的说明文字；适用（或 v2 未激活）时返回 null */
+@Composable
+internal fun studioGateReason(vm: PaintViewModel, id: com.reverie.paint.core.brushstore.ControlId): String? {
+    val name = vm.brushPresets.firstOrNull { it.index == vm.brushPresetIndex }?.name ?: return null
+    val r = com.reverie.paint.core.brushstore.BrushApplicability.forName(name)[id] ?: return null
+    return stringResource(
+        when (r) {
+            com.reverie.paint.core.brushstore.BrushApplicability.Reason.MYPAINT -> R.string.brush_gate_mypaint
+            com.reverie.paint.core.brushstore.BrushApplicability.Reason.COLORSMUDGE_ONLY -> R.string.brush_gate_colorsmudge_only
+            com.reverie.paint.core.brushstore.BrushApplicability.Reason.NO_BRUSH_DEF -> R.string.brush_gate_no_brush_def
+            com.reverie.paint.core.brushstore.BrushApplicability.Reason.AUTO_TIP_ONLY -> R.string.brush_gate_auto_tip_only
+        },
+    )
+}
+
+/** W-16：不适用时整组控件变灰、拦截触摸，并在上方显示原因；reason 为 null 时原样显示 */
+@Composable
+internal fun StudioGated(reason: String?, textSub: Color, content: @Composable () -> Unit) {
+    if (reason == null) {
+        content()
+        return
+    }
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(reason, color = textSub, fontSize = 11.sp, modifier = Modifier.padding(vertical = 2.dp))
+        Box(modifier = Modifier.fillMaxWidth()) {
+            Box(modifier = Modifier.fillMaxWidth().graphicsLayer { alpha = 0.38f }) { content() }
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .pointerInput(Unit) {
+                        awaitPointerEventScope {
+                            while (true) {
+                                awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                                    .changes.forEach { it.consume() }
+                            }
+                        }
+                    },
+            )
+        }
+    }
+}
+
 @Composable
 internal fun StudioSwitchItem(label: String, checked: Boolean, textMain: Color, onCheckedChange: (Boolean) -> Unit) {
     Row(

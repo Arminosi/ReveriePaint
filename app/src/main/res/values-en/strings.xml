@@ -2996,5 +2996,10 @@
     <string name="gesture_trigger_single_finger_long_press">Single-Finger Long Press</string>
     <string name="gesture_trigger_quick_pinch">Quick Pinch</string>
     <string name="gesture_trigger_none">None</string>
+    <string name="brush_gate_mypaint">Not supported by MyPaint brushes (.myb)</string>
+    <string name="brush_gate_colorsmudge_only">Only affects Color Smudge (colorsmudge) brushes; this brush engine ignores it</string>
+    <string name="brush_gate_no_brush_def">This brush engine has no tip definition; this setting has no effect</string>
+    <string name="brush_gate_auto_tip_only">Not supported by image tips (parametric tips only)</string>
+    <string name="brush_possibly_modified_hint">The original file of this brush may have been modified by an older version; reset returns to its state at migration.</string>
 </resources>
 

@@ -243,7 +243,9 @@ internal fun TipTabContent(
         }
 
         StudioSliderItem(stringResource(R.string.brush_studio_geo_aspect_ratio), vm.brushRatio, 0.05, 1.0, isPercent = true, textMain = textMain, textSub = textSub) { vm.updateBrushRatio(it) }
-        StudioSliderItem(stringResource(R.string.brush_studio_geo_base_angle), vm.brushAngle, 0.0, 360.0, unit = "°", textMain = textMain, textSub = textSub) { vm.updateBrushAngle(it) }
+        StudioGated(studioGateReason(vm, com.reverie.paint.core.brushstore.ControlId.ANGLE), textSub) {
+            StudioSliderItem(stringResource(R.string.brush_studio_geo_base_angle), vm.brushAngle, 0.0, 360.0, unit = "°", textMain = textMain, textSub = textSub) { vm.updateBrushAngle(it) }
+        }
         StudioSliderItem(stringResource(R.string.brush_studio_geo_offset_angle), vm.brushRotation, 0.0, 360.0, unit = "°", textMain = textMain, textSub = textSub) { vm.updateBrushRotation(it) }
         StudioSliderItem(stringResource(R.string.brush_studio_geo_angle_jitter), vm.brushJitterAngle, 0.0, 1.0, isPercent = true, textMain = textMain, textSub = textSub) { vm.updateBrushJitterAngle(it) }
         StudioInnerDivider()
@@ -288,16 +290,20 @@ internal fun DynamicsTabContent(
 
     // 间距与散布
     StudioGroupCard(stringResource(R.string.brush_studio_dynamics_spacing_scatter)) {
-        StudioSliderItem(stringResource(R.string.brush_studio_dynamics_spacing), vm.brushSpacing, 0.01, 2.5, isPercent = true, textMain = textMain, textSub = textSub) { vm.updateBrushSpacing(it) }
-        BrushDynamicCurveEditor(
-            config = vm.getBrushDynamicOption("Spacing"),
-            onConfigChange = { vm.updateBrushDynamicOption(it) },
-            cardBg = cardBg,
-            borderCol = borderCol,
-            textMain = textMain,
-            textSub = textSub,
-            liveInput = vm.scratchpadLiveInput,
-        )
+        StudioGated(studioGateReason(vm, com.reverie.paint.core.brushstore.ControlId.SPACING), textSub) {
+            Column {
+                StudioSliderItem(stringResource(R.string.brush_studio_dynamics_spacing), vm.brushSpacing, 0.01, 2.5, isPercent = true, textMain = textMain, textSub = textSub) { vm.updateBrushSpacing(it) }
+                BrushDynamicCurveEditor(
+                    config = vm.getBrushDynamicOption("Spacing"),
+                    onConfigChange = { vm.updateBrushDynamicOption(it) },
+                    cardBg = cardBg,
+                    borderCol = borderCol,
+                    textMain = textMain,
+                    textSub = textSub,
+                    liveInput = vm.scratchpadLiveInput,
+                )
+            }
+        }
         StudioInnerDivider()
         StudioSliderItem(stringResource(R.string.brush_studio_dynamics_scatter), vm.brushScatter, 0.0, 1.0, isPercent = true, textMain = textMain, textSub = textSub) { vm.updateBrushScatter(it) }
         StudioSensorChips(stringResource(R.string.brush_studio_scatter_sensor), vm.brushScatterSensor, scatterSensors, { vm.updateBrushScatterSensor(it) }, cardBg, textMain, textSub)
@@ -425,85 +431,85 @@ internal fun ColorTabContent(
 ) {
     // Krita 原生混色涂抹引擎全量对齐 (Smudge Mode, Color Rate, Smudge Rate, Smudge Length)
     StudioGroupCard(stringResource(R.string.brush_studio_color_smudge_title)) {
-        // 1. 涂抹工作模式：Dulling (混色耗散) vs Smearing (刮刀拉伸)
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text(stringResource(R.string.brush_studio_smudge_mode), color = textMain, fontSize = 13.sp)
-            Row(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Morandi.panel.copy(alpha = 0.6f))
-                    .padding(2.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                // Krita SmudgeRateMode：0 = 涂抹(Smearing)，1 = 钝化(Dulling)
-                val isDulling = vm.brushSmudgeMode == 1
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(if (isDulling) Morandi.accent.copy(alpha = 0.22f) else Color.Transparent)
-                        .clickable { vm.updateBrushSmudgeMode(1) }
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
+        StudioGated(studioGateReason(vm, com.reverie.paint.core.brushstore.ControlId.COLOR_RATE), textSub) {
+            Column {
+                // 1. 涂抹工作模式：Dulling (混色耗散) vs Smearing (刮刀拉伸)
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
-                    Text(
-                        text = stringResource(R.string.brush_studio_smudge_mode_dulling),
-                        color = if (isDulling) Morandi.accent else textSub,
-                        fontSize = 11.sp,
-                        fontWeight = if (isDulling) FontWeight.SemiBold else FontWeight.Normal,
-                    )
+                    Text(stringResource(R.string.brush_studio_smudge_mode), color = textMain, fontSize = 13.sp)
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Morandi.panel.copy(alpha = 0.6f))
+                            .padding(2.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        // Krita SmudgeRateMode：0 = 涂抹(Smearing)，1 = 钝化(Dulling)
+                        val isDulling = vm.brushSmudgeMode == 1
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(if (isDulling) Morandi.accent.copy(alpha = 0.22f) else Color.Transparent)
+                                .clickable { vm.updateBrushSmudgeMode(1) }
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.brush_studio_smudge_mode_dulling),
+                                color = if (isDulling) Morandi.accent else textSub,
+                                fontSize = 11.sp,
+                                fontWeight = if (isDulling) FontWeight.SemiBold else FontWeight.Normal,
+                            )
+                        }
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(if (!isDulling) Morandi.accent.copy(alpha = 0.22f) else Color.Transparent)
+                                .clickable { vm.updateBrushSmudgeMode(0) }
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.brush_studio_smudge_mode_smearing),
+                                color = if (!isDulling) Morandi.accent else textSub,
+                                fontSize = 11.sp,
+                                fontWeight = if (!isDulling) FontWeight.SemiBold else FontWeight.Normal,
+                            )
+                        }
+                    }
                 }
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(if (!isDulling) Morandi.accent.copy(alpha = 0.22f) else Color.Transparent)
-                        .clickable { vm.updateBrushSmudgeMode(0) }
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                ) {
-                    Text(
-                        text = stringResource(R.string.brush_studio_smudge_mode_smearing),
-                        color = if (!isDulling) Morandi.accent else textSub,
-                        fontSize = 11.sp,
-                        fontWeight = if (!isDulling) FontWeight.SemiBold else FontWeight.Normal,
-                    )
-                }
+
+                StudioInnerDivider()
+
+                // 2. 色彩速率 (Color Rate)
+                StudioSliderItem(stringResource(R.string.brush_studio_color_rate), vm.brushColorRate, 0.0, 1.0, isPercent = true, textMain = textMain, textSub = textSub) { vm.updateBrushColorRate(it) }
+                BrushDynamicCurveEditor(
+                    config = vm.getBrushDynamicOption("ColorRate"),
+                    onConfigChange = { vm.updateBrushDynamicOption(it) },
+                    cardBg = cardBg,
+                    borderCol = borderCol,
+                    textMain = textMain,
+                    textSub = textSub,
+                    liveInput = vm.scratchpadLiveInput,
+                )
+
+                StudioInnerDivider()
+
+                // 3. 涂抹长度 (Smudge Length) —— Krita 的 SmudgeRate 键；其曲线即 SmudgeRate 曲线。
+                // W-16：原"涂抹速率"滑块（brushSmudgeRate）与色彩速率写同一个 ColorRate 键（D-2），重复且在 v2 下不产生覆盖，已移除。
+                StudioSliderItem(stringResource(R.string.brush_studio_color_smudge_length), vm.brushSmudgeLength, 0.0, 1.0, isPercent = true, textMain = textMain, textSub = textSub) { vm.updateBrushSmudgeLength(it) }
+                BrushDynamicCurveEditor(
+                    config = vm.getBrushDynamicOption("SmudgeRate"),
+                    onConfigChange = { vm.updateBrushDynamicOption(it) },
+                    cardBg = cardBg,
+                    borderCol = borderCol,
+                    textMain = textMain,
+                    textSub = textSub,
+                    liveInput = vm.scratchpadLiveInput,
+                )
             }
         }
-
-        StudioInnerDivider()
-
-        // 2. 色彩速率 (Color Rate)
-        StudioSliderItem(stringResource(R.string.brush_studio_color_rate), vm.brushColorRate, 0.0, 1.0, isPercent = true, textMain = textMain, textSub = textSub) { vm.updateBrushColorRate(it) }
-        BrushDynamicCurveEditor(
-            config = vm.getBrushDynamicOption("ColorRate"),
-            onConfigChange = { vm.updateBrushDynamicOption(it) },
-            cardBg = cardBg,
-            borderCol = borderCol,
-            textMain = textMain,
-            textSub = textSub,
-            liveInput = vm.scratchpadLiveInput,
-        )
-
-        StudioInnerDivider()
-
-        // 3. 涂抹速率 (Smudge Rate)
-        StudioSliderItem(stringResource(R.string.brush_studio_color_smudge_rate), vm.brushSmudgeRate, 0.0, 1.0, isPercent = true, textMain = textMain, textSub = textSub) { vm.updateBrushSmudgeRate(it) }
-        BrushDynamicCurveEditor(
-            config = vm.getBrushDynamicOption("SmudgeRate"),
-            onConfigChange = { vm.updateBrushDynamicOption(it) },
-            cardBg = cardBg,
-            borderCol = borderCol,
-            textMain = textMain,
-            textSub = textSub,
-            liveInput = vm.scratchpadLiveInput,
-        )
-
-        StudioInnerDivider()
-
-        // 4. 涂抹长度 (Smudge Length)
-        StudioSliderItem(stringResource(R.string.brush_studio_color_smudge_length), vm.brushSmudgeLength, 0.0, 1.0, isPercent = true, textMain = textMain, textSub = textSub) { vm.updateBrushSmudgeLength(it) }
     }
 
     // 次要颜色与压感混色

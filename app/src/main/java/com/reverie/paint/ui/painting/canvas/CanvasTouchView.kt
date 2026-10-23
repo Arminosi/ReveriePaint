@@ -2875,7 +2875,9 @@ class CanvasTouchView(context: Context) : View(context) {
             // H-1: 装饰几何变了就 (防抖) 重建孔洞掩码 —— 只做引用/数值比较, 构建在后台线程。
             // 按住运笔时窗口不重画, 这里也不会跑。
             if (!realInk.held && !localIsTouching && FrontBufferFeatureFlags.holeMode != FrontBufferHolePolicy.MODE_OFF) {
-                realInk.pose?.let { holeMasks.scheduleIfStale(v, it) }
+                // 视图动画 (适配复位 / 旋转吸附) 还在跑时按连续变化防抖; 否则静止后第一帧立即建。
+                val settled = fitAnimator?.isRunning != true && snapAnimator?.isRunning != true
+                realInk.pose?.let { holeMasks.scheduleIfStale(v, it, settled) }
             }
         }
 

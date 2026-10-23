@@ -68,4 +68,15 @@ class FrontBufferHolePolicyTest {
         assertTrue(FrontBufferHolePolicy.snapLinesPossible(true, true, false))
         assertTrue(FrontBufferHolePolicy.snapLinesPossible(true, false, true))
     }
+
+    @Test
+    fun maskRebuildSkipsDebounceOnlyOnFirstChangeAfterQuiet() {
+        // 手势抬起: 之前很久没有过期 -> 立即
+        assertTrue(FrontBufferHolePolicy.buildImmediately(true, 10_000L, Long.MIN_VALUE / 2, 50L))
+        assertTrue(FrontBufferHolePolicy.buildImmediately(true, 1_000L, 950L, 50L))
+        // 连续变化中的一帧 (滑杆 / 动画) -> 防抖
+        assertFalse(FrontBufferHolePolicy.buildImmediately(true, 1_000L, 984L, 50L))
+        // 视图动画还在跑 -> 防抖
+        assertFalse(FrontBufferHolePolicy.buildImmediately(false, 10_000L, 0L, 50L))
+    }
 }

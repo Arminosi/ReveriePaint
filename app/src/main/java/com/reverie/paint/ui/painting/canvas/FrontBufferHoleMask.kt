@@ -10,6 +10,7 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.SystemClock
 import com.reverie.paint.model.CanvasPose
+import com.reverie.paint.model.FrontBufferHolePolicy
 import com.reverie.paint.model.HoleMaskGrid
 import com.reverie.paint.perf.FbGeomLog
 import com.reverie.paint.core.PaintViewModel
@@ -74,12 +75,25 @@ internal class FrontBufferHoleMaskBuilder(private val view: CanvasTouchView) {
 
     private fun isTransform(): Boolean = view.tool == com.reverie.paint.model.Tool.TRANSFORM
 
-    /** 装饰状态变了就防抖 [DEBOUNCE_MS] 后重建 (UI 线程)。缩放/平移手势期间一直往后推。 */
-    fun scheduleIfStale(v: PaintViewModel, pose: CanvasPose) {
+    // 上一次发现过期的时刻 (UI 线程): 用来区分 "静止后第一次变化" 与 "连续变化中的一帧"。
+    private var lastStaleMs = Long.MIN_VALUE / 2
+
+    /**
+     * 装饰状态变了就重建 (UI 线程, drawCanvas 每帧调用)。
+     *
+     * - 连续变化 (动画 / 滑杆每帧都在变, 距上次过期 < [QUIET_MS]): 防抖 [DEBOUNCE_MS], 一直往后推;
+     * - [settled] 且距上次过期已静止 [QUIET_MS] 以上 (典型: 双指平移/缩放手势抬起那一帧,
+     *   手势中触摸态不调用这里): 不等防抖, post 到本帧之后立即录制 —— 手势后第一笔不再因为
+     *   掩码还没建好而回落 (只省掉 100 ms 防抖; 光栅化仍在后台线程)。
+     */
+    fun scheduleIfStale(v: PaintViewModel, pose: CanvasPose, settled: Boolean = false) {
         if (!recorder.isStale(v, pose, isTransform())) return
+        val now = SystemClock.uptimeMillis()
+        val leading = FrontBufferHolePolicy.buildImmediately(settled, now, lastStaleMs, QUIET_MS)
+        lastStaleMs = now
         if (scheduled) view.removeCallbacks(buildRunnable)
         scheduled = true
-        view.postDelayed(buildRunnable, DEBOUNCE_MS)
+        if (leading) view.post(buildRunnable) else view.postDelayed(buildRunnable, DEBOUNCE_MS)
     }
 
     /**
@@ -162,5 +176,8 @@ internal class FrontBufferHoleMaskBuilder(private val view: CanvasTouchView) {
 
     companion object {
         const val DEBOUNCE_MS = 100L
+
+        /** 距上次过期至少静止这么久, 才算 "静止后第一次变化" (约 3 帧)。 */
+        const val QUIET_MS = 50L
     }
 }

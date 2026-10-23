@@ -80,4 +80,11 @@ object FrontBufferHolePolicy {
      */
     fun clearAfterCommit(commitsSinceCatchUp: Int, extraFrames: Int): Boolean =
         commitsSinceCatchUp > extraFrames.coerceAtLeast(0)
+
+    /**
+     * 掩码过期时是否跳过防抖立即重建: 视图已静止 ([settled], 无视图动画) 且距上一次发现过期
+     * 已隔 [quietMs] 以上 —— 即 "静止后的第一次变化" (手势抬起那一帧)。连续变化中的帧仍防抖。
+     */
+    fun buildImmediately(settled: Boolean, nowMs: Long, lastStaleMs: Long, quietMs: Long): Boolean =
+        settled && nowMs - lastStaleMs >= quietMs
 }

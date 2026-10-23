@@ -26,17 +26,10 @@ import kotlinx.coroutines.withContext
         return try {
             val dir = File(appContext.filesDir, "paintoppresets")
             val brushDir = File(appContext.filesDir, "brushes")
-            val srcFile = File(dir, "$presetName.kpp")
-            if (!srcFile.exists()) {
-                try {
-                    if (!dir.exists()) dir.mkdirs()
-                    appContext.assets.open("paintoppresets/$presetName.kpp").use { input ->
-                        srcFile.outputStream().use { output -> input.copyTo(output) }
-                    }
-                } catch (_: Exception) {
-                }
-            }
-            if (!srcFile.exists()) {
+            // W-11：只读取有效字节写到 cache，不再 updateKppFile 改写源文件（内置也会被改）
+            val params = brushParams[presetName]
+            val bytes = BrushExportSource.effectiveBytes(presetName, dir, params, BrushExportSource.assetReader(appContext))
+            if (bytes == null) {
                 android.widget.Toast.makeText(
                     context,
                     context.getString(R.string.brush_share_failed, presetName),
@@ -44,15 +37,9 @@ import kotlinx.coroutines.withContext
                 ).show()
                 return false
             }
+            val srcFile = BrushExportSource.stage(presetName, bytes, File(appContext.cacheDir, "export_staging"))
 
-            // Sync latest parameters into .kpp file
-            val params = brushParams[presetName]
-            if (params != null) {
-                KppHelper.updateKppFile(srcFile, presetName, params)
-            }
-
-            val tipName = params?.tipAsset?.ifBlank { null }
-                ?: KppHelper.extractTipAssetFilename(srcFile.readBytes())
+            val tipName = BrushExportSource.tipName(presetName, bytes, params)
 
             // If the preset has a custom or separate tip asset, export as .bundle so the tip pattern is preserved
             if (!tipName.isNullOrBlank()) {
@@ -122,24 +109,16 @@ import kotlinx.coroutines.withContext
         val presetsToPack = mutableListOf<Pair<String, File>>()
         val tipAssetsToPack = mutableListOf<File>()
 
+        val staging = File(appContext.cacheDir, "export_staging/group").apply { deleteRecursively(); mkdirs() }
         for (p in targetPresets) {
-            val file = File(dir, "${p.name}.kpp")
-            if (!file.exists()) {
-                try {
-                    appContext.assets.open("paintoppresets/${p.name}.kpp").use { input ->
-                        file.outputStream().use { input.copyTo(it) }
-                    }
-                } catch (_: Exception) {}
-            }
-            if (file.exists()) {
-                val params = brushParams[p.name]
-                if (params != null) {
-                    KppHelper.updateKppFile(file, p.name, params)
-                }
+            // W-11：有效字节写到 cache 再打包，源文件只读
+            val params = brushParams[p.name]
+            val bytes = BrushExportSource.effectiveBytes(p.name, dir, params, BrushExportSource.assetReader(appContext))
+            if (bytes != null) {
+                val file = BrushExportSource.stage(p.name, bytes, staging)
                 presetsToPack.add(p.name to file)
 
-                val tipName = params?.tipAsset?.ifBlank { null }
-                    ?: KppHelper.extractTipAssetFilename(file.readBytes())
+                val tipName = BrushExportSource.tipName(p.name, bytes, params)
                 if (!tipName.isNullOrBlank()) {
                     val tipFile = File(brushDir, tipName)
                     if (!tipFile.exists()) {

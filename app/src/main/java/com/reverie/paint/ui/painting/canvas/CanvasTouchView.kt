@@ -3498,7 +3498,6 @@ class CanvasTouchView(context: Context) : View(context) {
         val armed = realInk.arm(allowed, extras, uiClipSnapshot)
         if (com.reverie.paint.core.PerfTrace.enabled) logFrontBufferReady(v, armed)
         if (armed) {
-            refreshHoldDecor(v, force = true)
             noteHoldCursor(x, y, pressure)
             if (prevCursorRectValid) {
                 val l = floor(prevCursorLeft).toInt()
@@ -3510,33 +3509,10 @@ class CanvasTouchView(context: Context) : View(context) {
         }
     }
 
-    // ---- L-01: 前缓冲装饰重放 ----
-    private val decorRecorder by lazy(LazyThreadSafetyMode.NONE) { FrontBufferDecorRecorder(this) }
     private val holdGuideSeg = FloatArray(DynamicGuidePainter.SEG_SIZE)
-
-    /**
-     * 按住期间前缓冲要重放的装饰: 落笔时 ([force]) 必录一次, 之后每个 MOVE 只比较引用,
-     * 装饰状态变了 (辅助线配置、选区、像素网格开关、视图变换、面板开关…) 才重录。
-     */
-    private fun refreshHoldDecor(v: PaintViewModel, force: Boolean) {
-        if (!FrontBufferFeatureFlags.holdDecorReplay) {
-            realInk.decor = null
-            return
-        }
-        val pose = realInk.pose
-        if (pose == null) {
-            realInk.decor = null
-            return
-        }
-        val isTransform = tool == Tool.TRANSFORM
-        if (force || decorRecorder.isStale(v, pose, isTransform)) {
-            realInk.decor = decorRecorder.record(v, pose, isTransform)
-        }
-    }
 
     /** 动态吸附导引线 (与 onDraw 同一个 [computeDynamicGuide]) 写进前缓冲快照。零分配。 */
     private fun snapshotHoldGuide(v: PaintViewModel) {
-        if (!FrontBufferFeatureFlags.holdDecorReplay) return
         val kind = computeDynamicGuide(v, holdGuideSeg)
         realInk.guideSnapshot.write(
             if (kind == DYNAMIC_GUIDE_ABORT_FRAME) DynamicGuidePainter.KIND_NONE else kind,
@@ -6502,7 +6478,6 @@ class CanvasTouchView(context: Context) : View(context) {
                     val sx = event.getX(pointerIndex)
                     val sy = event.getY(pointerIndex)
                     updatePredictedTip(v, sx, sy)
-                    refreshHoldDecor(v, force = false)
                     snapshotHoldGuide(v)
                     noteHoldCursor(sx, sy, pressure)
                 }

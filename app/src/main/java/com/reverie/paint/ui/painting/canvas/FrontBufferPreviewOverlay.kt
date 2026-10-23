@@ -26,7 +26,6 @@ import androidx.graphics.lowlatency.CanvasFrontBufferedRenderer
 import androidx.graphics.surface.SurfaceControlCompat
 import com.reverie.paint.core.stylus.FrontBufferProbe
 import com.reverie.paint.model.CanvasPose
-import com.reverie.paint.model.FrontBufferDecorClip
 import com.reverie.paint.model.RealInkPresent
 import com.reverie.paint.model.UiClipSnapshot
 import java.util.concurrent.atomic.AtomicBoolean
@@ -233,14 +232,6 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
     private val cursorFillBlack = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK }
     private val cursorFillWhite = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
     private val density = resources.displayMetrics.density
-
-    // ---- L-01 装饰重放 (只在 GL 线程使用, 预分配, 热路径零分配) ----
-    private val decorClipPath = Path()
-    private val decorQuad = FloatArray(8)
-    private val decorPoly = FloatArray(FrontBufferDecorClip.MAX_VERTS * 2)
-    private val decorPolyTmp = FloatArray(FrontBufferDecorClip.MAX_VERTS * 2)
-    private val decorGuideSeg = FloatArray(DynamicGuidePainter.SEG_SIZE)
-    private val decorGuidePainter = DynamicGuidePainter(density)
 
     init {
         // 设为完全透明与顶层覆盖
@@ -801,22 +792,10 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
             if (r > inkR) inkR = r
             if (b > inkB) inkB = b
         }
-        // L-01: 本包贴过的区域 (与 blitInk 同一套裁剪) 里窗口层装饰被盖住了, 贴完在原处重画。
-        // 视图变换与录制时不一致 (落笔后又平移/缩放) 就不重放, 宁缺勿错。
-        val ctl = realInk
-        val decor = ctl?.decor
-        var guideKind = DynamicGuidePainter.KIND_NONE
-        var wantsDecor = false
-        if (decor != null && bmp != null && !bmp.isRecycled && param.pose != null && decor.pose == param.pose) {
-            guideKind = ctl.guideSnapshot.read(decorGuideSeg)
-            wantsDecor = (!decor.isEmpty || guideKind != DynamicGuidePainter.KIND_NONE) && buildDecorClip(param, bmp)
-        }
         if (bmp != null && !bmp.isRecycled) {
             val sc = strokeCanvas
             if (layer != null && sc != null) {
                 blitInk(sc, param, bmp)
-                // 备份层也要带装饰: 擦旧光标时从备份层拷回, 否则光标扫过的地方装饰会消失。
-                if (wantsDecor && decor != null) drawDecor(sc, decor, guideKind, param, false, inkL, inkT, inkR, inkB)
                 for (i in 0 until param.rectCount) {
                     val s = i * 4
                     strokeLayerDirty.union(
@@ -831,7 +810,6 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
             if (inkL <= inkR) clipOutUi(canvas, param, inkL, inkT, inkR, inkB)
             blitInk(canvas, param, bmp)
             canvas.restore()
-            if (wantsDecor && decor != null) drawDecor(canvas, decor, guideKind, param, true, inkL, inkT, inkR, inkB)
         }
         var overlayL = Float.MAX_VALUE
         var overlayT = Float.MAX_VALUE
@@ -868,82 +846,6 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
         if (willDrawCursor) drawHoldCursor(canvas, param)
         canvas.restore()
         rememberOverlayBounds(param, willDrawCursor)
-    }
-
-    /**
-     * 把本包实际 SRC 贴过的像素区写进 [decorClipPath]: 每块屏幕矩形先按 [clipBlitRect] 夹紧
-     * (与 [blitInk] 一致); 旋转/镜像时再与位图矩形在屏幕上的四边形求交。返回是否非空。
-     * 只在 GL 线程调用, 零分配。
-     */
-    private fun buildDecorClip(param: FrontBufferPathPacket, bitmap: Bitmap): Boolean {
-        decorClipPath.rewind()
-        val pose = param.pose ?: return false
-        val axisAligned = isAxisAligned(pose)
-        if (!axisAligned) {
-            poseMatrix.reset()
-            poseMatrix.preTranslate(pose.centerX, pose.centerY)
-            poseMatrix.preRotate(pose.rotation)
-            poseMatrix.preScale(pose.scale, pose.scale)
-            poseMatrix.preScale(pose.signX, pose.signY)
-            if (!poseMatrix.invert(inverseMatrix)) return false // 与 blitInk 一致: 不可逆时它什么都没贴
-        }
-        var any = false
-        for (i in 0 until param.rectCount) {
-            val s = i * 4
-            if (!clipBlitRect(param, bitmap, s)) continue
-            val cl = blitClip[0].toFloat()
-            val ct = blitClip[1].toFloat()
-            val cr = blitClip[2].toFloat()
-            val cb = blitClip[3].toFloat()
-            if (axisAligned) {
-                decorClipPath.addRect(cl, ct, cr, cb, Path.Direction.CW)
-                any = true
-                continue
-            }
-            val bl = param.bmpRects[s]
-            val bt = param.bmpRects[s + 1]
-            val br = param.bmpRects[s + 2]
-            val bb = param.bmpRects[s + 3]
-            if (br <= bl || bb <= bt) continue
-            decorQuad[0] = bl - pose.halfW
-            decorQuad[1] = bt - pose.halfH
-            decorQuad[2] = br - pose.halfW
-            decorQuad[3] = bt - pose.halfH
-            decorQuad[4] = br - pose.halfW
-            decorQuad[5] = bb - pose.halfH
-            decorQuad[6] = bl - pose.halfW
-            decorQuad[7] = bb - pose.halfH
-            poseMatrix.mapPoints(decorQuad)
-            val n = FrontBufferDecorClip.clipConvexToRect(decorQuad, 4, cl, ct, cr, cb, decorPoly, decorPolyTmp)
-            if (n < 3) continue
-            decorClipPath.moveTo(decorPoly[0], decorPoly[1])
-            for (k in 1 until n) decorClipPath.lineTo(decorPoly[k * 2], decorPoly[k * 2 + 1])
-            decorClipPath.close()
-            any = true
-        }
-        return any
-    }
-
-    /** 在 [decorClipPath] 内按窗口层的上下顺序重放: 像素网格 → 动态吸附导引线 → 蚂蚁线/辅助线。 */
-    @RequiresApi(Build.VERSION_CODES.Q)
-    private fun drawDecor(
-        target: Canvas,
-        decor: FrontBufferDecor,
-        guideKind: Int,
-        param: FrontBufferPathPacket,
-        clipUi: Boolean,
-        l: Float,
-        t: Float,
-        r: Float,
-        b: Float,
-    ) {
-        target.save()
-        target.clipPath(decorClipPath)
-        if (clipUi && l <= r) clipOutUi(target, param, l, t, r, b)
-        decor.under?.let { target.drawPicture(it) }
-        decorGuidePainter.draw(target, guideKind, decorGuideSeg)
-        decor.over?.let { target.drawPicture(it) }
-        target.restore()
     }
 
     @RequiresApi(Build.VERSION_CODES.Q)

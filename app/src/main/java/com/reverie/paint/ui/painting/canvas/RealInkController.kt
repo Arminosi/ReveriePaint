@@ -80,13 +80,6 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
     var strokeWantsOverlayExtras: Boolean = false
         private set
 
-    /**
-     * L-01: 按住期间在前缓冲贴完真墨后重放的画布装饰 (UI 线程落笔/装饰变化时整体发布, GL 线程读)。
-     * 抬笔不清: 在途的最后几包仍要带装饰; 下一笔落笔时替换或清空。
-     */
-    @Volatile
-    var decor: FrontBufferDecor? = null
-
     /** L-01: 动态吸附导引线快照 (UI 线程每次 MOVE 写, GL 线程读)。 */
     val guideSnapshot = DynamicGuideSnapshot()
 
@@ -166,8 +159,6 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
             ++strokeSeq
         }
         FbGeomLog.strokeBegin(seq, hold, view.width, view.height, pose)
-        // 上一笔的装饰作废; 按住时由 CanvasTouchView 在 arm 之后立刻录新的。
-        decor = null
         guideSnapshot.clear()
         if (!hold) {
             held = false

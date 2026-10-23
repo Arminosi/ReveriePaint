@@ -239,6 +239,26 @@ object BrushImportPipeline {
         return Result(commit(parsed.presets, renames, presetDir, v2), renames)
     }
 
+    const val PROVENANCE_ABR = "abr"
+
+    /**
+     * ABR 转换结果入库（W-09）：快照 = 转换后的 kpp 字节；source.json 记 abrParams（AbrParser 原始结构）与
+     * 转换器版本。覆盖为空，所以重置后字节 == 导入时。[name] 由调用方保证唯一。
+     */
+    fun importAbr(name: String, kppBytes: ByteArray, abrParams: JSONObject, converterVersion: Int, pack: String, presetDir: File): String {
+        val id = BrushIdentity.newImportedId()
+        PresetSnapshotStore.putImported(
+            id, "kpp", kppBytes,
+            JSONObject().put("provenance", PROVENANCE_ABR).put("pack", pack).put("file", "$name.kpp")
+                .put("md5", BrushDiagnostics.md5(kppBytes))
+                .put("abrConverterVersion", converterVersion).put("abrParams", abrParams),
+        )
+        BrushIdentity.register(BrushIdentity.Entry(id, name, "kpp", BrushIdentity.Kind.IMPORTED, pack))
+        EffectivePresetBuilder.materialize(id, presetDir)
+        BrushDiagnostics.log("import_abr", "name" to name, "id" to id, "pack" to pack, "converter" to converterVersion)
+        return id
+    }
+
     /**
      * App 自己落盘的新 kpp（新建 / ABR 转换 / 图片笔尖）纳入 v2：当前文件即快照（provenance=[provenance]）。
      * 已有 identity 或非 kpp 时不做事；返回 id。

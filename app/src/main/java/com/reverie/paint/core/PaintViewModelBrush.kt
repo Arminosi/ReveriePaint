@@ -1609,10 +1609,16 @@ import kotlinx.coroutines.withContext
                         val tipFileName = if (existingTipName != null) {
                             existingTipName
                         } else {
-                            val newName = "${safeGroupPrefix}_tip_${decodedTip.index}.png"
-                            val tipFile = File(brushDir, newName)
+                            // W-08：同名笔尖已存在且内容不同（另一个同名 ABR 包）时加序号，不覆盖——否则已导入的笔刷会变样
                             val tipBytes = AbrParser.encodeTipPng(decodedTip)
-                            tipFile.writeBytes(tipBytes)
+                            var newName = "${safeGroupPrefix}_tip_${decodedTip.index}.png"
+                            var n = 2
+                            while (File(brushDir, newName).exists() && !File(brushDir, newName).readBytes().contentEquals(tipBytes)) {
+                                newName = "${safeGroupPrefix}_tip_${decodedTip.index}_$n.png"
+                                n++
+                            }
+                            val tipFile = File(brushDir, newName)
+                            if (!tipFile.exists()) tipFile.writeBytes(tipBytes)
                             if (sha.isNotBlank()) tipShaMap[sha] = newName
                             newName
                         }
@@ -1635,7 +1641,8 @@ import kotlinx.coroutines.withContext
                 }
 
                 val importedPresetNames = mutableListOf<String>()
-                val existingKppNames = (presetDir.list() ?: emptyArray()).map { it.removeSuffix(".kpp") }.toMutableSet()
+                // W-08/W-09：撞名集合 = 内置 ∪ 已注册 ∪ 磁盘 .kpp/.myb，大小写不敏感
+                val existingKppNames = com.reverie.paint.core.brushstore.BrushImportPipeline.takenNames(presetDir).mapTo(HashSet()) { it.lowercase() }
 
                 for ((idx, preset) in parseResult.presets.withIndex()) {
                     // Computed presets must NOT bind a sampled tip; see AbrParser.matchTipForPreset.
@@ -1647,160 +1654,37 @@ import kotlinx.coroutines.withContext
                         ?: ""
 
                     val rawName = abrPresetName(preset.name, targetGroupName, idx)
-                    var candidateName = rawName.replace(Regex("""[\\/:*?"<>|]"""), "_")
+                    val safeName = rawName.replace(Regex("""[\\/:*?"<>|]"""), "_")
+                    var candidateName = safeName
                     var counter = 2
-                    while (existingKppNames.contains(candidateName)) {
-                        candidateName = "${rawName}_$counter"
+                    while (existingKppNames.contains(candidateName.lowercase())) {
+                        candidateName = "${safeName}_$counter"
                         counter++
                     }
-                    existingKppNames.add(candidateName)
+                    existingKppNames.add(candidateName.lowercase())
                     importedPresetNames.add(candidateName)
 
-                    val previewBytes = AbrParser.encodePreviewPng(
-                        tip = matchedTip,
-                        diameter = preset.diameter,
-                        roundness = preset.roundness,
+                    val converted = AbrPresetConverter.convert(
+                        preset, candidateName, matchedTip, matchedTipFileName, tipUuidToFileName, packBaseName,
                     )
-
-                    // 映射倾斜与动力学传感器
-                    val sizeSensor = when {
-                        preset.tiltSize -> "declination"
-                        preset.sizeJitter > 0.05 -> "fuzzy"
-                        else -> "pressure"
-                    }
-                    val opacitySensor = when {
-                        preset.tiltOpacity -> "declination"
-                        preset.opacityJitter > 0.05 -> "fuzzy"
-                        else -> "pressure"
-                    }
-                    val flowSensor = when {
-                        preset.tiltFlow -> "declination"
-                        preset.flowJitter > 0.05 -> "fuzzy"
-                        else -> "pressure"
-                    }
-                    val rotationSensor = when {
-                        preset.followDirection -> "drawingangle"
-                        preset.tiltAngle -> "ascension"
-                        preset.angleJitter > 0.05 -> "fuzzy"
-                        else -> "drawingangle"
-                    }
-
-                    val dynamicOptions = mutableMapOf<String, String>()
-                    if (preset.tiltSize) {
-                        dynamicOptions["Size"] = """<!DOCTYPE params><params id="declination"><curve>0,0;1,1;</curve></params>"""
-                    } else if (preset.sizeJitter > 0.05) {
-                        dynamicOptions["Size"] = """<!DOCTYPE params><params id="fuzzy"><curve>0,0;1,1;</curve></params>"""
-                    }
-                    if (preset.tiltOpacity) {
-                        dynamicOptions["Opacity"] = """<!DOCTYPE params><params id="declination"><curve>0,0;1,1;</curve></params>"""
-                    } else if (preset.opacityJitter > 0.05) {
-                        dynamicOptions["Opacity"] = """<!DOCTYPE params><params id="fuzzy"><curve>0,0;1,1;</curve></params>"""
-                    }
-                    if (preset.tiltFlow) {
-                        dynamicOptions["Flow"] = """<!DOCTYPE params><params id="declination"><curve>0,0;1,1;</curve></params>"""
-                    } else if (preset.flowJitter > 0.05) {
-                        dynamicOptions["Flow"] = """<!DOCTYPE params><params id="fuzzy"><curve>0,0;1,1;</curve></params>"""
-                    }
-                    if (preset.followDirection) {
-                        dynamicOptions["Rotation"] = """<!DOCTYPE params><params fanCornersStep="30" fanCornersEnabled="0" angleOffset="0" id="drawingangle"><curve>0,0;1,1;</curve></params>"""
-                    } else if (preset.tiltAngle) {
-                        dynamicOptions["Rotation"] = """<!DOCTYPE params><params id="ascension"><curve>0,0;1,1;</curve></params>"""
-                    } else if (preset.angleJitter > 0.05) {
-                        dynamicOptions["Rotation"] = """<!DOCTYPE params><params id="fuzzy"><curve>0,0;1,1;</curve></params>"""
-                    }
-                    if (preset.scatter > 0.001) {
-                        dynamicOptions["Scatter"] = """<!DOCTYPE params><params id="fuzzy"><curve>0,0;1,1;</curve></params>"""
-                    }
-
-                    // 映射双重画笔 (Dual Brush -> MaskingBrush)
-                    val dual = preset.dualBrush
-                    val hasDual = dual != null
-                    val dualTipFileName = dual?.tipUuid?.let { tipUuidToFileName[it] } ?: ""
-                    val maskingSizeRatio = if (hasDual && preset.diameter > 0) {
-                        (dual!!.diameter / preset.diameter).coerceIn(0.05, 5.0)
-                    } else 1.0
-
-                    // 映射纹理贴图 (Texture)
-                    val tex = preset.texture
-                    val hasTexture = tex != null
-
-                    // 映射色彩动力学 (Color Dynamics)
-                    val cd = preset.colorDynamics
-
-                    val hasPressureDynamics = preset.pressureSize || preset.pressureOpacity || preset.pressureFlow ||
-                        preset.tiltSize || preset.tiltOpacity || preset.tiltFlow || preset.tiltAngle
-                    val hasDynamics = hasPressureDynamics || preset.scatter > 0.001 || preset.followDirection ||
-                        preset.flipX || preset.flipY || preset.sizeJitter > 0.001 || preset.angleJitter > 0.001 ||
-                        preset.opacityJitter > 0.001 || preset.flowJitter > 0.001 || dynamicOptions.isNotEmpty() ||
-                        hasDual || hasTexture || cd != null
-
-                    val bp = BrushParams(
-                        size = preset.diameter,
-                        opacity = 1.0,
-                        flow = 1.0,
-                        spacing = preset.spacing,
-                        angle = preset.angle,
-                        scatter = preset.scatter,
-                        ratio = preset.roundness,
-                        followDirection = preset.followDirection,
-                        randomFlipX = preset.flipX,
-                        randomFlipY = preset.flipY,
-                        pressureEnabled = hasPressureDynamics,
-                        pressureSize = if (preset.pressureSize || preset.tiltSize) 1.0 else 0.0,
-                        pressureOpacity = if (preset.pressureOpacity || preset.tiltOpacity) 1.0 else 0.0,
-                        pressureFlow = if (preset.pressureFlow || preset.tiltFlow) 1.0 else 0.0,
-                        sizeSensor = sizeSensor,
-                        opacitySensor = opacitySensor,
-                        flowSensor = flowSensor,
-                        rotationSensor = rotationSensor,
-                        scatterSensor = "fuzzy",
-                        jitterAngle = preset.angleJitter,
-                        jitterSize = preset.sizeJitter,
-                        dynamicOptions = dynamicOptions,
-                        maskingEnabled = hasDual,
-                        maskingCompositeOp = dual?.compositeOp ?: "multiply",
-                        maskingSizeRatio = maskingSizeRatio,
-                        maskingSpacing = dual?.spacing ?: 0.1,
-                        maskingTipAsset = dualTipFileName,
-                        textureEnabled = hasTexture,
-                        textureScale = tex?.scale ?: 1.0,
-                        textureStrength = tex?.depth ?: 0.5,
-                        textureMode = tex?.mode ?: "multiply",
-                        texturePattern = tex?.patternName ?: "",
-                        hueJitter = cd?.hueJitter ?: 0.0,
-                        satJitter = cd?.satJitter ?: 0.0,
-                        valJitter = cd?.valJitter ?: 0.0,
-                        secondaryMix = cd?.secondaryMix ?: 0.0,
-                        airbrush = preset.airbrush,
-                        tipAsset = matchedTipFileName,
-                        paintOpId = "paintbrush",
-                        compositeOp = preset.compositeOp,
-                        author = "外部创作者 (ABR)",
-                        isAuthorLocked = true,
-                        description = "导入自 Photoshop ABR 笔刷包: $packBaseName",
-                        isCustomized = true,
-                        dynamicsCustomized = hasDynamics,
-                        smudgeCustomized = false,
-                    )
-
-                    val kppFile = File(presetDir, "$candidateName.kpp")
-                    // File-backed tips report `max(tipW, tipH) * scale` as the brush size
-                    // (KisScalingSizeBrush::userEffectiveSize), so `scale` is the only way to
-                    // make that number match the diameter the ABR declares. Without this the
-                    // size silently becomes the raw tip pixel size, and a preset declaring
-                    // diameter=80 shows up as 282 for a 282x282 tip.
-                    val tipScale = if (matchedTip != null && preset.diameter > 0.0 &&
-                        matchedTip.width > 0 && matchedTip.height > 0
-                    ) {
-                        (preset.diameter / maxOf(matchedTip.width, matchedTip.height))
-                            .coerceIn(0.01, 8.0)
+                    if (com.reverie.paint.core.brushstore.BrushStoreBootstrap.active) {
+                        // W-09：快照 = 转换后的 kpp，source.json 带 abrParams + 转换器版本；旧记录只留元数据
+                        com.reverie.paint.core.brushstore.BrushImportPipeline.importAbr(
+                            candidateName, converted.kppBytes, AbrPresetConverter.abrParamsJson(preset),
+                            AbrPresetConverter.CONVERTER_VERSION, filename, presetDir,
+                        )
+                        brushParams[candidateName] = BrushParams(
+                            author = converted.bp.author,
+                            isAuthorLocked = converted.bp.isAuthorLocked,
+                            description = converted.bp.description,
+                            isCustomized = false,
+                            dynamicsCustomized = false,
+                            smudgeCustomized = false,
+                        )
                     } else {
-                        null
+                        File(presetDir, "$candidateName.kpp").writeBytes(converted.kppBytes)
+                        brushParams[candidateName] = converted.bp
                     }
-                    val kppBytes = KppHelper.updateKppBytes(previewBytes, candidateName, bp, tipScale)
-                    kppFile.writeBytes(kppBytes)
-
-                    brushParams[candidateName] = bp
 
                     withContext(Dispatchers.Main) {
                         brushImportProgress = Pair(idx + 1, totalPresets)

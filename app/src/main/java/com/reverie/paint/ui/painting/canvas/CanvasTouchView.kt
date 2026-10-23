@@ -2369,6 +2369,7 @@ class CanvasTouchView(context: Context) : View(context) {
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         activeTouchView = this
+        registerDisplayListener()
         vm?.realInkSink = realInk
         // 重新挂载时 VM 通常未变 (setter 会提前返回), 这里补挂回 detach 时摘掉的回调。
         vm?.panelOcclusion?.onChanged = { scheduleSnapshotRebuild() }
@@ -2524,6 +2525,7 @@ class CanvasTouchView(context: Context) : View(context) {
         fbGeomSampling = false
         fbGeomCounter.reset()
         fbTargetRefreshHz = 0f
+        unregisterDisplayListener()
         removeCallbacks(snapshotRebuildRunnable)
         removeCallbacks(clearEvasionAfterUpRunnable)
         snapshotRebuildPending = false
@@ -3449,6 +3451,60 @@ class CanvasTouchView(context: Context) : View(context) {
         return fbTargetRefreshHz
     }
 
+    /** H-6: 渲染 Looper 队列里没有已到期消息 (MessageQueue.isIdle, API 23+); 拿不到时只看标志。 */
+    private fun renderQueueIdle(v: PaintViewModel): Boolean = try {
+        v.renderHandler?.looper?.queue?.isIdle ?: true
+    } catch (_: Throwable) {
+        true
+    }
+
+    /**
+     * H-6: 显示模式稳定判据。MainActivity.applyHighRefreshRate 用 preferredDisplayModeId 把窗口钉在面板
+     * 最高档; downclockWhenIdle 走的是 View.setFrameRate (仅 API 34+)。两者并存时窗口的 mode 投票优先,
+     * View 级帧率提示无法把屏幕降到 60Hz —— API 34+ 上 downclock 实际是空操作, API < 34 (如 HONOR
+     * HEY-W09 / Android 12) 上根本不执行。L-02 不再假设"必须到最高档", 只要求模式在
+     * [FrontBufferReadyGate.REFRESH_STABLE_MS] 内没有变化 (系统/厂商策略把屏幕稳定在 60Hz 也算就绪),
+     * 避免落笔恰逢切档时前缓冲与主窗口 vsync 节拍不一致。
+     */
+    @Volatile private var displayModeChangedAtMs = 0L
+    private var displayListening = false
+    private var displayLastHz = Float.NaN
+    private val fbDisplayListener = object : android.hardware.display.DisplayManager.DisplayListener {
+        override fun onDisplayAdded(displayId: Int) {}
+        override fun onDisplayRemoved(displayId: Int) {}
+        override fun onDisplayChanged(displayId: Int) {
+            val d = try { display } catch (_: Throwable) { null } ?: return
+            if (d.displayId != displayId) return
+            val hz = d.refreshRate
+            if (hz != displayLastHz) {
+                displayLastHz = hz
+                displayModeChangedAtMs = SystemClock.uptimeMillis()
+            }
+        }
+    }
+
+    private fun registerDisplayListener() {
+        if (displayListening) return
+        val dm = context.getSystemService(Context.DISPLAY_SERVICE) as? android.hardware.display.DisplayManager ?: return
+        try {
+            dm.registerDisplayListener(fbDisplayListener, handler)
+            displayListening = true
+            displayLastHz = currentRefreshHz()
+            displayModeChangedAtMs = SystemClock.uptimeMillis()
+        } catch (_: Throwable) {
+            displayListening = false
+        }
+    }
+
+    private fun unregisterDisplayListener() {
+        if (!displayListening) return
+        displayListening = false
+        try {
+            (context.getSystemService(Context.DISPLAY_SERVICE) as? android.hardware.display.DisplayManager)
+                ?.unregisterDisplayListener(fbDisplayListener)
+        } catch (_: Throwable) {}
+    }
+
     private fun currentRefreshHz(): Float = try {
         display?.refreshRate ?: Float.NaN
     } catch (_: Throwable) {
@@ -3462,14 +3518,17 @@ class CanvasTouchView(context: Context) : View(context) {
     private fun latchFrontBufferReady(v: PaintViewModel) {
         val now = SystemClock.uptimeMillis()
         val tiles = v.displayTiles.drawable()
-        val mask = FrontBufferReadyGate.conditionMask(
+        val mask = FrontBufferReadyGate.conditionMaskStable(
             tilesFinal = FrontBufferReadyGate.tilesFinal(
                 tiles?.grid?.width ?: 0, tiles?.grid?.height ?: 0, v.renderW, v.renderH, v.displayBufferInvalid,
             ),
-            renderIdle = !v.renderScheduled && !v.renderFollowUpPending && !v.renderInFlight,
+            renderIdle = FrontBufferReadyGate.renderIdle(
+                v.renderScheduled, v.renderFollowUpPending, v.renderInFlight, renderQueueIdle(v),
+            ),
             stableFrames = fbGeomCounter.stableFrames,
-            refreshRateHz = currentRefreshHz(),
-            targetRefreshHz = cachedTargetRefreshHz(),
+            refreshOk = FrontBufferReadyGate.refreshStable(
+                now, displayModeChangedAtMs, displayListening, currentRefreshHz(), cachedTargetRefreshHz(),
+            ),
             loading = v.isBlockingLoading,
         )
         strokeFbMask = mask

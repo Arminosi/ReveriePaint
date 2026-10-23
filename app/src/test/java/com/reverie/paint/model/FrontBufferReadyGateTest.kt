@@ -102,4 +102,33 @@ class FrontBufferReadyGateTest {
         assertEquals(0, c.stableFrames)
         assertEquals(0, c.feed(1, 2, 3, 4, 5, 7, 1))
     }
+
+    @Test
+    fun `stable display mode counts as refresh ready even at 60hz`() {
+        assertTrue(FrontBufferReadyGate.refreshStable(1000L, 800L, true, 60f, 120f))
+        assertFalse(FrontBufferReadyGate.refreshStable(1000L, 900L, true, 120f, 120f))
+        // 监听没挂上: 退回 "到达目标档" 判据
+        assertFalse(FrontBufferReadyGate.refreshStable(1000L, 0L, false, 60f, 120f))
+        assertTrue(FrontBufferReadyGate.refreshStable(1000L, 0L, false, 119f, 120f))
+    }
+
+    @Test
+    fun `stable mask matches the legacy mask bit for bit`() {
+        val legacy = FrontBufferReadyGate.conditionMask(true, true, 2, 120f, 120f, false)
+        val stable = FrontBufferReadyGate.conditionMaskStable(true, true, 2, true, false)
+        assertEquals(legacy, stable)
+        assertEquals(
+            FrontBufferReadyGate.ALL and FrontBufferReadyGate.COND_REFRESH.inv(),
+            FrontBufferReadyGate.conditionMaskStable(true, true, 2, false, false),
+        )
+    }
+
+    @Test
+    fun `render idle needs every flag clear and an idle queue`() {
+        assertTrue(FrontBufferReadyGate.renderIdle(false, false, false, true))
+        assertFalse(FrontBufferReadyGate.renderIdle(false, false, false, false))
+        assertFalse(FrontBufferReadyGate.renderIdle(true, false, false, true))
+        assertFalse(FrontBufferReadyGate.renderIdle(false, true, false, true))
+        assertFalse(FrontBufferReadyGate.renderIdle(false, false, true, true))
+    }
 }

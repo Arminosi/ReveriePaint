@@ -62,6 +62,41 @@ internal object FrontBufferReadyGate {
         return m
     }
 
+    /**
+     * H-6: 以"显示模式已稳定"取代"已到面板最高档"的刷新率条件 (稳定的 60Hz 同样算就绪)。
+     * [lastChangeMs] 是 DisplayListener 最近一次观察到本屏刷新率/模式变化 (或监听注册) 的时刻;
+     * 距今不少于 [REFRESH_STABLE_MS] 即视为稳定。[listening] = false (监听没挂上) 时退回 [refreshAtTarget]。
+     */
+    fun refreshStable(nowMs: Long, lastChangeMs: Long, listening: Boolean, current: Float, target: Float): Boolean =
+        if (!listening) refreshAtTarget(current, target) else nowMs - lastChangeMs >= REFRESH_STABLE_MS
+
+    /** 与 [conditionMask] 相同, 但刷新率条件由调用方按 [refreshStable] 直接给出。 */
+    fun conditionMaskStable(
+        tilesFinal: Boolean,
+        renderIdle: Boolean,
+        stableFrames: Int,
+        refreshOk: Boolean,
+        loading: Boolean,
+    ): Int {
+        var m = 0
+        if (tilesFinal) m = m or COND_TILES
+        if (renderIdle) m = m or COND_RENDER_IDLE
+        if (stableFrames >= STABLE_FRAMES_REQUIRED) m = m or COND_GEOM_STABLE
+        if (refreshOk) m = m or COND_REFRESH
+        if (!loading) m = m or COND_NOT_LOADING
+        return m
+    }
+
+    /**
+     * H-6: 渲染线程空闲的精确判定 —— 三个记账标志全清, 且渲染 Looper 的队列里没有已到期的消息
+     * ([queueIdle] = `MessageQueue.isIdle()`; 拿不到 Handler 时传 true, 只看标志)。
+     */
+    fun renderIdle(scheduled: Boolean, followUp: Boolean, inFlight: Boolean, queueIdle: Boolean): Boolean =
+        !scheduled && !followUp && !inFlight && queueIdle
+
+    /** 显示模式变化后需要保持不变的时长。 */
+    const val REFRESH_STABLE_MS = 150L
+
     /** 拿不到目标值 (<= 0 或非有限) 时不以刷新率阻拦。 */
     fun refreshAtTarget(current: Float, target: Float): Boolean {
         if (!(target > 0f) || !target.isFinite()) return true

@@ -718,7 +718,7 @@ class PaintViewModel : ViewModel() {
     var brushSmudgeRate by mutableDoubleStateOf(0.5)
     var brushSmudgeLength by mutableDoubleStateOf(0.5)
     var brushColorRate by mutableDoubleStateOf(0.5)
-    var brushSmudgeMode by mutableIntStateOf(0) // 0: Dulling, 1: Smearing
+    var brushSmudgeMode by mutableIntStateOf(0) // Krita SmudgeRateMode: 0 = Smearing, 1 = Dulling
     var brushSpikes by mutableIntStateOf(2)
     var brushJitterAngle by mutableDoubleStateOf(0.0)
     var brushJitterSize by mutableDoubleStateOf(0.0)

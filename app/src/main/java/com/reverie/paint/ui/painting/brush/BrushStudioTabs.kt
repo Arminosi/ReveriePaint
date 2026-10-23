@@ -439,12 +439,13 @@ internal fun ColorTabContent(
                     .padding(2.dp),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                val isDulling = vm.brushSmudgeMode == 0
+                // Krita SmudgeRateMode：0 = 涂抹(Smearing)，1 = 钝化(Dulling)
+                val isDulling = vm.brushSmudgeMode == 1
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(6.dp))
                         .background(if (isDulling) Morandi.accent.copy(alpha = 0.22f) else Color.Transparent)
-                        .clickable { vm.updateBrushSmudgeMode(0) }
+                        .clickable { vm.updateBrushSmudgeMode(1) }
                         .padding(horizontal = 8.dp, vertical = 4.dp),
                 ) {
                     Text(
@@ -458,7 +459,7 @@ internal fun ColorTabContent(
                     modifier = Modifier
                         .clip(RoundedCornerShape(6.dp))
                         .background(if (!isDulling) Morandi.accent.copy(alpha = 0.22f) else Color.Transparent)
-                        .clickable { vm.updateBrushSmudgeMode(1) }
+                        .clickable { vm.updateBrushSmudgeMode(0) }
                         .padding(horizontal = 8.dp, vertical = 4.dp),
                 ) {
                     Text(
@@ -623,15 +624,22 @@ internal fun TextureTabContent(
         }
 
         StudioGroupCard(stringResource(R.string.brush_studio_tex_blend_mode)) {
+            // Krita 16 种纹理模式（D-3）；选中按整数码比较，兼容旧存档里的 dodge/screen 等旧名
             val texModes = listOf(
-                "multiply" to R.string.brush_studio_blend_multiply,
-                "overlay" to R.string.brush_studio_blend_overlay,
-                "screen" to R.string.brush_studio_blend_screen,
-                "dodge" to R.string.brush_studio_blend_dodge_color,
+                R.string.brush_studio_texmode_multiply, R.string.brush_studio_texmode_subtract,
+                R.string.brush_studio_texmode_lightness, R.string.brush_studio_texmode_gradient,
+                R.string.brush_studio_texmode_darken, R.string.brush_studio_texmode_overlay,
+                R.string.brush_studio_texmode_color_dodge, R.string.brush_studio_texmode_color_burn,
+                R.string.brush_studio_texmode_linear_dodge, R.string.brush_studio_texmode_linear_burn,
+                R.string.brush_studio_texmode_hard_mix_photoshop, R.string.brush_studio_texmode_hard_mix_softer_photoshop,
+                R.string.brush_studio_texmode_height, R.string.brush_studio_texmode_linear_height,
+                R.string.brush_studio_texmode_height_photoshop, R.string.brush_studio_texmode_linear_height_photoshop,
             )
-            texModes.forEach { (id, nameRes) ->
-                val sel = vm.brushTextureMode == id
-                StudioRadioRow(name = stringResource(nameRes), selected = sel, textMain = textMain, textSub = textSub) { vm.updateBrushTextureMode(id) }
+            val curCode = com.reverie.paint.core.brushstore.TextureModes.toInt(vm.brushTextureMode)
+            texModes.forEachIndexed { code, nameRes ->
+                StudioRadioRow(name = stringResource(nameRes), selected = curCode == code, textMain = textMain, textSub = textSub) {
+                    vm.updateBrushTextureMode(com.reverie.paint.core.brushstore.TextureModes.nameOf(code))
+                }
             }
         }
     }

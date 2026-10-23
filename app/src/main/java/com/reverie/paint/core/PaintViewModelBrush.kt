@@ -1075,7 +1075,7 @@ import kotlinx.coroutines.withContext
                 } else {
                     ReverieCoreBridge.setBrushTipAsset("")
                 }
-                ReverieCoreBridge.setBrushTexture(
+                com.reverie.paint.core.brushstore.BrushTextureLive.apply(
                     saved.textureEnabled,
                     saved.textureScale,
                     saved.textureStrength,
@@ -1243,7 +1243,7 @@ import kotlinx.coroutines.withContext
                 } else {
                     ReverieCoreBridge.setBrushTipAsset("")
                 }
-                ReverieCoreBridge.setBrushTexture(
+                com.reverie.paint.core.brushstore.BrushTextureLive.apply(
                     saved.textureEnabled,
                     saved.textureScale,
                     saved.textureStrength,

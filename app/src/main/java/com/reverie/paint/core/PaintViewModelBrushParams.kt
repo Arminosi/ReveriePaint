@@ -123,7 +123,7 @@ import kotlinx.coroutines.launch
         brushTextureEnabled = v
         saveBrushParam(reloadEngine = true, immediateReload = true)
         runCore(render = false) {
-            ReverieCoreBridge.setBrushTexture(brushTextureEnabled, brushTextureScale, brushTextureStrength, brushTextureMode, brushTexturePattern)
+            com.reverie.paint.core.brushstore.BrushTextureLive.apply(brushTextureEnabled, brushTextureScale, brushTextureStrength, brushTextureMode, brushTexturePattern)
         }
     }
 
@@ -131,7 +131,7 @@ import kotlinx.coroutines.launch
         brushTextureScale = v
         saveBrushParam(reloadEngine = true)
         runCore(render = false) {
-            ReverieCoreBridge.setBrushTexture(brushTextureEnabled, brushTextureScale, brushTextureStrength, brushTextureMode, brushTexturePattern)
+            com.reverie.paint.core.brushstore.BrushTextureLive.apply(brushTextureEnabled, brushTextureScale, brushTextureStrength, brushTextureMode, brushTexturePattern)
         }
     }
 
@@ -139,7 +139,7 @@ import kotlinx.coroutines.launch
         brushTextureStrength = v
         saveBrushParam(reloadEngine = true)
         runCore(render = false) {
-            ReverieCoreBridge.setBrushTexture(brushTextureEnabled, brushTextureScale, brushTextureStrength, brushTextureMode, brushTexturePattern)
+            com.reverie.paint.core.brushstore.BrushTextureLive.apply(brushTextureEnabled, brushTextureScale, brushTextureStrength, brushTextureMode, brushTexturePattern)
         }
     }
 
@@ -147,7 +147,7 @@ import kotlinx.coroutines.launch
         brushTextureMode = v
         saveBrushParam(reloadEngine = true, immediateReload = true)
         runCore(render = false) {
-            ReverieCoreBridge.setBrushTexture(brushTextureEnabled, brushTextureScale, brushTextureStrength, brushTextureMode, brushTexturePattern)
+            com.reverie.paint.core.brushstore.BrushTextureLive.apply(brushTextureEnabled, brushTextureScale, brushTextureStrength, brushTextureMode, brushTexturePattern)
         }
     }
 
@@ -155,7 +155,7 @@ import kotlinx.coroutines.launch
         brushTexturePattern = v
         saveBrushParam(reloadEngine = true, immediateReload = true)
         runCore(render = false) {
-            ReverieCoreBridge.setBrushTexture(brushTextureEnabled, brushTextureScale, brushTextureStrength, brushTextureMode, brushTexturePattern)
+            com.reverie.paint.core.brushstore.BrushTextureLive.apply(brushTextureEnabled, brushTextureScale, brushTextureStrength, brushTextureMode, brushTexturePattern)
         }
     }
 
@@ -698,7 +698,7 @@ import kotlinx.coroutines.launch
                                     )
                                 }
                             }
-                            ReverieCoreBridge.setBrushTexture(
+                            com.reverie.paint.core.brushstore.BrushTextureLive.apply(
                                 pSnapshot.textureEnabled,
                                 pSnapshot.textureScale,
                                 pSnapshot.textureStrength,

@@ -358,7 +358,7 @@ private fun PaintViewModel.applyReplayPresetSetupLocked(target: Int) {
             ReverieCoreBridge.setBrushJitter(saved.jitterAngle, saved.jitterSize)
         }
         if (saved.textureEnabled) {
-            ReverieCoreBridge.setBrushTexture(
+            com.reverie.paint.core.brushstore.BrushTextureLive.apply(
                 saved.textureEnabled,
                 saved.textureScale,
                 saved.textureStrength,

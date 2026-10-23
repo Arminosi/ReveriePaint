@@ -703,17 +703,7 @@ object KppHelper {
         val texScale = Regex("""<param[^>]*name="Texture/Pattern/Scale"[^>]*>(?:<!\[CDATA\[)?([^<\]]+)""").find(xml)?.groupValues?.getOrNull(1)?.toDoubleOrNull()
         val texStrength = Regex("""<param[^>]*name="Texture/Pattern/Strength"[^>]*>(?:<!\[CDATA\[)?([^<\]]+)""").find(xml)?.groupValues?.getOrNull(1)?.toDoubleOrNull()
         val texModeRaw = Regex("""<param[^>]*name="Texture/Pattern/TexturingMode"[^>]*>(?:<!\[CDATA\[)?([^<\]]+)""").find(xml)?.groupValues?.getOrNull(1)?.trim()
-        val textureMode = when (texModeRaw) {
-            "0" -> "multiply"
-            "1" -> "subtract"
-            "4" -> "darken"
-            "5" -> "overlay"
-            "6" -> "dodge"
-            "7" -> "burn"
-            "10" -> "hard_light"
-            "11" -> "soft_light"
-            else -> if (texModeRaw != null) "multiply" else null
-        }
+        val textureMode = texModeRaw?.let { com.reverie.paint.core.brushstore.TextureModes.nameOf(com.reverie.paint.core.brushstore.TextureModes.toInt(it)) }
 
         val texPattern = Regex("""<param[^>]*name="Texture/Pattern/(?:PatternFileName|Name)"[^>]*>(?:<!\[CDATA\[)?([^<\]]+)""").find(xml)?.groupValues?.getOrNull(1)?.trim()
 
@@ -951,16 +941,7 @@ object KppHelper {
         xml = updateParam(xml, "PressureTexture/Strength/", params.textureEnabled.toString())
         xml = updateParam(xml, "Texture/Pattern/Scale", params.textureScale.toString())
         xml = updateParam(xml, "Texture/Pattern/Strength", params.textureStrength.toString())
-        val texModeCode = when (params.textureMode.lowercase()) {
-            "subtract" -> "1"
-            "darken" -> "4"
-            "overlay" -> "5"
-            "dodge" -> "6"
-            "burn" -> "7"
-            "hard_light" -> "10"
-            "soft_light" -> "11"
-            else -> "0"
-        }
+        val texModeCode = com.reverie.paint.core.brushstore.TextureModes.toInt(params.textureMode).toString()
         xml = updateParam(xml, "Texture/Pattern/TexturingMode", texModeCode)
         if (params.texturePattern.isNotBlank()) {
             xml = updateParam(xml, "Texture/Pattern/PatternFileName", params.texturePattern)

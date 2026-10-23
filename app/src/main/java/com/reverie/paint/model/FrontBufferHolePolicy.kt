@@ -63,10 +63,38 @@ object FrontBufferHolePolicy {
 
     /**
      * 辅助绘图是否可能画动态吸附线 (透视 2D / 等距 / 二维网格)。吸附线画在墨之上 (窗口第 2.5 段),
-     * 按住时由前缓冲在孔洞外画、窗口在孔洞内补 (不挖孔); 为能擦掉旧位置, 这类笔画从首帧起维护备份层。
+     * 默认走常规路径 ([snapForcesNormal]); `debug.reverie.fb_snap_hold=1` 时按住, 由前缓冲在孔洞外画、
+     * 窗口在孔洞内补 (不挖孔), 为能擦掉旧位置, 这类笔画从首帧起维护备份层。
      */
     fun snapLinesPossible(assistedDrawing: Boolean, perspective2d: Boolean, isoOrGrid: Boolean): Boolean =
         assistedDrawing && (perspective2d || isoOrGrid)
+
+    /**
+     * 1a 开关 (`debug.reverie.fb_snap_hold`, 默认关): 关时可能出现吸附线的笔画一律走常规路径
+     * (严格同一性); 开时按住, 前缓冲孔外画导引线 (A/B 用, 有两表面不同步的残留风险)。
+     */
+    fun snapForcesNormal(snapPossible: Boolean, snapHoldEnabled: Boolean): Boolean =
+        snapPossible && !snapHoldEnabled
+
+    /** 只有真按住画导引线 (开关开) 时, 才为导引线从首帧维护备份层。 */
+    fun snapNeedsExtras(snapPossible: Boolean, snapHoldEnabled: Boolean): Boolean =
+        snapPossible && snapHoldEnabled
+
+    /**
+     * 窗口画导引线的方式: 按住中, 或松开后前缓冲上的导引线还没被擦掉 (E 交还 / 抬笔追赶期间),
+     * 窗口只画孔洞内与避让区内那一半 —— 同一像素永远只有一个表面在画导引线, 不会叠出双倍 alpha。
+     * 前缓冲擦掉之后 ([guideClearedNeedsRedraw]) 窗口再画完整导引线。开关关时前缓冲从不画导引线,
+     * 窗口永远画完整导引线 (与 1a 之前逐字节相同)。
+     */
+    fun windowGuideHolesOnly(snapHoldEnabled: Boolean, held: Boolean, frontGuideOnScreen: Boolean): Boolean =
+        snapHoldEnabled && (held || frontGuideOnScreen)
+
+    /** 前缓冲包里是否带导引线: 只有开关打开时。 */
+    fun frontDrawsGuide(snapHoldEnabled: Boolean): Boolean = snapHoldEnabled
+
+    /** 前缓冲导引线由"在屏"变为"已擦"且已不按住: 窗口要补画一帧完整导引线。 */
+    fun guideClearedNeedsRedraw(wasOnScreen: Boolean, nowOnScreen: Boolean, held: Boolean): Boolean =
+        wasOnScreen && !nowOnScreen && !held
 
     fun decidePacket(mode: Int, hit: Boolean): Int = when {
         !hit || mode == MODE_OFF -> PACKET_PLAIN

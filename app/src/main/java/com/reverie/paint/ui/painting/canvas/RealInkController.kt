@@ -230,6 +230,11 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
         view.postInvalidate()
     }
 
+    /** 前缓冲上的导引线已擦掉 (GL/任一线程): 窗口补画一帧完整导引线, 见 [FrontBufferHolePolicy.windowGuideHolesOnly]。 */
+    fun onFrontGuideCleared() {
+        view.postInvalidateOnAnimation()
+    }
+
     /** 中途释放并登记一次追赶: 主画布下一帧画完后清前缓冲, 避免停顿期间旧墨留在面板上。 */
     fun releaseAndCatchUp() {
         release()
@@ -557,7 +562,12 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
                 clipsSnapshot, slot.busy, minL, minT, canvasBounds,
                 symCursorX, symCursorY, symCursorCount,
                 holes, holeHitBits,
-                guideSnapshot.read(guideReadSeg), guideReadSeg,
+                if (FrontBufferHolePolicy.frontDrawsGuide(FrontBufferFeatureFlags.snapHold)) {
+                    guideSnapshot.read(guideReadSeg)
+                } else {
+                    DynamicGuidePainter.KIND_NONE
+                },
+                guideReadSeg,
             )
         if (!shown) {
             slot.busy.set(false)

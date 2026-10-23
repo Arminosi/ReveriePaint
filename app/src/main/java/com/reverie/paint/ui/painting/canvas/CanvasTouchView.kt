@@ -3149,8 +3149,11 @@ class CanvasTouchView(context: Context) : View(context) {
         // =========================================================================
         val dynamicGuideKind = computeDynamicGuide(v, dynamicGuideSeg)
         if (dynamicGuideKind == DYNAMIC_GUIDE_ABORT_FRAME) return
-        if (realInk.held) {
-            // 按住真墨: 孔洞外由前缓冲画导引线 (同一画笔/同一几何), 窗口只补孔洞内与 UI 避让区内。
+        if (FrontBufferHolePolicy.windowGuideHolesOnly(
+                FrontBufferFeatureFlags.snapHold, realInk.held, frontBufferOverlay?.guideOnScreen == true,
+            )) {
+            // 按住真墨 (或松开后前缓冲导引线尚未擦掉): 孔洞外由前缓冲画导引线, 窗口只补孔洞内与
+            // UI 避让区内, 同一像素不会两个表面同时画。
             drawHeldGuide(canvas, dynamicGuideKind, dynamicGuideSeg)
         } else {
             dynamicGuidePainter.draw(canvas, dynamicGuideKind, dynamicGuideSeg)
@@ -3679,7 +3682,8 @@ class CanvasTouchView(context: Context) : View(context) {
         val cursorMode = if (t == Tool.ERASER) v.eraserCursorMode else v.brushCursorMode
         val cursorWhileDrawing = (cursorMode == 1 || cursorMode == 3) && v.cursorStyleMode != 4
         // 吸附导引线由前缓冲画, 擦旧位置要靠备份层: 可能出现导引线的笔画从首帧起维护备份层。
-        val extras = cursorWhileDrawing || predictedTipEligible(v) || snapGuidePossible(v)
+        val extras = cursorWhileDrawing || predictedTipEligible(v) ||
+            FrontBufferHolePolicy.snapNeedsExtras(snapGuidePossible(v), FrontBufferFeatureFlags.snapHold)
         val armed = realInk.arm(allowed, extras, uiClipSnapshot)
         if (holeMode != FrontBufferHolePolicy.MODE_OFF) {
             com.reverie.paint.perf.FbGeomLog.holeArm(realInk.currentStrokeSeq, holeMode, holeArm, holeCov)
@@ -3700,13 +3704,14 @@ class CanvasTouchView(context: Context) : View(context) {
     }
 
     /**
-     * 孔洞方案处理不了的覆盖层: 非笔刷类工具的工具覆盖层。这些笔画走常规路径。
-     * 辅助绘图的动态吸附线不在此列: 它画在墨之上, 由前缓冲在孔洞外画、窗口在孔洞内画 (见
-     * [drawHeldGuide] / [invalidateHeldGuide]), 不挖孔。
+     * 孔洞方案处理不了的覆盖层: 非笔刷类工具的工具覆盖层; 以及辅助绘图的动态吸附线 ——
+     * 默认 ([FrontBufferFeatureFlags.snapHold] 关) 走常规路径保证严格同图; 开关打开时按住,
+     * 由前缓冲在孔洞外画、窗口在孔洞内画 (见 [drawHeldGuide] / [invalidateHeldGuide])。
      */
-    private fun holeOtherOverlayActive(@Suppress("UNUSED_PARAMETER") v: PaintViewModel): Boolean {
+    private fun holeOtherOverlayActive(v: PaintViewModel): Boolean {
         val t = effTool()
-        return t != Tool.BRUSH && t != Tool.ERASER && t != Tool.SMUDGE
+        if (t != Tool.BRUSH && t != Tool.ERASER && t != Tool.SMUDGE) return true
+        return FrontBufferHolePolicy.snapForcesNormal(snapGuidePossible(v), FrontBufferFeatureFlags.snapHold)
     }
 
     /** 这一笔可能出现动态吸附导引线 (2D 透视 / 等轴测 / 2D 网格 且开了辅助绘图)。 */

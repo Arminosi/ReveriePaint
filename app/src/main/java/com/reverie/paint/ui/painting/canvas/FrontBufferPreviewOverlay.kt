@@ -29,6 +29,7 @@ import androidx.graphics.lowlatency.CanvasFrontBufferedRenderer
 import androidx.graphics.surface.SurfaceControlCompat
 import com.reverie.paint.core.stylus.FrontBufferProbe
 import com.reverie.paint.model.CanvasPose
+import com.reverie.paint.model.FrontBufferHolePolicy
 import com.reverie.paint.model.RealInkPresent
 import com.reverie.paint.model.UiClipSnapshot
 import com.reverie.paint.perf.FbGeomLog
@@ -251,6 +252,23 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
     private fun invalidatePrevOverlay() {
         prevOverlayValid = false
         prevGuideKind = DynamicGuidePainter.KIND_NONE
+        noteGuideOnScreen(false)
+    }
+
+    /**
+     * 前缓冲上此刻是否画着导引线 (GL 线程写, UI 线程 onDraw 读)。为 true 时窗口即使已不按住也只画
+     * 孔内那一半 ([FrontBufferHolePolicy.windowGuideHolesOnly]); 擦掉后通知窗口补画完整导引线。
+     */
+    @Volatile
+    internal var guideOnScreen = false
+        private set
+
+    private fun noteGuideOnScreen(now: Boolean) {
+        val was = guideOnScreen
+        guideOnScreen = now
+        if (FrontBufferHolePolicy.guideClearedNeedsRedraw(was, now, realInk?.held == true)) {
+            realInk?.onFrontGuideCleared()
+        }
     }
     private val density = resources.displayMetrics.density
     private val cursorPainter = HoldCursorPainter(density)
@@ -384,6 +402,7 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
             Log.e(TAG, "Failed to initialize CanvasFrontBufferedRenderer", t)
             frontRenderer = null
             isRendererInitialized = false
+            noteGuideOnScreen(false)
         }
     }
 
@@ -895,8 +914,10 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
             drawGuide(canvas, param, bufferWidth, bufferHeight)
             prevGuideKind = param.guideKind
             System.arraycopy(param.guideSeg, 0, prevGuideSeg, 0, DynamicGuidePainter.SEG_SIZE)
+            noteGuideOnScreen(true)
         } else {
             prevGuideKind = DynamicGuidePainter.KIND_NONE
+            noteGuideOnScreen(false)
         }
         var overlayL = Float.MAX_VALUE
         var overlayT = Float.MAX_VALUE
@@ -1303,6 +1324,7 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
         }
         frontRenderer = null
         isRendererInitialized = false
+        noteGuideOnScreen(false)
         resetInkQueue()
     }
 

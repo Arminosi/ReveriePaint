@@ -17,6 +17,7 @@ import com.reverie.paint.model.HoleMaskGrid
  * adb shell setprop debug.reverie.fb_hole_mode e       # hmin (默认) | e: 命中孔洞即整笔交还主画布
  * adb shell setprop debug.reverie.fb_hole_margin 2     # 掩码膨胀像素
  * adb shell setprop debug.reverie.fb_hole_max_cov 35   # 掩码占屏 > 35% 时这一笔不按住
+ * adb shell setprop debug.reverie.fb_snap_hold 1       # 1a: 吸附线笔画也按住 (默认 0 = 走常规路径, 严格同图)
  * adb shell setprop debug.reverie.fb_strict 1          # 严格同一性: 关预测笔尖 (默认 1)
  * adb shell setprop debug.reverie.fb_clear_delay 0     # 抬笔清前缓冲再多等的帧数
  * ```
@@ -47,4 +48,11 @@ internal object FrontBufferFeatureFlags {
 
     /** H-4: 抬笔后窗口帧提交再多等的帧数。 */
     val clearDelayFrames: Int by lazy { PerfTrace.debugPropInt("debug.reverie.fb_clear_delay", 0).coerceIn(0, 8) }
+
+    /**
+     * 1a: 吸附导引线笔画按住 (前缓冲孔外画导引线)。默认关: 两个表面无法原子同步, 抬笔/E 交还/笔画中
+     * 导引线跨孔边界可能有 1 帧错位, 且前缓冲经 SurfaceFlinger 叠加的半透明导引线与窗口直接混合有
+     * ±1 舍入差, 不能保证逐像素同图。
+     */
+    val snapHold: Boolean by lazy { PerfTrace.debugPropInt("debug.reverie.fb_snap_hold", 0) != 0 }
 }

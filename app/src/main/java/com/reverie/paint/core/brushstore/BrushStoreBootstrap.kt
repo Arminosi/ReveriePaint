@@ -129,6 +129,7 @@ object BrushStoreBootstrap {
     fun resetForTest() {
         active = false
         presetDir = null
+        PresetReadback.clearBaselineCache()
     }
 
     /** v2 管理的、可走新路径的预设（目前只有 .kpp；.myb 映射 NEEDS_EVIDENCE，仍走旧路径） */

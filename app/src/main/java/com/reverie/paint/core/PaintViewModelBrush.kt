@@ -1669,18 +1669,15 @@ import kotlinx.coroutines.withContext
                     )
                     if (com.reverie.paint.core.brushstore.BrushStoreBootstrap.active) {
                         // W-09：快照 = 转换后的 kpp，source.json 带 abrParams + 转换器版本；旧记录只留元数据
+                        // APP_ONLY 的转换结果（无压感动态时 pressureEnabled=false）作为基线写进 source.json：重置回到它
+                        val baseline = com.reverie.paint.core.brushstore.PresetReadback.baselineJson(converted.bp)
                         com.reverie.paint.core.brushstore.BrushImportPipeline.importAbr(
                             candidateName, converted.kppBytes, AbrPresetConverter.abrParamsJson(preset),
-                            AbrPresetConverter.CONVERTER_VERSION, filename, presetDir,
+                            AbrPresetConverter.CONVERTER_VERSION, filename, presetDir, baseline,
                         )
-                        brushParams[candidateName] = BrushParams(
-                            author = converted.bp.author,
-                            isAuthorLocked = converted.bp.isAuthorLocked,
-                            description = converted.bp.description,
-                            isCustomized = false,
-                            dynamicsCustomized = false,
-                            smudgeCustomized = false,
-                        )
+                        com.reverie.paint.core.brushstore.PresetReadback.metadataOnly(
+                            converted.bp, com.reverie.paint.core.brushstore.PresetReadback.baselineFromJson(baseline),
+                        )?.let { brushParams[candidateName] = it }
                     } else {
                         File(presetDir, "$candidateName.kpp").writeBytes(converted.kppBytes)
                         brushParams[candidateName] = converted.bp

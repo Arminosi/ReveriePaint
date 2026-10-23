@@ -245,13 +245,22 @@ object BrushImportPipeline {
      * ABR 转换结果入库（W-09）：快照 = 转换后的 kpp 字节；source.json 记 abrParams（AbrParser 原始结构）与
      * 转换器版本。覆盖为空，所以重置后字节 == 导入时。[name] 由调用方保证唯一。
      */
-    fun importAbr(name: String, kppBytes: ByteArray, abrParams: JSONObject, converterVersion: Int, pack: String, presetDir: File): String {
+    fun importAbr(
+        name: String,
+        kppBytes: ByteArray,
+        abrParams: JSONObject,
+        converterVersion: Int,
+        pack: String,
+        presetDir: File,
+        appBaseline: JSONObject = JSONObject(),
+    ): String {
         val id = BrushIdentity.newImportedId()
         PresetSnapshotStore.putImported(
             id, "kpp", kppBytes,
             JSONObject().put("provenance", PROVENANCE_ABR).put("pack", pack).put("file", "$name.kpp")
                 .put("md5", BrushDiagnostics.md5(kppBytes))
-                .put("abrConverterVersion", converterVersion).put("abrParams", abrParams),
+                .put("abrConverterVersion", converterVersion).put("abrParams", abrParams)
+                .put("appBaseline", appBaseline),
         )
         BrushIdentity.register(BrushIdentity.Entry(id, name, "kpp", BrushIdentity.Kind.IMPORTED, pack))
         EffectivePresetBuilder.materialize(id, presetDir)
@@ -286,7 +295,8 @@ object BrushImportPipeline {
         val id = BrushIdentity.newImportedId()
         PresetSnapshotStore.putImported(
             id, src.ext, snap,
-            JSONObject().put("provenance", "duplicate").put("from", srcId).put("pack", src.pack).put("md5", BrushDiagnostics.md5(snap)),
+            JSONObject().put("provenance", "duplicate").put("from", srcId).put("pack", src.pack).put("md5", BrushDiagnostics.md5(snap))
+                .also { j -> PresetSnapshotStore.source(srcId)?.optJSONObject("appBaseline")?.let { j.put("appBaseline", it) } },
         )
         BrushIdentity.register(BrushIdentity.Entry(id, newName, src.ext, BrushIdentity.Kind.IMPORTED, src.pack))
         BrushOverrideStore.copy(srcId, id)
@@ -302,6 +312,7 @@ object BrushImportPipeline {
         BrushOverrideStore.clear(e.id)
         BrushIdentity.remove(e.id)
         PresetSnapshotStore.removeImported(e.id)
+        PresetReadback.clearBaselineCache(e.id)
         BrushDiagnostics.log("forget", "name" to name, "id" to e.id)
     }
 }

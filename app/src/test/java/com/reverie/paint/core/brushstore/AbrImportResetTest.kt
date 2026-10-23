@@ -28,6 +28,7 @@ import java.nio.file.Files
 class AbrImportResetTest {
     private lateinit var root: File
     private lateinit var presetDir: File
+    private val records = HashMap<String, com.reverie.paint.core.BrushParams>()
 
     @Before
     fun setUp() {
@@ -69,7 +70,9 @@ class AbrImportResetTest {
             val c = AbrPresetConverter.convert(preset, name, tip, tip?.let { tipNames[it.uuid] } ?: "", tipNames, pack)
             val id = BrushImportPipeline.importAbr(
                 name, c.kppBytes, AbrPresetConverter.abrParamsJson(preset), AbrPresetConverter.CONVERTER_VERSION, "$pack.abr", presetDir,
+                PresetReadback.baselineJson(c.bp),
             )
+            records[name] = c.bp
             Triple(name, id, c.kppBytes)
         }
     }
@@ -142,6 +145,38 @@ class AbrImportResetTest {
         val result = AbrParser.AbrParseResult(10, 2, listOf(tip, dualTip), listOf(preset))
         val (name, id, bytes) = importAll(result, "Synth").single()
         checkResetRoundTrip(name, id, bytes, preset)
+    }
+
+    @Test
+    fun appOnlyBaselineSurvivesResetAndIsNotModified() {
+        // 无压感动态的 ABR：转换器给出 pressureEnabled=false（不在 kpp 里，是 APP_ONLY）
+        val noPressure = AbrParser.AbrPresetInfo(name = "Flat")
+        val withPressure = AbrParser.AbrPresetInfo(name = "Pressured", pressureSize = true)
+        val res = importAll(AbrParser.AbrParseResult(6, 2, emptyList(), listOf(noPressure, withPressure)), "B")
+        val (flat, flatId, _) = res[0]
+        val (pr, prId, _) = res[1]
+        assertEquals(false, records[flat]!!.pressureEnabled)
+        assertEquals(true, records[pr]!!.pressureEnabled)
+        assertEquals(false, PresetSnapshotStore.source(flatId)!!.getJSONObject("appBaseline").getBoolean("pressureEnabled"))
+        assertTrue(PresetSnapshotStore.source(prId)!!.getJSONObject("appBaseline").length() == 0)
+
+        val base = PresetReadback.baseline(flatId)
+        assertEquals(false, base.pressureEnabled)
+        // 导入时的旧记录 = 元数据 + 基线；不算"已修改"
+        val rec = PresetReadback.metadataOnly(records[flat], base)!!
+        assertEquals(false, rec.pressureEnabled)
+        assertEquals(records[flat]!!.author, rec.author)
+        assertEquals(records[flat]!!.description, rec.description)
+        assertTrue(!PresetReadback.appOnlyModified(rec, base))
+        // 用户打开压感 → 已修改；重置 → 回到 false
+        val edited = rec.copy(pressureEnabled = true)
+        assertTrue(PresetReadback.appOnlyModified(edited, base))
+        assertEquals(false, PresetReadback.metadataOnly(edited, base)!!.pressureEnabled)
+        // 没有基线的预设行为不变：默认值即基线
+        assertEquals(true, PresetReadback.baseline(prId).pressureEnabled)
+        // 复制继承基线
+        val dupId = BrushImportPipeline.duplicate(flatId, "Flat 副本", presetDir)!!
+        assertEquals(false, PresetReadback.baseline(dupId).pressureEnabled)
     }
 
     @Test

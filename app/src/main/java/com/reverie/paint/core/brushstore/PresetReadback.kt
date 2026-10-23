@@ -31,21 +31,24 @@ object PresetReadback {
     private val METADATA = setOf(ControlId.AUTHOR, ControlId.AUTHOR_LOCKED, ControlId.DESCRIPTION, ControlId.VERSION)
 
     /** 旧记录里是否有偏离默认值的 APP_ONLY 调参（不含元数据）——v2 下"已修改"的另一半依据 */
-    fun appOnlyModified(legacy: BrushParams?): Boolean {
+    fun appOnlyModified(legacy: BrushParams?, base: BrushParams = BrushParams()): Boolean {
         if (legacy == null) return false
-        val d = BrushParams()
+        val d = base
         return ControlId.entries.any { id ->
             id.klass == ControlClass.APP_ONLY && id !in METADATA &&
                 PresetPropertyMap.spec(id).let { !PresetPropertyMap.same(id, it.get(legacy), it.get(d)) }
         }
     }
 
-    /** 重置后的旧记录：只留元数据；元数据也都是默认值时返回 null（删除记录） */
-    fun metadataOnly(legacy: BrushParams?): BrushParams? {
-        if (legacy == null) return null
+    /**
+     * 重置后的旧记录：[base]（快照自带的 APP_ONLY 基线，见 [baseline]）+ 元数据；
+     * 两者都是默认值时返回 null（删除记录）
+     */
+    fun metadataOnly(legacy: BrushParams?, base: BrushParams = BrushParams()): BrushParams? {
         val d = BrushParams()
-        var p = d
-        var any = false
+        var any = base != d
+        if (legacy == null) return if (any) base else null
+        var p = base
         for (id in METADATA) {
             val sp = PresetPropertyMap.spec(id)
             val v = sp.get(legacy)
@@ -55,6 +58,44 @@ object PresetReadback {
             }
         }
         return if (any) p else null
+    }
+
+    /** 快照 source.json 里的 APP_ONLY 基线（W-09：ABR 无压感动态时 pressureEnabled=false 等），按 id 缓存（快照不可变） */
+    private val baselineCache = java.util.concurrent.ConcurrentHashMap<String, BrushParams>()
+
+    /**
+     * 该预设"出厂/导入时"的 APP_ONLY 值：重置回到它，偏离它才算已修改。
+     * 只认标量 APP_ONLY 非元数据控件；没有 appBaseline 时就是 [BrushParams] 默认值。
+     */
+    fun baseline(id: String): BrushParams = baselineCache.getOrPut(id) {
+        baselineFromJson(PresetSnapshotStore.source(id)?.optJSONObject("appBaseline"))
+    }
+
+    fun baselineFromJson(j: org.json.JSONObject?): BrushParams {
+        var p = BrushParams()
+        if (j == null) return p
+        for (k in j.keys()) {
+            val id = ControlId.entries.firstOrNull { it.key == k && it.klass == ControlClass.APP_ONLY && it !in METADATA } ?: continue
+            p = runCatching { PresetPropertyMap.spec(id).let { sp -> sp.set(p, j.get(k)) } }.getOrDefault(p)
+        }
+        return p
+    }
+
+    /** [p] 中偏离默认值的标量 APP_ONLY 非元数据控件，写进 source.json 的 appBaseline */
+    fun baselineJson(p: BrushParams): org.json.JSONObject {
+        val d = BrushParams()
+        val o = org.json.JSONObject()
+        for (id in ControlId.entries) {
+            if (id.klass != ControlClass.APP_ONLY || id in METADATA) continue
+            val sp = PresetPropertyMap.spec(id)
+            val v = sp.get(p)
+            if ((v is Boolean || v is Number || v is String) && !PresetPropertyMap.same(id, v, sp.get(d))) o.put(id.key, v)
+        }
+        return o
+    }
+
+    fun clearBaselineCache(id: String? = null) {
+        if (id == null) baselineCache.clear() else baselineCache.remove(id)
     }
 
     fun fromXml(xml: String?, appBase: BrushParams = BrushParams()): BrushParams =

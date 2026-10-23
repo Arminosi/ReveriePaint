@@ -257,7 +257,7 @@ internal object BrushStoreVm {
         val dir = presetDir() ?: return false
         pendingKppReloadJob?.cancel()
         BrushEditSession.reset(e.id, dir) ?: return false
-        val keep = PresetReadback.metadataOnly(vm.brushParams[name])
+        val keep = PresetReadback.metadataOnly(vm.brushParams[name], PresetReadback.baseline(e.id))
         if (keep != null) vm.brushParams[name] = keep else vm.brushParams.remove(name)
         return true
     }
@@ -266,7 +266,7 @@ internal object BrushStoreVm {
     fun isModified(vm: PaintViewModel, name: String): Boolean? {
         val e = BrushStoreBootstrap.managedEntry(name) ?: return null
         // 先读 brushParams（Compose 状态）：每次保存都会写它，列表角标借此重组
-        val app = PresetReadback.appOnlyModified(vm.brushParams[name])
+        val app = PresetReadback.appOnlyModified(vm.brushParams[name], PresetReadback.baseline(e.id))
         return app || BrushOverrideStore.get(e.id).controls.isNotEmpty() || BrushEditSession.hasPending(e.id)
     }
 }

@@ -4983,6 +4983,12 @@ class PaintViewModel : ViewModel() {
 
     @Volatile internal var renderScheduled = false
 
+    /**
+     * 有一次不经 [renderScheduled] 记账的渲染已投递 (立即渲染 / 脏区未清完的 4ms 重试)。
+     * 只给前缓冲就绪门控 (L-02) 作"渲染空闲"的**推断**信号; doRender 开头清掉。
+     */
+    @Volatile internal var renderFollowUpPending = false
+
     /** Pending multi-layer target set from the last replayed T_*_LAYERS
      *  recording event; consumed once by the following BEGIN / MOVE_CONTENT. */
     internal var pendingReplayLayers: IntArray? = null
@@ -5910,6 +5916,7 @@ class PaintViewModel : ViewModel() {
             pendingRenderRunnable?.let { h.removeCallbacks(it) }
             pendingRenderRunnable = null
             renderScheduled = false
+            renderFollowUpPending = true
             h.post { doRender() }
             return
         }
@@ -5947,8 +5954,21 @@ class PaintViewModel : ViewModel() {
 
     internal var renderDeferCount = 0
 
+    /** 渲染线程正在执行 [doRender] (L-02 "渲染空闲"推断信号的一部分)。 */
+    @Volatile internal var renderInFlight = false
+
     internal fun doRender() {
+        renderInFlight = true
+        try {
+            doRenderBody()
+        } finally {
+            renderInFlight = false
+        }
+    }
+
+    private fun doRenderBody() {
         renderScheduled = false
+        renderFollowUpPending = false
         renderDeferCount = 0
         val rh = renderHandler
         val w = renderW
@@ -6035,6 +6055,7 @@ class PaintViewModel : ViewModel() {
         PerfTrace.tick("render.calls", 1000L)
         if (!ok) {
             if (ReverieCoreBridge.renderPendingDirty()) {
+                renderFollowUpPending = true
                 rh?.postDelayed({ doRender() }, 4L)
             } else if (liquifyPresentation.isPending(liquifyPresentationGesture)) {
                 displayBitmap?.let { liquifyPresentation.publish(liquifyPresentationGesture, it) }

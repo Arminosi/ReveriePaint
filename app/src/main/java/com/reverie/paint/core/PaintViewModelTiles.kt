@@ -269,6 +269,7 @@ internal fun PaintViewModel.doRenderTiles(w: Int, h: Int) {
 /** 瓦片路径的"这一帧没有新像素"收尾 (与整图路径保持同样的重试/液化语义)。 */
 private fun PaintViewModel.onTileRenderNoWork() {
     if (ReverieCoreBridge.renderPendingDirty()) {
+        renderFollowUpPending = true
         renderHandler?.postDelayed({ doRender() }, 4L)
     } else if (liquifyPresentation.isPending(liquifyPresentationGesture)) {
         val p = displayTiles.published

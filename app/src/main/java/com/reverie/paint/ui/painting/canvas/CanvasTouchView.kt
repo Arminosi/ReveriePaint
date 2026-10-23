@@ -2520,6 +2520,10 @@ class CanvasTouchView(context: Context) : View(context) {
 
     override fun onDetachedFromWindow() {
         vm?.panelOcclusion?.onChanged = null
+        android.view.Choreographer.getInstance().removeFrameCallback(fbGeomFrameCallback)
+        fbGeomSampling = false
+        fbGeomCounter.reset()
+        fbTargetRefreshHz = 0f
         removeCallbacks(snapshotRebuildRunnable)
         removeCallbacks(clearEvasionAfterUpRunnable)
         snapshotRebuildPending = false
@@ -2785,6 +2789,7 @@ class CanvasTouchView(context: Context) : View(context) {
     private fun drawCanvas(canvas: Canvas) {
         super.onDraw(canvas)
         val v = vm ?: return
+        ensureFrontBufferGeometrySampler(v)
 
         // =========================================================================
         // 1. 硬件加速直出 Krita 渲染画布 (消除 Compose 重组调度延迟)
@@ -3343,9 +3348,91 @@ class CanvasTouchView(context: Context) : View(context) {
      * API < 29、对称辅助 (镜像分支由 onDraw 实时绘制)、画布走整图路径 (墨源只有显示瓦片)、
      * 设备不保留前缓冲内容 (见 [FrontBufferProbe.realInkHoldAllowed])。
      */
-    /** 新建画布后的静默窗内返回 false。比较的是已有时间戳，热路径不分配。 */
-    private fun frontBufferSettled(v: PaintViewModel): Boolean =
-        android.os.SystemClock.uptimeMillis() >= v.frontBufferQuietUntilMs
+    // ---- L-02: 前缓冲就绪门控 (每笔落笔评估一次并锁定) ----
+    /** 本笔落笔时的就绪判定; 未就绪落下的笔整笔不按住真墨、也不画 #81 前沿预览。 */
+    private var strokeFbReady = false
+    private var strokeFbDecision = FrontBufferReadyGate.NOT_READY
+    private var strokeFbMask = 0
+    private val fbGeomCounter = StableFrameCounter()
+    private var fbGeomSampling = false
+    private val fbGeomLoc = IntArray(2)
+    private var fbTargetRefreshHz = 0f
+    private val fbGeomFrameCallback = android.view.Choreographer.FrameCallback { sampleFrontBufferGeometry() }
+
+    /** 静默窗内每帧采一次几何签名; 窗外停止 (由 onDraw 再次拉起), 不常驻。 */
+    private fun ensureFrontBufferGeometrySampler(v: PaintViewModel) {
+        if (fbGeomSampling || !FrontBufferFeatureFlags.readyGate) return
+        if (SystemClock.uptimeMillis() >= v.frontBufferQuietUntilMs) return
+        fbGeomSampling = true
+        android.view.Choreographer.getInstance().postFrameCallback(fbGeomFrameCallback)
+    }
+
+    private fun sampleFrontBufferGeometry() {
+        fbGeomSampling = false
+        val v = vm ?: return
+        if (!isAttachedToWindow) return
+        feedFrontBufferGeometry()
+        ensureFrontBufferGeometrySampler(v)
+    }
+
+    /** 几何签名: 前缓冲 SurfaceView 屏幕位置/尺寸 + 画布 View 尺寸 + 画布 pose。零分配。 */
+    private fun feedFrontBufferGeometry() {
+        val fb = frontBufferOverlay
+        var sx = Int.MIN_VALUE
+        var sy = Int.MIN_VALUE
+        var sw = -1
+        var sh = -1
+        if (fb != null) {
+            fb.getLocationOnScreen(fbGeomLoc)
+            sx = fbGeomLoc[0]
+            sy = fbGeomLoc[1]
+            sw = fb.width
+            sh = fb.height
+        }
+        val pose = realInk.pose
+        val p0 = if (pose == null) 0 else
+            java.lang.Float.floatToRawIntBits(pose.centerX) * 31 + java.lang.Float.floatToRawIntBits(pose.centerY)
+        val p1 = if (pose == null) 0 else
+            (java.lang.Float.floatToRawIntBits(pose.scale) * 31 + java.lang.Float.floatToRawIntBits(pose.rotation)) * 31 +
+                pose.bmpW * 7 + pose.bmpH
+        fbGeomCounter.feed(sx, sy, sw, sh, width, height, p0, p1)
+    }
+
+    private fun cachedTargetRefreshHz(): Float {
+        if (fbTargetRefreshHz > 0f) return fbTargetRefreshHz
+        if (Build.VERSION.SDK_INT < 30) return 0f
+        val d = try { display } catch (_: Throwable) { null } ?: return 0f
+        fbTargetRefreshHz = d.supportedModes?.maxOfOrNull { it.refreshRate } ?: 0f
+        return fbTargetRefreshHz
+    }
+
+    private fun currentRefreshHz(): Float = try {
+        display?.refreshRate ?: Float.NaN
+    } catch (_: Throwable) {
+        Float.NaN
+    }
+
+    /**
+     * 落笔时评估一次就绪门控并锁定到 [strokeFbReady]。静默窗结束后一律放行 (兜底, 同原行为);
+     * 窗内只有全部条件满足才提前放行。关闭开关 (debug.reverie.fb_ready_gate=0) 时与原静默窗完全一致。
+     */
+    private fun latchFrontBufferReady(v: PaintViewModel) {
+        val now = SystemClock.uptimeMillis()
+        val tiles = v.displayTiles.drawable()
+        val mask = FrontBufferReadyGate.conditionMask(
+            tilesFinal = FrontBufferReadyGate.tilesFinal(
+                tiles?.grid?.width ?: 0, tiles?.grid?.height ?: 0, v.renderW, v.renderH, v.displayBufferInvalid,
+            ),
+            renderIdle = !v.renderScheduled && !v.renderFollowUpPending && !v.renderInFlight,
+            stableFrames = fbGeomCounter.stableFrames,
+            refreshRateHz = currentRefreshHz(),
+            targetRefreshHz = cachedTargetRefreshHz(),
+            loading = v.isBlockingLoading,
+        )
+        strokeFbMask = mask
+        strokeFbDecision = FrontBufferReadyGate.decide(now, v.frontBufferQuietUntilMs, mask, FrontBufferFeatureFlags.readyGate)
+        strokeFbReady = FrontBufferReadyGate.isReady(strokeFbDecision)
+    }
 
     private fun armRealInkHold(v: PaintViewModel, hasSymmetry: Boolean, x: Float, y: Float, pressure: Float) {
         // 透光台对位模式: 前缓冲置顶会盖住 ShiftTraceOverlay, 统一不按住真墨,
@@ -3357,9 +3444,10 @@ class CanvasTouchView(context: Context) : View(context) {
         }
         rebuildUiExclusionSnapshot()
         ensureViewTransform()
+        latchFrontBufferReady(v)
         val allowed = v.frontBufferPredictionEnabled && (!hasSymmetry || v.mirrorGate.isQueueing) &&
             v.displayTiles.drawable() != null && FrontBufferProbe.realInkHoldAllowed() &&
-            frontBufferSettled(v) && !v.anim.shiftTraceActive
+            strokeFbReady && !v.anim.shiftTraceActive
         val t = effTool()
         val cursorMode = if (t == Tool.ERASER) v.eraserCursorMode else v.brushCursorMode
         val cursorWhileDrawing = (cursorMode == 1 || cursorMode == 3) && v.cursorStyleMode != 4
@@ -6164,7 +6252,7 @@ class CanvasTouchView(context: Context) : View(context) {
 
                     // 真墨按住期间前缓冲上是引擎真墨 (渲染线程呈现), 不再叠 #81 的前沿段假线;
                     // 光标与预测笔尖在本分支末尾记下快照, 由前缓冲随墨一起画。
-                    if (!realInk.held && frontBufferSettled(v) &&
+                    if (!realInk.held && strokeFbReady &&
                         frontBufferOverlay?.canRenderPreview == true &&
                         pointerIndex in 0 until event.pointerCount
                     ) {

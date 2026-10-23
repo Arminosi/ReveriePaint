@@ -42,6 +42,7 @@ import kotlin.math.sin
 
 /** 单帧最多绘制的像素网格线条数, 超过则跳过网格 (防极端缩放下的掉帧) */
 private const val MAX_VISIBLE_GRID_LINES = 6000
+private const val DYNAMIC_GUIDE_ABORT_FRAME = -1
 
 /** 对称绘制最多需要的镜像分支数 (径向对称 7 个 + 主笔迹) */
 private const val MAX_MIRROR_BRANCHES = 8
@@ -377,32 +378,9 @@ class CanvasTouchView(context: Context) : View(context) {
         color = android.graphics.Color.argb(190, 0, 0, 0)
     }
 
-    // 动态辅助吸附导引线 Paint
-    private val dynamicGuideGlowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeWidth = 3.5f * density
-        color = android.graphics.Color.argb(70, 0x5A, 0x6E, 0x8A) // Morandi misty blue glow
-    }
-    private val dynamicGuideLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeWidth = 1.4f * density
-        color = android.graphics.Color.argb(220, 0x78, 0x88, 0x9F) // Morandi accentHi crisp line
-        pathEffect = android.graphics.DashPathEffect(floatArrayOf(6f * density, 4f * density), 0f)
-    }
-    private val vpTargetGlowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeWidth = 2.5f * density
-        color = android.graphics.Color.argb(140, 0x5A, 0x6E, 0x8A)
-    }
-    private val vpTargetCorePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeWidth = 1.8f * density
-        color = android.graphics.Color.argb(255, 0x78, 0x88, 0x9F)
-    }
-    private val vpTargetCenterPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.FILL
-        color = android.graphics.Color.WHITE
-    }
+    // 动态辅助吸附导引线: 画笔在 DynamicGuidePainter 里 (前缓冲 GL 线程另持一个实例)
+    private val dynamicGuidePainter = DynamicGuidePainter(density)
+    private val dynamicGuideSeg = FloatArray(DynamicGuidePainter.SEG_SIZE)
 
     var drawingGuidePanelOpen = false
     private var currentStrokeDocPos = Offset.Zero
@@ -2869,55 +2847,7 @@ class CanvasTouchView(context: Context) : View(context) {
             }
 
             // 像素级网格高倍率缩放展示 (scale >= 4.0)
-            if (v.pixelGridEnabled && scale >= 4f) {
-                val halfW = imgW / 2f
-                val halfH = imgH / 2f
-                val gridAlpha = ((scale - 4f) / 4f).coerceIn(0f, 1f) * 0.15f
-                if (gridAlpha > 0.01f) {
-                    pixelGridPaint.color =
-                        android.graphics.Color.argb((gridAlpha * 255).toInt(), 255, 255, 255)
-                    pixelGridPaint.strokeWidth = 1f / scale
-                    // 只画视口内可见的网格线: 严格限制在视口边界内，避免高倍率放大下
-                    // 跨越全图的数万像素超长线段加重 GPU 光栅化与裁剪负担
-                    ensureViewTransform()
-                    visibleBitmapBounds(boundsScratch)
-                    val gx0 = boundsScratch[0].coerceIn(0, sceneW)
-                    val gx1 = boundsScratch[2].coerceIn(0, sceneW)
-                    val gy0 = boundsScratch[1].coerceIn(0, sceneH)
-                    val gy1 = boundsScratch[3].coerceIn(0, sceneH)
-                    val numV = (gx1 - gx0 + 1).coerceAtLeast(0)
-                    val numH = (gy1 - gy0 + 1).coerceAtLeast(0)
-                    val totalLines = numV + numH
-                    // 兜底: 视口已经把整幅包进来时线条仍可能过万, 宁可不画网格也不掉帧
-                    if (totalLines in 1..MAX_VISIBLE_GRID_LINES) {
-                        val neededFloats = totalLines * 4
-                        if (gridLinesBuffer.size < neededFloats) {
-                            gridLinesBuffer = FloatArray(neededFloats)
-                        }
-                        var idx = 0
-                        val y0 = gy0.toFloat() - halfH
-                        val y1 = gy1.toFloat() - halfH
-                        val pts = gridLinesBuffer
-                        for (gx in gx0..gx1) {
-                            val x = gx.toFloat() - halfW
-                            pts[idx++] = x
-                            pts[idx++] = y0
-                            pts[idx++] = x
-                            pts[idx++] = y1
-                        }
-                        val x0 = gx0.toFloat() - halfW
-                        val x1 = gx1.toFloat() - halfW
-                        for (gy in gy0..gy1) {
-                            val y = gy.toFloat() - halfH
-                            pts[idx++] = x0
-                            pts[idx++] = y
-                            pts[idx++] = x1
-                            pts[idx++] = y
-                        }
-                        canvas.drawLines(pts, 0, idx, pixelGridPaint)
-                    }
-                }
-            }
+            drawPixelGrid(canvas, v, scale, sceneW, sceneH)
 
             canvas.restore()
             // 画布已经画出这一帧的瓦片: 抬笔后的真墨追赶到此为止, 这一帧提交后清前缓冲。
@@ -3190,149 +3120,9 @@ class CanvasTouchView(context: Context) : View(context) {
         // =========================================================================
         // 2.5 绘画中辅助吸附动态导引线 (透视灭点射线 / 等轴测 / 2D 网格高亮)
         // =========================================================================
-        val guide = v.drawingGuide
-        // 注意: 不能复用上面 1.5 段那支 isDrawingTool(它不含 SMUDGE) —— 两者语义不同,
-        // 合并上游 1.3.3 时曾因此产生重复声明。
-        val isGuideAssistTool = tool == Tool.BRUSH || tool == Tool.ERASER || tool == Tool.SMUDGE
-        if (guide.mode != GuideMode.OFF && guide.assistedDrawing && localIsTouching && strokeStarted && isGuideAssistTool) {
-            val maxExt = maxOf(v.docWidth, v.docHeight).toFloat() * 50f + 500_000f
-            when (guide.mode) {
-                GuideMode.PERSPECTIVE -> {
-                    if (guide.perspective3d) return
-                    val locked = assistLockedRay
-                    val dx = currentStrokeDocPos.x - firstDocPos.x
-                    val dy = currentStrokeDocPos.y - firstDocPos.y
-                    val dist = hypot(dx, dy)
-                    if (locked != null || dist >= 6f) {
-                        var bestType = 0 // 0: horizontal, 1: vertical, 2: vp
-                        var bestVp: Point2D? = null
-                        var bestDir = Offset(1f, 0f)
-
-                        if (locked is AssistRay.Horizontal) {
-                            bestType = 0
-                        } else if (locked is AssistRay.Vertical) {
-                            bestType = 1
-                        } else if (locked is AssistRay.VanishingPoint) {
-                            bestType = 2
-                            bestVp = locked.vp
-                            bestDir = locked.dir
-                        } else if (locked is AssistRay.Direction) {
-                            bestType = 2
-                            bestDir = locked.dir
-                        } else {
-                            val vps = if (guide.perspectiveVanishingPoints.isEmpty()) {
-                                listOf(Point2D(v.docWidth * 0.5f, v.docHeight * 0.35f))
-                            } else guide.perspectiveVanishingPoints
-
-                            var minError = abs(dy)
-                            val vertError = abs(dx)
-                            if (vertError < minError) {
-                                minError = vertError
-                                bestType = 1
-                            }
-
-                            for (vp in vps) {
-                                val vRayX = vp.x - firstDocPos.x
-                                val vRayY = vp.y - firstDocPos.y
-                                val vLen = hypot(vRayX, vRayY)
-                                if (vLen > 0.001f) {
-                                    val nx = vRayX / vLen
-                                    val ny = vRayY / vLen
-                                    val err = abs(dx * (-ny) + dy * nx)
-                                    if (err < minError) {
-                                        minError = err
-                                        bestType = 2
-                                        bestVp = vp
-                                        bestDir = Offset(nx, ny)
-                                    }
-                                }
-                            }
-                        }
-
-                        when (bestType) {
-                            0 -> {
-                                val p1 = docToScreen(Offset(firstDocPos.x - maxExt, firstDocPos.y))
-                                val p2 = docToScreen(Offset(firstDocPos.x + maxExt, firstDocPos.y))
-                                canvas.drawLine(p1.x, p1.y, p2.x, p2.y, dynamicGuideGlowPaint)
-                                canvas.drawLine(p1.x, p1.y, p2.x, p2.y, dynamicGuideLinePaint)
-                            }
-                            1 -> {
-                                val p1 = docToScreen(Offset(firstDocPos.x, firstDocPos.y - maxExt))
-                                val p2 = docToScreen(Offset(firstDocPos.x, firstDocPos.y + maxExt))
-                                canvas.drawLine(p1.x, p1.y, p2.x, p2.y, dynamicGuideGlowPaint)
-                                canvas.drawLine(p1.x, p1.y, p2.x, p2.y, dynamicGuideLinePaint)
-                            }
-                            2 -> {
-                                val p1 = docToScreen(Offset(firstDocPos.x - bestDir.x * maxExt, firstDocPos.y - bestDir.y * maxExt))
-                                val p2 = docToScreen(Offset(firstDocPos.x + bestDir.x * maxExt, firstDocPos.y + bestDir.y * maxExt))
-                                canvas.drawLine(p1.x, p1.y, p2.x, p2.y, dynamicGuideGlowPaint)
-                                canvas.drawLine(p1.x, p1.y, p2.x, p2.y, dynamicGuideLinePaint)
-
-                                if (bestVp != null) {
-                                    val vpScreen = docToScreen(Offset(bestVp.x, bestVp.y))
-                                    canvas.drawCircle(vpScreen.x, vpScreen.y, 14f * density, vpTargetGlowPaint)
-                                    canvas.drawCircle(vpScreen.x, vpScreen.y, 7f * density, vpTargetCorePaint)
-                                    canvas.drawCircle(vpScreen.x, vpScreen.y, 3.5f * density, vpTargetCenterPaint)
-                                }
-                            }
-                        }
-                    }
-                }
-                GuideMode.ISOMETRIC -> {
-                    val locked = assistLockedRay
-                    val dx = currentStrokeDocPos.x - firstDocPos.x
-                    val dy = currentStrokeDocPos.y - firstDocPos.y
-                    val dist = hypot(dx, dy)
-                    if (locked is AssistRay.Direction || dist >= 6f) {
-                        val dir = if (locked is AssistRay.Direction) {
-                            locked.dir
-                        } else {
-                            var bestDir = ISO_DIRS[0]
-                            var minError = Float.MAX_VALUE
-                            for (d in ISO_DIRS) {
-                                val err = abs(-dx * d.y + dy * d.x)
-                                if (err < minError) {
-                                    minError = err
-                                    bestDir = d
-                                }
-                            }
-                            bestDir
-                        }
-                        val p1 = docToScreen(Offset(firstDocPos.x - dir.x * maxExt, firstDocPos.y - dir.y * maxExt))
-                        val p2 = docToScreen(Offset(firstDocPos.x + dir.x * maxExt, firstDocPos.y + dir.y * maxExt))
-                        canvas.drawLine(p1.x, p1.y, p2.x, p2.y, dynamicGuideGlowPaint)
-                        canvas.drawLine(p1.x, p1.y, p2.x, p2.y, dynamicGuideLinePaint)
-                    }
-                }
-                GuideMode.GRID_2D -> {
-                    val locked = assistLockedRay
-                    val dx = currentStrokeDocPos.x - firstDocPos.x
-                    val dy = currentStrokeDocPos.y - firstDocPos.y
-                    val dist = hypot(dx, dy)
-                    if (locked != null || dist >= 6f) {
-                        val isHoriz = if (locked is AssistRay.Horizontal) {
-                            true
-                        } else if (locked is AssistRay.Vertical) {
-                            false
-                        } else {
-                            abs(dx) >= abs(dy)
-                        }
-                        if (isHoriz) {
-                            val p1 = docToScreen(Offset(firstDocPos.x - maxExt, firstDocPos.y))
-                            val p2 = docToScreen(Offset(firstDocPos.x + maxExt, firstDocPos.y))
-                            canvas.drawLine(p1.x, p1.y, p2.x, p2.y, dynamicGuideGlowPaint)
-                            canvas.drawLine(p1.x, p1.y, p2.x, p2.y, dynamicGuideLinePaint)
-                        } else {
-                            val p1 = docToScreen(Offset(firstDocPos.x, firstDocPos.y - maxExt))
-                            val p2 = docToScreen(Offset(firstDocPos.x, firstDocPos.y + maxExt))
-                            canvas.drawLine(p1.x, p1.y, p2.x, p2.y, dynamicGuideGlowPaint)
-                            canvas.drawLine(p1.x, p1.y, p2.x, p2.y, dynamicGuideLinePaint)
-                        }
-                    }
-                }
-                else -> Unit
-            }
-        }
+        val dynamicGuideKind = computeDynamicGuide(v, dynamicGuideSeg)
+        if (dynamicGuideKind == DYNAMIC_GUIDE_ABORT_FRAME) return
+        dynamicGuidePainter.draw(canvas, dynamicGuideKind, dynamicGuideSeg)
 
         // =========================================================================
         // 3. 光标及对称参考线绘制 (Cursor & Guides)
@@ -3575,6 +3365,7 @@ class CanvasTouchView(context: Context) : View(context) {
         val cursorWhileDrawing = (cursorMode == 1 || cursorMode == 3) && v.cursorStyleMode != 4
         val extras = cursorWhileDrawing || predictedTipEligible(v)
         if (realInk.arm(allowed, extras, uiClipSnapshot)) {
+            refreshHoldDecor(v, force = true)
             noteHoldCursor(x, y, pressure)
             if (prevCursorRectValid) {
                 val l = floor(prevCursorLeft).toInt()
@@ -3584,6 +3375,40 @@ class CanvasTouchView(context: Context) : View(context) {
                 invalidate(l, t, r, b)
             }
         }
+    }
+
+    // ---- L-01: 前缓冲装饰重放 ----
+    private val decorRecorder by lazy(LazyThreadSafetyMode.NONE) { FrontBufferDecorRecorder(this) }
+    private val holdGuideSeg = FloatArray(DynamicGuidePainter.SEG_SIZE)
+
+    /**
+     * 按住期间前缓冲要重放的装饰: 落笔时 ([force]) 必录一次, 之后每个 MOVE 只比较引用,
+     * 装饰状态变了 (辅助线配置、选区、像素网格开关、视图变换、面板开关…) 才重录。
+     */
+    private fun refreshHoldDecor(v: PaintViewModel, force: Boolean) {
+        if (!FrontBufferFeatureFlags.holdDecorReplay) {
+            realInk.decor = null
+            return
+        }
+        val pose = realInk.pose
+        if (pose == null) {
+            realInk.decor = null
+            return
+        }
+        val isTransform = tool == Tool.TRANSFORM
+        if (force || decorRecorder.isStale(v, pose, isTransform)) {
+            realInk.decor = decorRecorder.record(v, pose, isTransform)
+        }
+    }
+
+    /** 动态吸附导引线 (与 onDraw 同一个 [computeDynamicGuide]) 写进前缓冲快照。零分配。 */
+    private fun snapshotHoldGuide(v: PaintViewModel) {
+        if (!FrontBufferFeatureFlags.holdDecorReplay) return
+        val kind = computeDynamicGuide(v, holdGuideSeg)
+        realInk.guideSnapshot.write(
+            if (kind == DYNAMIC_GUIDE_ABORT_FRAME) DynamicGuidePainter.KIND_NONE else kind,
+            holdGuideSeg,
+        )
     }
 
     /** 预测笔尖圆点只给纯色高不透明的一级预测笔刷 (半透明/水彩/纹理笔刷上画点会露馅)。 */
@@ -3746,6 +3571,190 @@ class CanvasTouchView(context: Context) : View(context) {
         ensureViewTransform()
         viewTransform.docToScreen(docPos.x, docPos.y, pointScratch)
         return Offset(pointScratch[0], pointScratch[1])
+    }
+
+    /**
+     * 像素网格 (scale >= 4)。调用方已把 [canvas] 变换到"位图居中"坐标 (与 drawCanvas 同一套)。
+     * 主画布每帧画; 前缓冲重放在落笔时也调用它录进 Picture (见 [FrontBufferDecorRecorder])。
+     * 只画视口内可见的网格线, 视口已把整幅包进来时线条仍可能过万, 宁可不画网格也不掉帧。
+     */
+    internal fun drawPixelGrid(canvas: Canvas, v: PaintViewModel, scale: Float, sceneW: Int, sceneH: Int) {
+        if (!CanvasDecorGeometry.pixelGridDrawn(v.pixelGridEnabled, scale)) return
+        val gridAlpha = CanvasDecorGeometry.pixelGridAlpha(scale)
+        pixelGridPaint.color = android.graphics.Color.argb((gridAlpha * 255).toInt(), 255, 255, 255)
+        pixelGridPaint.strokeWidth = 1f / scale
+        ensureViewTransform()
+        visibleBitmapBounds(boundsScratch)
+        val gx0 = boundsScratch[0].coerceIn(0, sceneW)
+        val gx1 = boundsScratch[2].coerceIn(0, sceneW)
+        val gy0 = boundsScratch[1].coerceIn(0, sceneH)
+        val gy1 = boundsScratch[3].coerceIn(0, sceneH)
+        val totalLines = CanvasDecorGeometry.pixelGridLineCount(gx0, gx1, gy0, gy1)
+        if (totalLines !in 1..MAX_VISIBLE_GRID_LINES) return
+        val neededFloats = totalLines * 4
+        if (gridLinesBuffer.size < neededFloats) {
+            gridLinesBuffer = FloatArray(neededFloats)
+        }
+        val n = CanvasDecorGeometry.fillPixelGridLines(
+            gridLinesBuffer, gx0, gx1, gy0, gy1, sceneW / 2f, sceneH / 2f,
+        )
+        canvas.drawLines(gridLinesBuffer, 0, n, pixelGridPaint)
+    }
+
+    /**
+     * 绘画中辅助吸附动态导引线的几何 (屏幕坐标) 写进 [out] (`x1,y1,x2,y2,vpX,vpY`)。
+     * 返回 [DynamicGuidePainter.KIND_NONE] / [DynamicGuidePainter.KIND_LINE] / [DynamicGuidePainter.KIND_LINE_VP];
+     * 3D 透视返回 [DYNAMIC_GUIDE_ABORT_FRAME] —— 主画布沿用原行为在此处结束本帧 (不画光标)。
+     * 主画布每帧调用; 真墨按住时 MOVE 也调用它给前缓冲做快照。
+     */
+    internal fun computeDynamicGuide(v: PaintViewModel, out: FloatArray): Int {
+        var kind = DynamicGuidePainter.KIND_NONE
+        val guide = v.drawingGuide
+        // 注意: 不能复用上面 1.5 段那支 isDrawingTool(它不含 SMUDGE) —— 两者语义不同,
+        // 合并上游 1.3.3 时曾因此产生重复声明。
+        val isGuideAssistTool = tool == Tool.BRUSH || tool == Tool.ERASER || tool == Tool.SMUDGE
+        if (guide.mode != GuideMode.OFF && guide.assistedDrawing && localIsTouching && strokeStarted && isGuideAssistTool) {
+            val maxExt = maxOf(v.docWidth, v.docHeight).toFloat() * 50f + 500_000f
+            when (guide.mode) {
+                GuideMode.PERSPECTIVE -> {
+                    if (guide.perspective3d) return DYNAMIC_GUIDE_ABORT_FRAME
+                    val locked = assistLockedRay
+                    val dx = currentStrokeDocPos.x - firstDocPos.x
+                    val dy = currentStrokeDocPos.y - firstDocPos.y
+                    val dist = hypot(dx, dy)
+                    if (locked != null || dist >= 6f) {
+                        var bestType = 0 // 0: horizontal, 1: vertical, 2: vp
+                        var bestVp: Point2D? = null
+                        var bestDir = Offset(1f, 0f)
+
+                        if (locked is AssistRay.Horizontal) {
+                            bestType = 0
+                        } else if (locked is AssistRay.Vertical) {
+                            bestType = 1
+                        } else if (locked is AssistRay.VanishingPoint) {
+                            bestType = 2
+                            bestVp = locked.vp
+                            bestDir = locked.dir
+                        } else if (locked is AssistRay.Direction) {
+                            bestType = 2
+                            bestDir = locked.dir
+                        } else {
+                            val vps = if (guide.perspectiveVanishingPoints.isEmpty()) {
+                                listOf(Point2D(v.docWidth * 0.5f, v.docHeight * 0.35f))
+                            } else guide.perspectiveVanishingPoints
+
+                            var minError = abs(dy)
+                            val vertError = abs(dx)
+                            if (vertError < minError) {
+                                minError = vertError
+                                bestType = 1
+                            }
+
+                            for (vp in vps) {
+                                val vRayX = vp.x - firstDocPos.x
+                                val vRayY = vp.y - firstDocPos.y
+                                val vLen = hypot(vRayX, vRayY)
+                                if (vLen > 0.001f) {
+                                    val nx = vRayX / vLen
+                                    val ny = vRayY / vLen
+                                    val err = abs(dx * (-ny) + dy * nx)
+                                    if (err < minError) {
+                                        minError = err
+                                        bestType = 2
+                                        bestVp = vp
+                                        bestDir = Offset(nx, ny)
+                                    }
+                                }
+                            }
+                        }
+
+                        when (bestType) {
+                            0 -> {
+                                val p1 = docToScreen(Offset(firstDocPos.x - maxExt, firstDocPos.y))
+                                val p2 = docToScreen(Offset(firstDocPos.x + maxExt, firstDocPos.y))
+                                kind = writeGuideSeg(out, p1, p2)
+                            }
+                            1 -> {
+                                val p1 = docToScreen(Offset(firstDocPos.x, firstDocPos.y - maxExt))
+                                val p2 = docToScreen(Offset(firstDocPos.x, firstDocPos.y + maxExt))
+                                kind = writeGuideSeg(out, p1, p2)
+                            }
+                            2 -> {
+                                val p1 = docToScreen(Offset(firstDocPos.x - bestDir.x * maxExt, firstDocPos.y - bestDir.y * maxExt))
+                                val p2 = docToScreen(Offset(firstDocPos.x + bestDir.x * maxExt, firstDocPos.y + bestDir.y * maxExt))
+                                kind = writeGuideSeg(out, p1, p2)
+
+                                if (bestVp != null) {
+                                    val vpScreen = docToScreen(Offset(bestVp.x, bestVp.y))
+                                    out[4] = vpScreen.x
+                                    out[5] = vpScreen.y
+                                    kind = DynamicGuidePainter.KIND_LINE_VP
+                                }
+                            }
+                        }
+                    }
+                }
+                GuideMode.ISOMETRIC -> {
+                    val locked = assistLockedRay
+                    val dx = currentStrokeDocPos.x - firstDocPos.x
+                    val dy = currentStrokeDocPos.y - firstDocPos.y
+                    val dist = hypot(dx, dy)
+                    if (locked is AssistRay.Direction || dist >= 6f) {
+                        val dir = if (locked is AssistRay.Direction) {
+                            locked.dir
+                        } else {
+                            var bestDir = ISO_DIRS[0]
+                            var minError = Float.MAX_VALUE
+                            for (d in ISO_DIRS) {
+                                val err = abs(-dx * d.y + dy * d.x)
+                                if (err < minError) {
+                                    minError = err
+                                    bestDir = d
+                                }
+                            }
+                            bestDir
+                        }
+                        val p1 = docToScreen(Offset(firstDocPos.x - dir.x * maxExt, firstDocPos.y - dir.y * maxExt))
+                        val p2 = docToScreen(Offset(firstDocPos.x + dir.x * maxExt, firstDocPos.y + dir.y * maxExt))
+                        kind = writeGuideSeg(out, p1, p2)
+                    }
+                }
+                GuideMode.GRID_2D -> {
+                    val locked = assistLockedRay
+                    val dx = currentStrokeDocPos.x - firstDocPos.x
+                    val dy = currentStrokeDocPos.y - firstDocPos.y
+                    val dist = hypot(dx, dy)
+                    if (locked != null || dist >= 6f) {
+                        val isHoriz = if (locked is AssistRay.Horizontal) {
+                            true
+                        } else if (locked is AssistRay.Vertical) {
+                            false
+                        } else {
+                            abs(dx) >= abs(dy)
+                        }
+                        if (isHoriz) {
+                            val p1 = docToScreen(Offset(firstDocPos.x - maxExt, firstDocPos.y))
+                            val p2 = docToScreen(Offset(firstDocPos.x + maxExt, firstDocPos.y))
+                            kind = writeGuideSeg(out, p1, p2)
+                        } else {
+                            val p1 = docToScreen(Offset(firstDocPos.x, firstDocPos.y - maxExt))
+                            val p2 = docToScreen(Offset(firstDocPos.x, firstDocPos.y + maxExt))
+                            kind = writeGuideSeg(out, p1, p2)
+                        }
+                    }
+                }
+                else -> Unit
+            }
+        }
+        return kind
+    }
+
+    private fun writeGuideSeg(out: FloatArray, p1: Offset, p2: Offset): Int {
+        out[0] = p1.x
+        out[1] = p1.y
+        out[2] = p2.x
+        out[3] = p2.y
+        return DynamicGuidePainter.KIND_LINE
     }
 
     /** 视口四角反变换到位图坐标后的包围盒 (供按视口裁剪绘制) */
@@ -6360,6 +6369,8 @@ class CanvasTouchView(context: Context) : View(context) {
                     val sx = event.getX(pointerIndex)
                     val sy = event.getY(pointerIndex)
                     updatePredictedTip(v, sx, sy)
+                    refreshHoldDecor(v, force = false)
+                    snapshotHoldGuide(v)
                     noteHoldCursor(sx, sy, pressure)
                 }
             }

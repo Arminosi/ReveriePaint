@@ -4,6 +4,7 @@
 
 package com.reverie.paint.ui.painting.canvas
 
+import com.reverie.paint.model.CanvasDecorGeometry
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -37,7 +38,8 @@ internal fun DrawScope.drawDrawingGuides(
     }
                 // ---- 绘图辅助与参考线渲染 (Drawing Guides & Symmetry) ----
                 val guide = vm.drawingGuide
-                if (guide.mode != GuideMode.OFF) {
+                // 可见性只看 mode, 不看 assistedDrawing (3D 透视只显示不吸附时也要画); 前缓冲重放同一判据。
+                if (CanvasDecorGeometry.guidesVisible(guide)) {
                     val guideCol = parseColor(guide.colorHex).copy(alpha = guide.opacity)
                     val gStroke = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.dp.toPx() / (zoom * fitScale))
                     val docW = bmp.width.toFloat()

@@ -61,6 +61,11 @@ object BrushStoreBootstrap {
         if (changed) {
             PresetSnapshotStore.installFactory(v, files)
             PresetSnapshotStore.setCurrentFactoryVersion(v)
+            // W-10：旧→新的变更/删除策略，须在 ensureBuiltinIdentities 删除下线 identity 之前
+            if (cur != null && PresetSnapshotStore.factoryDir(cur).isDirectory) {
+                runCatching { BuiltinSnapshotMigrator.onFactoryChanged(cur, v) }
+                    .onFailure { BrushDiagnostics.log("upgrade_failed", "err" to it.toString()) }
+            }
             PresetSnapshotStore.pruneFactory(setOfNotNull(v, cur))
             BrushDiagnostics.log("factory_install", "version" to v, "previous" to cur, "files" to files.size)
         }
@@ -104,7 +109,9 @@ object BrushStoreBootstrap {
             val t0 = System.nanoTime()
             val root = storeRoot(filesDir)
             openStores(root)
-            syncFactory(root, installStamp, readAssets)
+            val first = PresetSnapshotStore.currentFactoryVersion() == null
+            val (version, _) = syncFactory(root, installStamp, readAssets)
+            if (first) runCatching { BuiltinSnapshotMigrator.logDrift(presetDir, version) }
             if (!migrate()) {
                 BrushDiagnostics.log("store_inactive", "reason" to "migration_not_done")
                 return false

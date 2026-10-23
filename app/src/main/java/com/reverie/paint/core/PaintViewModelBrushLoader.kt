@@ -162,6 +162,13 @@ private fun PaintViewModel.copyBundledBrushAssets(): Pair<File, File> {
                 assets.open("brushes/$name").use { input ->
                     target.outputStream().use { output -> input.copyTo(output) }
                 }
+            } else if (!isVersionMatched) {
+                // W-10：升级时内置资源按 APK 更新（导入资源已命名空间化 `<包>__<名>`，不会被冲掉）
+                val bytes = assets.open("brushes/$name").use { it.readBytes() }
+                if (target.length() != bytes.size.toLong() || !target.readBytes().contentEquals(bytes)) {
+                    target.writeBytes(bytes)
+                    com.reverie.paint.core.brushstore.BrushDiagnostics.log("upgrade_resource", "kind" to "brushes", "name" to name)
+                }
             }
         }
     } catch (e: Exception) {
@@ -176,6 +183,13 @@ private fun PaintViewModel.copyBundledBrushAssets(): Pair<File, File> {
             if (!target.exists()) {
                 assets.open("patterns/$name").use { input ->
                     target.outputStream().use { output -> input.copyTo(output) }
+                }
+            } else if (!isVersionMatched) {
+                // W-10：升级时内置资源按 APK 更新（导入资源已命名空间化 `<包>__<名>`，不会被冲掉）
+                val bytes = assets.open("patterns/$name").use { it.readBytes() }
+                if (target.length() != bytes.size.toLong() || !target.readBytes().contentEquals(bytes)) {
+                    target.writeBytes(bytes)
+                    com.reverie.paint.core.brushstore.BrushDiagnostics.log("upgrade_resource", "kind" to "patterns", "name" to name)
                 }
             }
         }

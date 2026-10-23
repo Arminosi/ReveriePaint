@@ -52,6 +52,7 @@ internal fun PaintViewModel.loadBrushPresets(force: Boolean = false) {
     viewModelScope.launch {
         try {
             val dirs = withContext(Dispatchers.IO) {
+                com.reverie.paint.core.brushstore.BrushDiagnostics.init(appContext.filesDir)
                 val d = copyBundledBrushAssets()
                 // 必须在引擎加载任何预设之前清掉历史重复参数键
                 migrateDuplicatedPresetParams(d.first)

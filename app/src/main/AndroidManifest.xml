@@ -8,6 +8,7 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
     <uses-permission android:name="com.oplus.ipemanager.permission.receiver.DOUBLE_CLICK" />
     <uses-permission android:name="com.oplus.ocs.permission.third" />
     <uses-permission android:name="com.oplus.permission.safe.IOT" />

@@ -1,28 +1,349 @@
 /*
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
-
 package com.reverie.paint.core
 
+import android.Manifest
 import android.content.ContentValues
-import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.Rect
+import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
-import androidx.core.content.FileProvider
+import androidx.core.content.ContextCompat
+import com.reverie.paint.R
 import com.reverie.paint.core.export.AnimatedGifEncoder
 import com.reverie.paint.core.export.Mp4VideoEncoder
 import com.reverie.paint.core.export.PngSequenceZipEncoder
 import java.io.File
 import java.io.FileOutputStream
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
+
+/**
+ * 清理导出文件名中的非法路径字符。
+ */
+internal fun sanitizeExportFileName(raw: String): String {
+    return raw.ifBlank { "ReveriePaint" }
+        .trim()
+        .replace(Regex("[^a-zA-Z0-9_\\u4e00-\\u9fa5-]"), "_")
+        .ifBlank { "ReveriePaint" }
+}
+
+/**
+ * 统一计算导出目标分辨率 (动画导出与回放导出共用，UI 预览标签与底层编码器共用):
+ * - MP4: 宽高对齐 16 的倍数，且限制在 3840x2160 以内确保硬件 H.264 编码器兼容。
+ * - GIF: 限制长边不超过 1920，防止超大画布 100% 导出时 LZW 量化与 ARGB_8888 缓冲触发 OOM。
+ * - ZIP: 限制长边不超过 3840，防止 8K 画布导出序列帧时触发 OOM。
+ */
+internal fun computeExportDimensions(
+    baseW: Int,
+    baseH: Int,
+    scale: Float,
+    format: String,
+): Pair<Int, Int> {
+    val safeW = max(2, baseW)
+    val safeH = max(2, baseH)
+    val safeScale = scale.coerceIn(0.1f, 1.0f)
+    var targetW = max(2, (safeW * safeScale).roundToInt())
+    var targetH = max(2, (safeH * safeScale).roundToInt())
+
+    when (format.lowercase()) {
+        "mp4" -> {
+            targetW = max(16, (targetW / 16) * 16)
+            targetH = max(16, (targetH / 16) * 16)
+            if (targetW > 3840 || targetH > 2160) {
+                val ratio = minOf(3840f / targetW, 2160f / targetH)
+                targetW = max(16, ((targetW * ratio).toInt() / 16) * 16)
+                targetH = max(16, ((targetH * ratio).toInt() / 16) * 16)
+            }
+        }
+        "gif" -> {
+            val maxEdge = max(targetW, targetH)
+            if (maxEdge > 1920) {
+                val ratio = 1920f / maxEdge
+                targetW = max(2, (targetW * ratio).roundToInt())
+                targetH = max(2, (targetH * ratio).roundToInt())
+            }
+        }
+        else -> {
+            val maxEdge = max(targetW, targetH)
+            if (maxEdge > 3840) {
+                val ratio = 3840f / maxEdge
+                targetW = max(2, (targetW * ratio).roundToInt())
+                targetH = max(2, (targetH * ratio).roundToInt())
+            }
+        }
+    }
+    return targetW to targetH
+}
+
+/**
+ * 公共多格式帧编码会话 (封装 GIF / MP4 / PNG-ZIP 的初始化、逐帧写入、收尾校验与异常清理)。
+ * 供动画导出 (PaintViewModelAnimationExport) 与回放导出 (PaintViewModelReplayExport) 共同复用。
+ */
+internal class FrameEncodingSession(
+    private val vm: PaintViewModel,
+    val format: String,
+    val targetFile: File,
+    val targetW: Int,
+    val targetH: Int,
+    val fps: Int,
+    private val loopGif: Boolean = true,
+    private val transparentGif: Boolean = false,
+) {
+    private var gifEncoder: AnimatedGifEncoder? = null
+    private var gifFos: FileOutputStream? = null
+    private var mp4Encoder: Mp4VideoEncoder? = null
+    private var zipEncoder: PngSequenceZipEncoder? = null
+
+    fun start() {
+        when (format) {
+            "gif" -> {
+                val encoder = AnimatedGifEncoder()
+                encoder.setFramerate(fps)
+                encoder.setRepeat(if (loopGif) 0 else -1)
+                if (transparentGif) {
+                    encoder.setTransparent(0)
+                }
+                val fos = FileOutputStream(targetFile)
+                gifFos = fos
+                if (!encoder.start(fos)) {
+                    throw RuntimeException(vm.getString(R.string.replay_export_err_encoder_start, "GIF"))
+                }
+                gifEncoder = encoder
+            }
+            "mp4" -> {
+                val encoder = Mp4VideoEncoder()
+                if (!encoder.start(targetFile, targetW, targetH, fps)) {
+                    throw RuntimeException(vm.getString(R.string.replay_export_err_encoder_start, "MP4"))
+                }
+                mp4Encoder = encoder
+            }
+            "zip" -> {
+                val encoder = PngSequenceZipEncoder()
+                if (!encoder.start(targetFile)) {
+                    throw RuntimeException(vm.getString(R.string.replay_export_err_encoder_start, "ZIP"))
+                }
+                zipEncoder = encoder
+            }
+            else -> throw IllegalArgumentException(vm.getString(R.string.replay_export_err_unsupported_format, format))
+        }
+    }
+
+    fun addFrame(
+        bitmap: Bitmap,
+        isCancelled: () -> Boolean,
+        frameNumber: Int,
+    ) {
+        if (isCancelled()) {
+            throw InterruptedException(vm.getString(R.string.replay_export_err_cancelled))
+        }
+        val ok =
+            when (format) {
+                "gif" -> gifEncoder?.addFrame(bitmap, isCancelled) ?: false
+                "mp4" -> mp4Encoder?.addFrame(bitmap, isCancelled) ?: false
+                "zip" -> zipEncoder?.addFrame(bitmap, isCancelled) ?: false
+                else -> false
+            }
+        if (!ok) {
+            if (isCancelled()) {
+                throw InterruptedException(vm.getString(R.string.replay_export_err_cancelled))
+            }
+            throw RuntimeException(vm.getString(R.string.replay_export_err_encode_frame, frameNumber))
+        }
+    }
+
+    fun finish(isCancelled: () -> Boolean) {
+        if (isCancelled()) {
+            throw InterruptedException(vm.getString(R.string.replay_export_err_cancelled))
+        }
+        val finishOk =
+            when (format) {
+                "gif" -> {
+                    val ok = gifEncoder?.finish() ?: false
+                    gifFos?.close()
+                    gifFos = null
+                    ok
+                }
+                "mp4" -> mp4Encoder?.finish(isCancelled) ?: false
+                "zip" -> zipEncoder?.finish() ?: false
+                else -> false
+            }
+        if (!finishOk || !targetFile.exists() || targetFile.length() <= 0L) {
+            targetFile.delete()
+            throw RuntimeException(vm.getString(R.string.replay_export_err_finalize))
+        }
+    }
+
+    fun closeQuietly() {
+        try {
+            gifFos?.close()
+        } catch (_: Exception) {
+        }
+        gifFos = null
+        mp4Encoder?.abort()
+        mp4Encoder = null
+        zipEncoder?.abort()
+        zipEncoder = null
+    }
+}
+
+/**
+ * 在后台 I/O 线程将临时导出文件写入 Android MediaStore 系统相册 (严禁在主线程 copyTo 阻塞 UI):
+ * - API 29+ (Android 10+): 使用 RELATIVE_PATH + IS_PENDING 原子发布。
+ * - API 23..28 (Android 6..9): 校验 WRITE_EXTERNAL_STORAGE 权限，写入公共媒体目录并设置 DATA 字段与 MediaScanner。
+ */
+internal fun PaintViewModel.saveExportFileToGalleryAsync(
+    tempFile: File,
+    fileName: String,
+    isGif: Boolean,
+    onSuccess: (Uri) -> Unit,
+    onError: (String) -> Unit,
+) {
+    val mimeType = if (isGif) "image/gif" else "video/mp4"
+    val relDir = if (isGif) Environment.DIRECTORY_PICTURES else Environment.DIRECTORY_MOVIES
+
+    Thread(
+        {
+            var legacyTargetFile: File? = null
+            try {
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                    val granted =
+                        ContextCompat.checkSelfPermission(
+                            appContext,
+                            Manifest.permission.WRITE_EXTERNAL_STORAGE,
+                        ) == PackageManager.PERMISSION_GRANTED
+                    if (!granted) {
+                        tempFile.delete()
+                        val msg = getString(R.string.replay_export_err_storage_permission)
+                        mainHandler.post { onError(msg) }
+                        return@Thread
+                    }
+                }
+
+                val resolver = appContext.contentResolver
+                val values =
+                    ContentValues().apply {
+                        put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                        put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            put(MediaStore.MediaColumns.RELATIVE_PATH, "$relDir/ReveriePaint")
+                            put(MediaStore.MediaColumns.IS_PENDING, 1)
+                        } else {
+                            @Suppress("DEPRECATION")
+                            val pubDir = File(Environment.getExternalStoragePublicDirectory(relDir), "ReveriePaint")
+                            pubDir.mkdirs()
+                            val dst = File(pubDir, fileName)
+                            legacyTargetFile = dst
+                            tempFile.inputStream().use { input ->
+                                dst.outputStream().use { out ->
+                                    input.copyTo(out)
+                                }
+                            }
+                            @Suppress("DEPRECATION")
+                            put(MediaStore.MediaColumns.DATA, dst.absolutePath)
+                        }
+                    }
+
+                val tableUri =
+                    if (isGif) {
+                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                    } else {
+                        MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                    }
+
+                val uri = resolver.insert(tableUri, values)
+                if (uri != null) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        resolver.openOutputStream(uri)?.use { out ->
+                            tempFile.inputStream().use { input ->
+                                input.copyTo(out)
+                            }
+                        } ?: throw RuntimeException(getString(R.string.replay_export_err_gallery_create))
+
+                        values.clear()
+                        values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                        resolver.update(uri, values, null, null)
+                    }
+                    tempFile.delete()
+
+                    try {
+                        val scanPath =
+                            legacyTargetFile?.absolutePath ?: run {
+                                @Suppress("DEPRECATION")
+                                val pathQuery = resolver.query(uri, arrayOf(MediaStore.MediaColumns.DATA), null, null, null)
+                                pathQuery?.use { c ->
+                                    if (c.moveToFirst()) c.getString(0) else null
+                                }
+                            }
+                        if (scanPath != null) {
+                            MediaScannerConnection.scanFile(
+                                appContext,
+                                arrayOf(scanPath),
+                                arrayOf(mimeType),
+                                null,
+                            )
+                        }
+                    } catch (_: Exception) {
+                    }
+
+                    mainHandler.post { onSuccess(uri) }
+                } else {
+                    tempFile.delete()
+                    legacyTargetFile?.delete()
+                    val msg = getString(R.string.replay_export_err_gallery_create)
+                    mainHandler.post { onError(msg) }
+                }
+            } catch (e: Exception) {
+                tempFile.delete()
+                legacyTargetFile?.delete()
+                val msg = getString(R.string.replay_export_err_gallery_save, e.message ?: e.javaClass.simpleName)
+                mainHandler.post { onError(msg) }
+            }
+        },
+        "reverie-gallery-io",
+    ).start()
+}
+
+/**
+ * 在后台 I/O 线程将临时导出文件拷贝至 SAF 文档 Uri，避免主线程大文件拷贝导致 ANR。
+ */
+internal fun PaintViewModel.copyExportFileToUriAsync(
+    tempFile: File,
+    targetUri: Uri,
+    onSuccess: () -> Unit,
+    onError: (String) -> Unit,
+) {
+    Thread(
+        {
+            try {
+                val stream =
+                    appContext.contentResolver.openOutputStream(targetUri)
+                        ?: throw RuntimeException(getString(R.string.replay_export_err_finalize))
+                stream.use { out ->
+                    tempFile.inputStream().use { input ->
+                        input.copyTo(out)
+                    }
+                }
+                tempFile.delete()
+                mainHandler.post { onSuccess() }
+            } catch (e: Exception) {
+                tempFile.delete()
+                val msg = getString(R.string.replay_export_err_failed, e.message ?: e.javaClass.simpleName)
+                mainHandler.post { onError(msg) }
+            }
+        },
+        "reverie-saf-io",
+    ).start()
+}
 
 /**
  * 动画导出参数与配置。
@@ -56,8 +377,10 @@ internal fun PaintViewModel.exportAnimation(
         val s = options.startFrame.coerceAtLeast(0)
         val e = options.endFrame.coerceAtLeast(s)
         var frameList = (s..e).toList()
+
         if (frameList.isEmpty()) {
-            mainHandler.post { onError("导出帧数为空") }
+            val msg = getString(R.string.replay_export_err_empty_frames)
+            mainHandler.post { onError(msg) }
             return@runCore
         }
 
@@ -74,6 +397,7 @@ internal fun PaintViewModel.exportAnimation(
                 frameList = expandedList
             }
         }
+
         val totalFrames = frameList.size
 
         // 查找背景层并处理透明背景
@@ -85,156 +409,87 @@ internal fun PaintViewModel.exportAnimation(
             ReverieCoreBridge.setLayerVisible(bgIndex, false)
         }
 
-        val w = coreW
-        val h = coreH
-        var targetW = max(2, (w * scale).roundToInt())
-        var targetH = max(2, (h * scale).roundToInt())
-
-        if (fmt == "mp4") {
-            // H.264 视频尺寸必须为 16 的倍数或偶数，且不可超过常见芯片 3840x2160
-            targetW = max(16, (targetW / 16) * 16)
-            targetH = max(16, (targetH / 16) * 16)
-            if (targetW > 3840 || targetH > 2160) {
-                val sRatio = minOf(3840f / targetW, 2160f / targetH)
-                targetW = max(16, ((targetW * sRatio).toInt() / 16) * 16)
-                targetH = max(16, ((targetH * sRatio).toInt() / 16) * 16)
-            }
-        }
-
-        val fullFrameBmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val w = max(2, coreW)
+        val h = max(2, coreH)
+        val (targetW, targetH) = computeExportDimensions(w, h, scale, fmt)
         val needScale = targetW != w || targetH != h
-        val scaledFrameBmp = if (needScale) {
-            Bitmap.createBitmap(targetW, targetH, Bitmap.Config.ARGB_8888)
-        } else null
-        val scaleCanvas = scaledFrameBmp?.let { Canvas(it) }
-        val scalePaint = if (needScale) Paint(Paint.FILTER_BITMAP_FLAG) else null
-        val srcRect = Rect(0, 0, w, h)
-        val dstRect = Rect(0, 0, targetW, targetH)
 
-        var gifEncoder: AnimatedGifEncoder? = null
-        var gifFos: FileOutputStream? = null
-        var mp4Encoder: Mp4VideoEncoder? = null
-        var zipEncoder: PngSequenceZipEncoder? = null
+        var fullFrameBmp: Bitmap? = null
+        var scaledFrameBmp: Bitmap? = null
+        val encodeSession =
+            FrameEncodingSession(
+                vm = this,
+                format = fmt,
+                targetFile = targetFile,
+                targetW = targetW,
+                targetH = targetH,
+                fps = anim.framerate.coerceAtLeast(1),
+                loopGif = anim.loopPlayback,
+                transparentGif = transparentBg,
+            )
 
         try {
+            fullFrameBmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            scaledFrameBmp =
+                if (needScale) {
+                    Bitmap.createBitmap(targetW, targetH, Bitmap.Config.ARGB_8888)
+                } else {
+                    null
+                }
+            val scaleCanvas = scaledFrameBmp?.let { Canvas(it) }
+            val scalePaint = if (needScale) Paint(Paint.FILTER_BITMAP_FLAG) else null
+            val srcRect = Rect(0, 0, w, h)
+            val dstRect = Rect(0, 0, targetW, targetH)
+
             // 参考画面只用于作画，所有动画格式都输出实际帧内容。
             ReverieCoreBridge.setOnionSkinSuppressed(true)
-            when (fmt) {
-                "gif" -> {
-                    val encoder = AnimatedGifEncoder()
-                    encoder.setFramerate(anim.framerate)
-                    encoder.setRepeat(if (anim.loopPlayback) 0 else -1)
-                    if (transparentBg) {
-                        encoder.setTransparent(0)
-                    }
-                    val fos = FileOutputStream(targetFile)
-                    gifFos = fos
-                    if (!encoder.start(fos)) {
-                        throw RuntimeException("启动 GIF 编码器失败")
-                    }
-                    gifEncoder = encoder
-                }
-
-                "mp4" -> {
-                    val encoder = Mp4VideoEncoder()
-                    if (!encoder.start(targetFile, targetW, targetH, anim.framerate)) {
-                        throw RuntimeException("启动 MP4 视频编码器失败")
-                    }
-                    mp4Encoder = encoder
-                }
-
-                "zip" -> {
-                    val encoder = PngSequenceZipEncoder()
-                    if (!encoder.start(targetFile)) {
-                        throw RuntimeException("启动 PNG 序列帧 Zip 编码器失败")
-                    }
-                    zipEncoder = encoder
-                }
-
-                else -> throw IllegalArgumentException("不支持的动画导出格式: $fmt")
-            }
+            encodeSession.start()
 
             for (i in frameList.indices) {
                 if (isCancelled()) {
-                    throw InterruptedException("用户取消导出")
+                    throw InterruptedException(getString(R.string.replay_export_err_cancelled))
                 }
-
                 val frameTime = frameList[i]
+                val stageMsg = getString(R.string.replay_export_stage_rendering_frame, i + 1, totalFrames)
                 mainHandler.post {
-                    onProgress(i + 1, totalFrames, "正在渲染第 ${i + 1}/$totalFrames 帧...")
+                    onProgress(i + 1, totalFrames, stageMsg)
                 }
 
                 // 切换动画帧并收敛
                 ReverieCoreBridge.setAnimationCurrentTime(frameTime, false)
                 ReverieCoreBridge.renderToBuffer(fullFrameBmp, true, null)
 
-                val outBitmap: Bitmap = if (needScale && scaledFrameBmp != null && scaleCanvas != null) {
-                    scaleCanvas.drawColor(0, PorterDuff.Mode.CLEAR)
-                    scaleCanvas.drawBitmap(fullFrameBmp, srcRect, dstRect, scalePaint)
-                    scaledFrameBmp
-                } else {
-                    fullFrameBmp
-                }
-
-                when (fmt) {
-                    "gif" -> {
-                        if (!gifEncoder!!.addFrame(outBitmap, isCancelled)) {
-                            if (isCancelled()) throw InterruptedException("用户取消导出")
-                            throw RuntimeException("添加 GIF 帧失败 (帧 $frameTime)")
-                        }
+                val outBitmap: Bitmap =
+                    if (needScale && scaledFrameBmp != null && scaleCanvas != null) {
+                        scaleCanvas.drawColor(0, PorterDuff.Mode.CLEAR)
+                        scaleCanvas.drawBitmap(fullFrameBmp, srcRect, dstRect, scalePaint)
+                        scaledFrameBmp
+                    } else {
+                        fullFrameBmp
                     }
 
-                    "mp4" -> {
-                        if (!mp4Encoder!!.addFrame(outBitmap, isCancelled)) {
-                            if (isCancelled()) throw InterruptedException("用户取消导出")
-                            throw RuntimeException("添加视频帧失败 (帧 $frameTime)")
-                        }
-                    }
-
-                    "zip" -> {
-                        if (!zipEncoder!!.addFrame(outBitmap, isCancelled)) {
-                            if (isCancelled()) throw InterruptedException("用户取消导出")
-                            throw RuntimeException("写入序列帧失败 (帧 $frameTime)")
-                        }
-                    }
-                }
+                encodeSession.addFrame(outBitmap, isCancelled, frameTime)
             }
 
+            val finalizeMsg = getString(R.string.replay_export_stage_finalizing)
             mainHandler.post {
-                onProgress(totalFrames, totalFrames, "正在封装文件...")
+                onProgress(totalFrames, totalFrames, finalizeMsg)
             }
 
-            val finishOk = when (fmt) {
-                "gif" -> {
-                    val ok = gifEncoder?.finish() ?: false
-                    gifFos?.close()
-                    gifFos = null
-                    ok
-                }
-                "mp4" -> mp4Encoder?.finish(isCancelled) ?: false
-                "zip" -> zipEncoder?.finish() ?: false
-                else -> false
-            }
-
-            if (!finishOk || !targetFile.exists() || targetFile.length() <= 0L) {
-                targetFile.delete()
-                throw RuntimeException("文件封装完成阶段失败或输出为空")
-            }
-
+            encodeSession.finish(isCancelled)
             mainHandler.post { onSuccess(targetFile) }
         } catch (e: InterruptedException) {
             targetFile.delete()
-            mainHandler.post { onError("已取消导出") }
+            val msg = getString(R.string.replay_export_err_cancelled)
+            mainHandler.post { onError(msg) }
         } catch (e: Exception) {
             targetFile.delete()
-            mainHandler.post { onError("导出失败: ${e.message ?: e.javaClass.simpleName}") }
+            val msg = getString(R.string.replay_export_err_failed, e.message ?: e.javaClass.simpleName)
+            mainHandler.post { onError(msg) }
         } finally {
-            try {
-                gifFos?.close()
-            } catch (_: Exception) {}
-            fullFrameBmp.recycle()
+            encodeSession.closeQuietly()
+            fullFrameBmp?.recycle()
             scaledFrameBmp?.recycle()
-
             // 恢复背景层可见性
             if (transparentBg && bgIndex >= 0 && wasBgVisible) {
                 ReverieCoreBridge.setLayerVisible(bgIndex, true)
@@ -243,7 +498,6 @@ internal fun PaintViewModel.exportAnimation(
             ReverieCoreBridge.setAnimationCurrentTime(originalTime, false)
             ReverieCoreBridge.setOnionSkinSuppressed(anim.isPlaying || anim.shiftTraceActive)
             displayBufferInvalid = true
-
             mainHandler.post {
                 anim.currentTime = originalTime
                 syncLayersFromNative()
@@ -264,14 +518,13 @@ internal fun PaintViewModel.exportAnimationToGallery(
 ) {
     val fmt = options.format.lowercase()
     if (fmt != "gif" && fmt != "mp4") {
-        onError("仅 GIF 动图与 MP4 视频支持直接存入相册")
+        val msg = getString(R.string.replay_export_err_gallery_format)
+        mainHandler.post { onError(msg) }
         return
     }
-
     val isGif = fmt == "gif"
-    val mimeType = if (isGif) "image/gif" else "video/mp4"
-    val ext = fmt
-    val fileName = "${docName}_anim_${System.currentTimeMillis()}.$ext"
+    val safeName = sanitizeExportFileName(docName)
+    val fileName = "${safeName}_anim_${System.currentTimeMillis()}.$fmt"
     val tempFile = File(appContext.cacheDir, fileName)
 
     exportAnimation(
@@ -280,58 +533,15 @@ internal fun PaintViewModel.exportAnimationToGallery(
         isCancelled = isCancelled,
         onProgress = onProgress,
         onSuccess = { file ->
-            try {
-                val resolver = appContext.contentResolver
-                val values = ContentValues().apply {
-                    put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
-                    put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/ReveriePaint")
-                        put(MediaStore.MediaColumns.IS_PENDING, 1)
-                    }
-                }
-                val tableUri = if (isGif) {
-                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-                } else {
-                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-                }
-                val uri = resolver.insert(tableUri, values)
-                if (uri != null) {
-                    resolver.openOutputStream(uri)?.use { out ->
-                        file.inputStream().use { input ->
-                            input.copyTo(out)
-                        }
-                    }
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        values.clear()
-                        values.put(MediaStore.MediaColumns.IS_PENDING, 0)
-                        resolver.update(uri, values, null, null)
-                    }
-                    tempFile.delete()
-
-                    // 触发 MediaScanner 扫描，确保系统相册立即建立索引与视频缩略图
-                    try {
-                        val pathQuery = resolver.query(uri, arrayOf(MediaStore.MediaColumns.DATA), null, null, null)
-                        val fullPath = pathQuery?.use { c ->
-                            if (c.moveToFirst()) c.getString(0) else null
-                        }
-                        if (fullPath != null) {
-                            android.media.MediaScannerConnection.scanFile(
-                                appContext,
-                                arrayOf(fullPath),
-                                arrayOf(mimeType),
-                                null,
-                            )
-                        }
-                    } catch (_: Exception) {}
-
-                    onSuccess(uri)
-                } else {
-                    onError("无法创建系统媒体库文件")
-                }
-            } catch (e: Exception) {
-                onError("保存至相册失败: ${e.message}")
-            }
+            val savingMsg = getString(R.string.replay_export_stage_saving_gallery)
+            onProgress(1, 1, savingMsg)
+            saveExportFileToGalleryAsync(
+                tempFile = file,
+                fileName = fileName,
+                isGif = isGif,
+                onSuccess = onSuccess,
+                onError = onError,
+            )
         },
         onError = onError,
     )
@@ -350,8 +560,8 @@ internal fun PaintViewModel.shareAnimation(
     val ext = options.format.lowercase()
     val shareDir = File(appContext.cacheDir, "share_anim")
     shareDir.mkdirs()
-    val shareFile = File(shareDir, "${docName}_anim.$ext")
-
+    val safeName = sanitizeExportFileName(docName)
+    val shareFile = File(shareDir, "${safeName}_anim.$ext")
     exportAnimation(
         options = options,
         targetFile = shareFile,

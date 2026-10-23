@@ -60,4 +60,13 @@ internal class PngSequenceZipEncoder {
             false
         }
     }
+
+    /** 取消导出时关闭未完成的 Zip 流（幂等）。 */
+    fun abort() {
+        try {
+            zipOut?.close()
+        } catch (_: Exception) {
+        }
+        zipOut = null
+    }
 }

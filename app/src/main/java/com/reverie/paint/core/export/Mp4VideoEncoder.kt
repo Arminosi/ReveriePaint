@@ -140,12 +140,19 @@ internal class Mp4VideoEncoder {
                 muxerStarted = false
                 success = currentOutputFile?.let { it.exists() && it.length() > 0L } ?: false
             }
+        } catch (e: InterruptedException) {
+            throw e
         } catch (e: Exception) {
             success = false
         } finally {
             release()
         }
         return success
+    }
+
+    /** 取消导出时释放 MediaCodec / MediaMuxer / EGL 资源（幂等）。 */
+    fun abort() {
+        release()
     }
 
     private fun drainEncoder(endOfStream: Boolean, isCancelled: () -> Boolean) {

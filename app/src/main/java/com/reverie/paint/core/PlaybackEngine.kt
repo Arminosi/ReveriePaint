@@ -147,6 +147,16 @@ class ReplaySession(
     internal var lastProgressWallMs = 0L
     internal var lastStepWallMs = 0L
 
+    // Zero-allocation primitive brush cursor state for timelapse replay export
+    internal var cursorActive = false
+    internal var cursorX = 0f
+    internal var cursorY = 0f
+    internal var cursorPressure = 0.5f
+    internal var cursorBrushSize = 18f
+    internal var cursorToolMode = 0
+    internal var cursorIsEraser = false
+    internal var cursorColorArgb = 0xFF1F1D2B.toInt()
+
     /** Monotonic token of the current playback chain. pause/seek/stop bump
      *  it so a step that was already running on the render thread (and is
      *  about to postDelayed its successor) cannot resurrect playback after a
@@ -466,10 +476,18 @@ private fun PaintViewModel.updateReplayProgress(s: ReplaySession) {
 }
 
 /** Runs inside a runCore op (render thread, before any replay dispatch). */
-internal fun PaintViewModel.resetReplayDocLocked(s: ReplaySession) {
+internal fun PaintViewModel.resetReplayDocLocked(
+    s: ReplaySession,
+    scheduleInitialRender: Boolean = true,
+) {
     currentReplayPreset = -1
     replayPresetIndexMapping.clear()
     s.lastPatternPng = null
+    s.cursorActive = false
+    s.cursorBrushSize = 18f
+    s.cursorToolMode = 0
+    s.cursorIsEraser = false
+    s.cursorColorArgb = 0xFF1F1D2B.toInt()
     currentReplayVersion = s.version
     val snap = s.snapshotFile
     var ok =
@@ -507,12 +525,14 @@ internal fun PaintViewModel.resetReplayDocLocked(s: ReplaySession) {
         ReverieCoreBridge.clearUndoHistory()
         // Paint the initial frame right away so the canvas isn't stale
         // while the first stroke event is still queued
-        scheduleRender(immediate = true)
+        if (scheduleInitialRender) {
+            scheduleRender(immediate = true)
+        }
     }
 }
 
 /** Fast-forward on the render thread: dispatch events with no pacing. */
-private fun PaintViewModel.seekLocked(
+internal fun PaintViewModel.seekLocked(
     s: ReplaySession,
     fraction: Float,
 ) {
@@ -540,7 +560,121 @@ private fun PaintViewModel.seekLocked(
 
 // ---- Event dispatch (render thread; direct bridge calls, no re-recording) ----
 
-private fun PaintViewModel.dispatchReplayLocked(
+/**
+ * Advance [r] over a single event's binary payload without invoking native C++
+ * or allocating arrays/strings. Used by timelapse export to pre-scan visual
+ * checkpoints in < 1ms without executing strokes or filters twice.
+ */
+internal fun skipReplayEventPayload(
+    type: Int,
+    r: RecordingReader,
+    version: Int = 2,
+) {
+    when (type) {
+        STROKE_START, STROKE_MOVE -> r.skip(12)
+        STROKE_END, STROKE_CANCEL -> {}
+        CONTEXT -> {
+            r.skip(15) // toolMode u8, preset u16, size/opacity/flow 3*f32
+            r.skipStr() // compositeOp
+            r.skipStr() // color
+            r.skip(2) // layer u16
+        }
+        CONTEXT_EXT -> {
+            r.skip(36) // 9 * f32
+            r.skipStr() // secondaryColor
+            r.skip(5) // airbrushEnabled u8, airbrushRate f32
+            if (version >= 2) r.skip(1) // overrides u8
+        }
+        CONTEXT_FADE -> r.skip(4)
+        LAYER_OP -> {
+            r.skip(3) // op u8, index u16
+            r.skipStr() // arg
+        }
+        FILTER -> {
+            r.skip(35) // index u16, filterType u8, p1..p4 4*f64
+            r.skipStr() // name
+        }
+        FILTER_LUT -> {
+            r.skip(3) // index u16, kind u8
+            val len = r.u32()
+            r.skip(len)
+            r.skipStr() // name
+        }
+        TOOL_OP -> {
+            when (r.u8()) {
+                com.reverie.paint.model.RecordingEvents.T_PATTERN_FILL -> {
+                    r.skip(29) // layer u32, wholeLayer u8, x u32, y u32, tol u8, merged u8, expand u32, feather u8, closeGap u8, opacity f64
+                    r.skipStr() // compositeOp
+                    val pngLen = r.u32()
+                    r.skip(pngLen)
+                }
+                T_SHAPE -> r.skip(18) // kind u8, x1..y2 4*f32, filled u8
+                T_POLYGON -> {
+                    r.skip(1) // closed u8
+                    val n = r.u16()
+                    r.skip(n * 8)
+                }
+                T_FILL, T_CONTIGUOUS, T_SIMILAR -> r.skip(10) // x/y f32, tol u16
+                T_FILL_V2, T_CONTIGUOUS_V2, T_SIMILAR_V2 -> r.skip(11) // x/y f32, tol u16, sampleMerged u8
+                T_FILL_V3 -> {
+                    r.skip(11)
+                    r.skipStr() // color
+                }
+                T_GRADIENT -> r.skip(17) // x1..y2 4*f32, type u8
+                T_GRADIENT_V2 -> r.skip(19) // x1..y2 4*f32, type u8, repeat u8, reverse u8
+                T_GRADIENT_V3 -> {
+                    r.skip(24) // x1..y2 4*f32, type/repeat/reverse u8*3, opacity f32, dither u8
+                    r.skipStr() // blendMode
+                    val n = r.u16()
+                    r.skip(n * 8) // 每个色标 pos f32 + color u32
+                }
+                T_UNDO, T_REDO, T_CANVAS_COPY, T_CANVAS_CUT, T_CANVAS_PASTE,
+                T_CLEAR_SELECTION, T_SELECT_ALL_CANVAS, T_INVERT_SELECTION,
+                T_LIQUIFY_BEGIN, T_LIQUIFY_END, T_LIQUIFY_CANCEL -> {}
+                T_PRESET_SELECT -> {
+                    r.skip(2) // idx u16
+                    r.skipStr() // name
+                }
+                T_TEXT -> {
+                    r.skip(12) // x/y/fs 3*f32
+                    r.skipStr() // txt
+                }
+                T_LIQUIFY -> r.skip(21) // fx/fy/tx/ty 4*f32, mode u8, strength f32
+                T_MOVE_CONTENT -> r.skip(8) // dx/dy 2*f32
+                T_TRANSFORM -> r.skip(72) // 9 * f64
+                T_PERSPECTIVE -> r.skip(96) // 12 * f64
+                T_WARP -> {
+                    val n = r.u16()
+                    r.skip(n * 16 + 32) // orig n*8 + trans n*8 + ox/oy/ow/oh 4*f64
+                }
+                T_CROP -> r.skip(8) // x/y/w/h 4*u16
+                T_SELECT_SHAPE -> r.skip(17) // kind u8, x1..y2 4*f32
+                T_SELECT_POLYGON, T_LASSO, T_LASSO_FILL, T_LASSO_CLEAR -> {
+                    val n = r.u16()
+                    r.skip(n * 8)
+                }
+                T_SELECT_ALL -> {
+                    r.skip(2)
+                    if (r.remaining() > 0) r.skip(1)
+                }
+                T_FEATHER, T_EXPAND, T_CONTRACT, T_SMOOTH -> r.skip(2)
+                T_SELECT_MODE -> r.skip(1)
+                T_ENCLOSE_FILL -> {
+                    val n = r.u16()
+                    r.skip(n * 8 + 15) // n*8 + tol(2)+merged(1)+expand(2)+feather(2)+closeGap(2)+method(1)+color(4)+incContour(1)
+                }
+                T_LIQUIFY_SIZE, T_SHAPE_STROKE_WIDTH -> r.skip(4)
+                com.reverie.paint.model.RecordingEvents.T_LIQUIFY_PROFILE -> r.skip(5) // professional u8, hardness f32
+                T_LIQUIFY_LAYERS, T_MOVE_CONTENT_LAYERS, T_TRANSFORM_LAYERS -> {
+                    val n = r.u16()
+                    r.skip(n * 2)
+                }
+            }
+        }
+    }
+}
+
+internal fun PaintViewModel.dispatchReplayLocked(
     s: ReplaySession,
     type: Int,
     r: RecordingReader,
@@ -552,6 +686,10 @@ private fun PaintViewModel.dispatchReplayLocked(
             val y = r.f32()
             val p = r.f32()
             val timeSec = if (s.totalMs > 0) (s.currentMs / 1000.0) else -1.0
+            s.cursorActive = true
+            s.cursorX = x
+            s.cursorY = y
+            s.cursorPressure = p
             ReverieCoreBridge.touchStrokeStartWithTime(x.toDouble(), y.toDouble(), p.toDouble(), timeSec)
         }
 
@@ -560,6 +698,10 @@ private fun PaintViewModel.dispatchReplayLocked(
             val y = r.f32()
             val p = r.f32()
             val timeSec = if (s.totalMs > 0) (s.currentMs / 1000.0) else -1.0
+            s.cursorActive = true
+            s.cursorX = x
+            s.cursorY = y
+            s.cursorPressure = p
             ReverieCoreBridge.touchStrokeMoveWithTime(x.toDouble(), y.toDouble(), p.toDouble(), timeSec)
             // Grow the stroke on screen: throttled render per move point,
             // same pacing the live painter uses while drawing (skipped while
@@ -568,11 +710,13 @@ private fun PaintViewModel.dispatchReplayLocked(
         }
 
         STROKE_END -> {
+            s.cursorActive = false
             ReverieCoreBridge.touchStrokeEnd()
             if (render) scheduleRender(immediate = true)
         }
 
         STROKE_CANCEL -> {
+            s.cursorActive = false
             ReverieCoreBridge.touchStrokeCancel()
         }
 
@@ -668,6 +812,23 @@ private fun PaintViewModel.applyReplayContextLocked(c: com.reverie.paint.model.R
         }
         currentReplayPreset = targetPreset
         applyReplayPresetSetupLocked(targetPreset)
+    }
+    val presetInfo = if (targetPreset >= 0) brushPresets.firstOrNull { it.index == targetPreset } else null
+    val isPresetEraser =
+        presetInfo != null &&
+            (
+                presetInfo.group == "橡皮擦" ||
+                    presetInfo.name.startsWith("a)_Eraser", ignoreCase = true) ||
+                    presetInfo.name.contains("Eraser", ignoreCase = true)
+            )
+    replaySession?.let { s ->
+        s.cursorToolMode = c.toolMode
+        s.cursorIsEraser = c.toolMode == 1 || c.compositeOp.equals("erase", ignoreCase = true) || isPresetEraser
+        s.cursorBrushSize = c.size.coerceAtLeast(2f)
+        s.cursorColorArgb =
+            runCatching {
+                android.graphics.Color.parseColor(c.color) or 0xFF000000.toInt()
+            }.getOrDefault(0xFF1F1D2B.toInt())
     }
     ReverieCoreBridge.setToolMode(c.toolMode)
     // size/opacity/flow 由 CONTEXT 事件无条件携带 (录制时的实时值), 必须在

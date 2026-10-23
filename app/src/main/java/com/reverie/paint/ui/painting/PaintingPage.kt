@@ -268,20 +268,18 @@ fun PaintingPage(
         val viewportStep = com.reverie.paint.model.CanvasViewportStep.fromCommand(cmd)
         if (viewportStep != null) {
             val view = canvasTouchView
-            if (vm.isViewTransformLocked) {
-                vm.showActionToast(R.string.toast_view_locked, R.drawable.ic_lock)
-            } else if (view?.isInteracting != true && view?.isTransformActive != true) {
-                val next = viewportStep.apply(
-                    view?.canvasZoom ?: zoom, view?.canvasRotation ?: rotation,
-                    view?.canvasPanX ?: panX, view?.canvasPanY ?: panY, locked = false,
-                )
-                if (next != null) {
+            when {
+                vm.isViewTransformLocked ->
+                    vm.showActionToast(R.string.toast_view_locked, R.drawable.ic_lock)
+                // 绘画/多指手势进行中不插入视口变换, 与手势共用同一份视口状态
+                view == null || view.isInteracting || view.isTransformActive -> Unit
+                else -> viewportStep.apply(
+                    view.canvasZoom, view.canvasRotation,
+                    view.canvasPanX, view.canvasPanY, locked = false,
+                )?.let { next ->
                     // 通过现有入口取消复位/吸附动画，避免下一帧又被旧动画覆盖。
-                    view?.applyViewTransform(next.zoom, next.rotation, next.panX, next.panY)
-                    zoom = next.zoom
-                    rotation = next.rotation
-                    panX = next.panX
-                    panY = next.panY
+                    // 它会经 onTransform 回写 zoom/rotation/panX/panY, 无需在此重复赋值。
+                    view.applyViewTransform(next.zoom, next.rotation, next.panX, next.panY)
                     flashIndicator()
                 }
             }

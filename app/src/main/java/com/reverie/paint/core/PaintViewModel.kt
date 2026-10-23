@@ -651,6 +651,9 @@ class PaintViewModel : ViewModel() {
 
     internal var brushStudioInitialKppBytes: ByteArray? = null
 
+    /** v2：进入工作台时的覆盖（null = 该预设不归 v2 管，走 [brushStudioInitialKppBytes]） */
+    internal var brushStudioInitialOverrides: com.reverie.paint.core.brushstore.BrushOverrideStore.Overrides? = null
+
     fun updateBrushDynamicOption(config: com.reverie.paint.model.DynamicOptionConfig) {
         updateBrushDynamicOption(config.optionKey, config)
     }

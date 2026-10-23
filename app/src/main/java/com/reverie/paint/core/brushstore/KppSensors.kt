@@ -107,6 +107,17 @@ object KppSensors {
         return sensor.replaceRange(m.range, newChild)
     }
 
+    /** 把 sensorslist 里 [id] 的子传感器移到最前（其余子传感器原样保留）；单传感器或不存在时原样返回 */
+    fun moveFirst(sensor: String, id: String): String {
+        if (topId(sensor) != "sensorslist") return sensor
+        val ms = childSensor.findAll(sensor).toList()
+        val m = ms.firstOrNull { it.groupValues[1] == id } ?: return sensor
+        if (ms.first().range == m.range) return sensor
+        val without = sensor.removeRange(m.range)
+        val firstStart = childSensor.find(without)?.range?.first ?: return sensor
+        return without.substring(0, firstStart) + m.value + without.substring(firstStart)
+    }
+
     /** [sensor] 里 id 为 [id] 的传感器的曲线；自闭合 ChildSensor 视为线性 */
     fun sensorCurve(sensor: String?, id: String): String? {
         if (sensor == null) return null

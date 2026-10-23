@@ -626,6 +626,8 @@ import kotlinx.coroutines.launch
         )
         brushParams[name] = p
         schedulePersistBrushParams()
+        // v2：APP_ONLY 仍随旧记录保存；kpp 语义差分并入覆盖、materialize，必要时整份重载
+        if (BrushStoreVm.onSaved(this, name, p, isEraserPreset, immediateReload)) return
         val dir = File(appContext.filesDir, "paintoppresets")
         val kppFile = File(dir, "$name.kpp")
         if (kppFile.exists()) {

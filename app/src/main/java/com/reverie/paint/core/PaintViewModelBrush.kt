@@ -651,6 +651,11 @@ import kotlinx.coroutines.withContext
     internal fun PaintViewModel.captureBrushStudioSnapshot() {
         val preset = brushPresets.firstOrNull { it.index == brushPresetIndex } ?: return
         brushStudioInitialParams = brushParams[preset.name]?.copy()
+        brushStudioInitialOverrides = BrushStoreVm.captureStudio(preset.name)
+        if (brushStudioInitialOverrides != null) {
+            brushStudioInitialKppBytes = null
+            return
+        }
         val dir = File(appContext.filesDir, "paintoppresets")
         val kppFile = File(dir, "${preset.name}.kpp")
         brushStudioInitialKppBytes = if (kppFile.exists()) kppFile.readBytes() else null
@@ -661,6 +666,12 @@ import kotlinx.coroutines.withContext
         val preset = brushPresets.firstOrNull { it.index == brushPresetIndex } ?: return false
         val initial = brushStudioInitialParams
         val current = brushParams[preset.name]
+        brushStudioInitialOverrides?.let { o ->
+            // v2：kpp 语义看覆盖，APP_ONLY 看旧记录
+            val appChanged = com.reverie.paint.core.brushstore.PresetReadback.appBase(initial) !=
+                com.reverie.paint.core.brushstore.PresetReadback.appBase(current)
+            return appChanged || BrushStoreVm.studioChanged(preset.name, o)
+        }
         val paramsChanged = if (initial == null) {
             current != null
         } else {
@@ -682,8 +693,11 @@ import kotlinx.coroutines.withContext
         } else {
             brushParams.remove(preset.name)
         }
+        val initialOverrides = brushStudioInitialOverrides
         val kppBytes = brushStudioInitialKppBytes
-        if (kppBytes != null) {
+        if (initialOverrides != null) {
+            BrushStoreVm.revertStudio(preset.name, initialOverrides)
+        } else if (kppBytes != null) {
             val dir = File(appContext.filesDir, "paintoppresets")
             val kppFile = File(dir, "${preset.name}.kpp")
             runCatching { kppFile.writeBytes(kppBytes) }
@@ -780,6 +794,9 @@ import kotlinx.coroutines.withContext
 
         brushPresetIndex = index
         updateCurrentToolBrushState { it.copy(presetIndex = index) }
+
+        // v2：UI 与引擎都只来自有效 kpp（快照 + 覆盖），不再按 brushParams 逐个 setter 回放
+        if (BrushStoreVm.select(this, index, preset)) return
 
         val saved = if (preset != null) brushParams[preset.name] else null
         val isCustomized = saved?.isCustomized == true
@@ -1148,6 +1165,11 @@ import kotlinx.coroutines.withContext
 
         if (reloadPreset && origPreset >= 0) {
             val preset = brushPresets.firstOrNull { it.index == origPreset }
+            if (BrushStoreVm.restoreOnRenderThread(this, preset, origPreset, origIsEraser, origSize, origOpacity, origFlow)) {
+                ReverieCoreBridge.setToolMode(origMode)
+                fetchBrushOutlinePolygons()
+                return
+            }
             val isEraserPreset = preset?.group == "橡皮擦" ||
                     preset?.name?.startsWith("a)_Eraser", ignoreCase = true) == true ||
                     preset?.name?.contains("Eraser", ignoreCase = true) == true

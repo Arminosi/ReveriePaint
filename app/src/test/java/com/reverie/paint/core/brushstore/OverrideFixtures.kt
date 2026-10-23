@@ -24,8 +24,16 @@ object OverrideFixtures {
         for ((id, v) in candidates) {
             val sp = PresetPropertyMap.spec(id)
             if (!sp.applicable(ctx) || sp.write == null) continue
-            if (PresetPropertyMap.same(id, cur[id], v)) continue
-            out[id] = v
+            // 曲线强度沿用当前值（UI 编辑曲线时强度来自回读；Size 的强度与 jitterSize 共用 SizeValue）
+            val vv = if (id.curveOption != null) {
+                val c = CurveValue.parse(v as String)!!
+                val curC = CurveValue.parse(cur[id] as? String)
+                if (curC != null) c.copy(strength = curC.strength).encode() else v
+            } else {
+                v
+            }
+            if (PresetPropertyMap.same(id, cur[id], vv)) continue
+            out[id] = vv
             if (out.size >= max) break
         }
         return out

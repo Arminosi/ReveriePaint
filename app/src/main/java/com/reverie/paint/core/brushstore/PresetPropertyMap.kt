@@ -171,12 +171,21 @@ object PresetPropertyMap {
         val checked = KppSensors.isChecked(xml, option)
         if (sensor == null && !KppXml.has(xml, "${option}UseCurve") && !checked) return null
         val ids = KppSensors.sensorIds(sensor)
-        val id = ids.firstOrNull() ?: defaultSensorFor(option)
+        val primary = primarySensor(option, ids)
+        val id = primary ?: defaultSensorFor(option)
         val curve = KppSensors.commonCurve(xml, option) ?: KppSensors.sensorCurve(sensor, id) ?: KppSensors.LINEAR
-        val enabled = checked && KppSensors.useCurve(xml, option)
+        // 只有抖动用的 fuzzy（归 jitterSize/jitterAngle 管）时，曲线本身视为未启用
+        val enabled = checked && KppSensors.useCurve(xml, option) && !(ids.isNotEmpty() && primary == null)
         val strength = if (option in CURVE_OWNS_VALUE) KppXml.getDouble(xml, "${option}Value") ?: 1.0 else 1.0
         return CurveValue(enabled, id, CurveValue.normalizeCurve(curve), strength)
     }
+
+    /** 抖动以 fuzzy 子传感器叠加在这些选项上（见 [mergedJitterSpec]），fuzzy 不算曲线控件的传感器 */
+    private val MERGED_JITTER_OPTIONS = setOf("Size", "Rotation")
+
+    /** 曲线控件代表的传感器：第一个子传感器（Size/Rotation 跳过抖动用的 fuzzy） */
+    fun primarySensor(option: String, ids: List<String>): String? =
+        ids.firstOrNull { !(option in MERGED_JITTER_OPTIONS && it == "fuzzy") }
 
     fun defaultSensorFor(option: String): String = when (option) {
         "Rotation" -> "drawingangle"
@@ -191,10 +200,38 @@ object PresetPropertyMap {
         var x = xml
         val curve = CurveValue.normalizeCurve(v.curve)
         val old = KppSensors.sensorXml(x, option)
-        val replaced = old?.let { KppSensors.setSensorCurve(it, v.sensorId, curve) }
-        val sensor = replaced
-            ?: if (v.sensorId == "drawingangle") drawingAngleSensor(curve) else KppSensors.single(v.sensorId, curve)
-        x = KppSensors.writeSensor(x, option, sensor)
+        val ids = KppSensors.sensorIds(old)
+        val primary0 = primarySensor(option, ids)
+        val jitterOpt = option in MERGED_JITTER_OPTIONS && "fuzzy" in ids
+        val activeBefore = curveActive(xml, option)
+        if (!v.enabled) {
+            // 曲线本来就不存在（只有抖动用的 fuzzy）：原样关闭是恒等。
+            // 改关闭状态曲线的形状无法与生效的抖动共存（Krita 同一选项共用 UseCurve），走下面的通用路径（抖动随之关闭，属耦合）。
+            if (ids.isNotEmpty() && primary0 == null) {
+                val cur = readCurve(xml, option)
+                if (cur != null && !cur.enabled && cur.sensorId == v.sensorId && CurveValue.normalizeCurve(cur.curve) == curve) return xml
+            }
+            // 其余关闭照旧写 UseCurve=false：Krita 同一选项的抖动（fuzzy）随之关闭，属格式层耦合
+        }
+        fun fresh() = if (v.sensorId == "drawingangle") drawingAngleSensor(curve) else KppSensors.single(v.sensorId, curve)
+        val sensor = when {
+            old == null || ids.isEmpty() -> fresh()
+            // 已有该传感器：只改它的曲线，并把它排到最前，回读时曲线控件就代表它
+            v.sensorId in ids -> KppSensors.setSensorCurve(old, v.sensorId, curve)?.let { KppSensors.moveFirst(it, v.sensorId) } ?: fresh()
+            else -> {
+                // 换传感器：替换掉原主传感器，保留其余（尤其是抖动用的 fuzzy）
+                val primary = primarySensor(option, ids)
+                val base = if (primary != null) KppSensors.removeSensor(old, primary) else old
+                if (base == null) fresh() else KppSensors.moveFirst(KppSensors.addSensor(base, v.sensorId, curve), v.sensorId)
+            }
+        }
+        // 选项原本未生效时 fuzzy 是休眠的：启用曲线不应顺带唤醒抖动
+        val finalSensor = if (v.enabled && jitterOpt && !activeBefore && v.sensorId != "fuzzy") {
+            KppSensors.removeSensor(sensor, "fuzzy") ?: sensor
+        } else {
+            sensor
+        }
+        x = KppSensors.writeSensor(x, option, finalSensor)
         // 编辑的未必是第一个子传感器：commonCurve 显式同步为本次写入的曲线
         if (KppSensors.commonCurve(x, option) != null) x = KppXml.set(x, "${option}commonCurve", curve)
         if (v.enabled) {

@@ -90,8 +90,26 @@ private fun PaintViewModel.bootstrapBrushStore(presetDir: File) {
                 .filter { com.reverie.paint.core.brushstore.BrushStoreBootstrap.isFactoryPreset(it) }
                 .associateWith { n -> am.open("paintoppresets/$n").use { it.readBytes() } }
         },
-        migrate = { !com.reverie.paint.core.brushstore.BrushStoreFlags.needsMigration(ctx) },
+        migrate = { migrateLegacyBrushParams(presetDir) },
     )
+}
+
+/** W-07：首次进入 v2 时把旧 brushParams 迁成覆盖；成功后写 schema，之后直接返回 true */
+private fun PaintViewModel.migrateLegacyBrushParams(presetDir: File): Boolean {
+    val ctx = appContext
+    if (!com.reverie.paint.core.brushstore.BrushStoreFlags.needsMigration(ctx)) return true
+    val legacy = HashMap(brushParams)
+    val raw = prefs().getString("brush_params", null)
+    val ts = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())
+    com.reverie.paint.core.brushstore.LegacyBrushParamsMigrator.run(
+        com.reverie.paint.core.brushstore.BrushStoreBootstrap.storeRoot(ctx.filesDir),
+        presetDir,
+        legacy,
+        raw,
+        ts,
+    )
+    com.reverie.paint.core.brushstore.BrushStoreFlags.setMigratedSchema(ctx, com.reverie.paint.core.brushstore.BrushStoreFlags.CURRENT_SCHEMA)
+    return true
 }
 
 /**

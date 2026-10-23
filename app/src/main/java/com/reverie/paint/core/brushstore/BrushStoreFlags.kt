@@ -27,7 +27,7 @@ object BrushStoreFlags {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt(KEY_MIGRATED_SCHEMA, 0)
 
     fun setMigratedSchema(context: Context, schema: Int) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putInt(KEY_MIGRATED_SCHEMA, schema).apply()
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putInt(KEY_MIGRATED_SCHEMA, schema).commit()
     }
 
     fun needsMigration(context: Context): Boolean = migratedSchema(context) < CURRENT_SCHEMA

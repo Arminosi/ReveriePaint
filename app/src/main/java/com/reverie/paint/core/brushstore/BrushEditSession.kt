@@ -92,7 +92,9 @@ object BrushEditSession {
     /** 重置（W-06）：丢弃待提交编辑、清空覆盖、有效文件回到快照字节 */
     fun reset(id: String, presetDir: File): EffectivePresetBuilder.Result? = synchronized(lock) {
         pending.remove(id)
-        BrushOverrideStore.clear(id)
+        // rawKeys 是导入时对快照的修正（资源改名，W-08），属于"原样"的一部分，重置保留
+        val raw = BrushOverrideStore.get(id).rawKeys
+        if (raw.isEmpty()) BrushOverrideStore.clear(id) else BrushOverrideStore.replace(id, BrushOverrideStore.Overrides(rawKeys = raw))
         val r = EffectivePresetBuilder.materialize(id, presetDir)
         BrushDiagnostics.log("reset", "id" to id, "md5" to r?.md5)
         r

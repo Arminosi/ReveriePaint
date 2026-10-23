@@ -267,6 +267,6 @@ internal object BrushStoreVm {
         val e = BrushStoreBootstrap.managedEntry(name) ?: return null
         // 先读 brushParams（Compose 状态）：每次保存都会写它，列表角标借此重组
         val app = PresetReadback.appOnlyModified(vm.brushParams[name])
-        return app || !BrushOverrideStore.get(e.id).isEmpty() || BrushEditSession.hasPending(e.id)
+        return app || BrushOverrideStore.get(e.id).controls.isNotEmpty() || BrushEditSession.hasPending(e.id)
     }
 }

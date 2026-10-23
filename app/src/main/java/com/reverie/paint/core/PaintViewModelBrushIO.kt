@@ -280,7 +280,10 @@ import kotlinx.coroutines.withContext
         val dir = File(appContext.filesDir, "paintoppresets")
         val src = File(dir, "${preset.name}.kpp")
         val dst = File(dir, "$clean.kpp")
+        // W-08：不允许改成已有预设名（旧实现 renameTo 会静默失败或覆盖）
+        if (dst.exists() || File(dir, "$clean.myb").exists() || com.reverie.paint.core.brushstore.BrushIdentity.idForName(clean) != null) return false
         if (src.exists()) src.renameTo(dst)
+        com.reverie.paint.core.brushstore.BrushIdentity.idForName(preset.name)?.let { com.reverie.paint.core.brushstore.BrushIdentity.rename(it, clean) }
         val p = brushParams.remove(preset.name)
         if (p != null) brushParams[clean] = p
         persistBrushParams()

@@ -38,12 +38,18 @@ object EffectivePresetBuilder {
         if (controls.isEmpty() && o.rawKeys.isEmpty()) return snapshot
         if (!ext.equals("kpp", ignoreCase = true)) return snapshot
         val xml = KppHelper.readPresetXml(snapshot, stripEmbeddedResources = false) ?: return snapshot
-        // 基线读取用去掉内嵌资源的 XML（值相同，扫描量小几个数量级）
-        val readXml = KppHelper.readPresetXml(snapshot, stripEmbeddedResources = true) ?: xml
-        val base = PresetPropertyMap.readParams(readXml)
-        val eff = PresetPropertyMap.applyToParams(base, controls)
-        var x = PresetPropertyMap.applyToXml(xml, controls, eff)
+        // rawKeys 是"修正过的快照"（导入时的资源改名等，W-08），先写；控件覆盖叠在其上，
+        // 这样改笔尖柔边等会重写 brush_definition 的控件不会把改名后的 filename 冲掉。
+        var x = xml
         for ((k, v) in o.rawKeys) x = KppXml.set(x, k, v)
+        if (controls.isNotEmpty()) {
+            // 基线读取用去掉内嵌资源的 XML（值相同，扫描量小几个数量级）
+            var readXml = KppHelper.readPresetXml(snapshot, stripEmbeddedResources = true) ?: xml
+            for ((k, v) in o.rawKeys) readXml = KppXml.set(readXml, k, v)
+            val base = PresetPropertyMap.readParams(readXml)
+            val eff = PresetPropertyMap.applyToParams(base, controls)
+            x = PresetPropertyMap.applyToXml(x, controls, eff)
+        }
         if (x == xml) return snapshot
         return KppHelper.replacePresetXml(snapshot, x)
     }

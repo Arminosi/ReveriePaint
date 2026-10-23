@@ -1310,11 +1310,20 @@ import kotlinx.coroutines.withContext
     internal fun PaintViewModel.duplicateBrushPreset(presetIndex: Int, newName: String? = null): Boolean {
         // Native-table index (BrushPresetInfo.index), not list position.
         val src = brushPresets.firstOrNull { it.index == presetIndex } ?: return false
-        val cleanName = newName?.trim()?.ifEmpty { null } ?: "${src.name} 副本"
         val dir = File(appContext.filesDir, "paintoppresets")
+        // W-08：复制名撞已有预设时加序号，不再覆盖（旧实现 copyTo(overwrite = true) 可覆盖内置）
+        val cleanName = com.reverie.paint.core.brushstore.BrushImportPipeline.uniqueCopyName(
+            newName?.trim()?.ifEmpty { null } ?: "${src.name} 副本",
+            com.reverie.paint.core.brushstore.BrushImportPipeline.takenNames(dir),
+        )
         val srcMyb = File(dir, "${src.name}.myb")
         val isMyb = srcMyb.exists()
-        if (isMyb) {
+        val managedSrc = com.reverie.paint.core.brushstore.BrushStoreBootstrap.managedEntry(src.name)
+        if (!isMyb && managedSrc != null) {
+            // v2：新快照 = 源快照，覆盖 = 源覆盖的拷贝；旧记录只留 APP_ONLY/作者信息
+            com.reverie.paint.core.brushstore.BrushImportPipeline.duplicate(managedSrc.id, cleanName, dir) ?: return false
+            brushParams[src.name]?.let { brushParams[cleanName] = it.copy(author = if (src.isBuiltIn) "Krita (副本)" else it.author, isAuthorLocked = false) }
+        } else if (isMyb) {
             val dstMyb = File(dir, "$cleanName.myb")
             srcMyb.copyTo(dstMyb, overwrite = true)
             val srcPrev = File(dir, "${src.name}_prev.png")
@@ -1367,6 +1376,8 @@ import kotlinx.coroutines.withContext
         if (mybFile.exists()) mybFile.delete()
         val prevFile = File(dir, "${preset.name}_prev.png")
         if (prevFile.exists()) prevFile.delete()
+        // W-08：导入/复制预设的 identity+快照+覆盖一起删，否则下次启动会被 materializeAll 复活
+        com.reverie.paint.core.brushstore.BrushImportPipeline.forget(preset.name)
         brushParams.remove(preset.name)
         persistBrushParams()
         userBrushGroups = userBrushGroups - preset.name
@@ -1396,6 +1407,7 @@ import kotlinx.coroutines.withContext
                 if (mybFile.exists()) mybFile.delete()
                 val prevFile = File(dir, "${p.name}_prev.png")
                 if (prevFile.exists()) prevFile.delete()
+                com.reverie.paint.core.brushstore.BrushImportPipeline.forget(p.name)
                 brushParams.remove(p.name)
             }
             if (deletedNames.isNotEmpty()) {
@@ -1429,6 +1441,7 @@ import kotlinx.coroutines.withContext
         for (p in targets) {
             val file = File(dir, "${p.name}.kpp")
             if (file.exists()) file.delete()
+            com.reverie.paint.core.brushstore.BrushImportPipeline.forget(p.name)
             brushParams.remove(p.name)
             userBrushGroups = userBrushGroups - p.name
         }
@@ -1468,9 +1481,13 @@ import kotlinx.coroutines.withContext
         tipAsset: String = "",
         paintOpId: String = "defaultpaintop",
     ): Boolean {
-        val cleanName = name.trim().ifEmpty { "自定义笔刷_${(System.currentTimeMillis() % 10000)}" }
         val dir = File(appContext.filesDir, "paintoppresets")
         if (!dir.exists()) dir.mkdirs()
+        // W-08：撞名加序号，不再覆盖已有（含内置）预设
+        val cleanName = com.reverie.paint.core.brushstore.BrushImportPipeline.uniqueCopyName(
+            name.trim().ifEmpty { "自定义笔刷_${(System.currentTimeMillis() % 10000)}" },
+            com.reverie.paint.core.brushstore.BrushImportPipeline.takenNames(dir),
+        )
         
         // 默认基准预设选择 b)_Basic-1
         val base = brushPresets.firstOrNull { it.index == basePresetIndex }
@@ -1509,6 +1526,8 @@ import kotlinx.coroutines.withContext
         brushParams[cleanName] = newParams
         if (targetFile.exists()) {
             KppHelper.updateKppFile(targetFile, cleanName, newParams)
+            // W-08：v2 下把新建结果纳入快照（当前文件即"原样"）
+            if (com.reverie.paint.core.brushstore.BrushStoreBootstrap.active) com.reverie.paint.core.brushstore.BrushImportPipeline.adoptFile(cleanName, dir, "create")
         }
         persistBrushParams()
         userBrushGroups = userBrushGroups + (cleanName to group)
@@ -1550,11 +1569,13 @@ import kotlinx.coroutines.withContext
             val chosenGroup = targetGroup?.trim()?.takeIf { it.isNotEmpty() }
 
             if (filename.endsWith(".kpp", ignoreCase = true) || filename.endsWith(".myb", ignoreCase = true)) {
-                val target = File(presetDir, filename)
-                resolver.openInputStream(uri)?.use { input ->
-                    target.outputStream().use { output -> input.copyTo(output) }
-                }
-                val presetName = filename.substringBeforeLast(".")
+                // W-08：经统一管线落盘——撞名改名（绝不覆盖内置/已有）、v2 下建快照
+                val bytes = resolver.openInputStream(uri)?.use { it.readBytes() }
+                    ?: return BrushImportResult(success = false)
+                val imported = com.reverie.paint.core.brushstore.BrushImportPipeline
+                    .importFile(filename, bytes, presetDir, com.reverie.paint.core.brushstore.BrushStoreBootstrap.active)
+                    .imported.firstOrNull() ?: return BrushImportResult(success = false)
+                val presetName = imported.name
                 brushParams[presetName] = BrushParams(
                     author = "外部创作者 (分享)",
                     isAuthorLocked = true,
@@ -1901,30 +1922,16 @@ import kotlinx.coroutines.withContext
                                 }
                             }
                         }
-
-                        // 3. Extract presets (.kpp), brushes and patterns
-                        for (entry in zip.entries()) {
-                            val entryName = entry.name
-                            if (entryName.contains("paintoppresets/") && entryName.endsWith(".kpp", ignoreCase = true)) {
-                                val kppName = entryName.substringAfterLast("/")
-                                val out = File(presetDir, kppName)
-                                zip.getInputStream(entry).use { inS -> out.outputStream().use { inS.copyTo(it) } }
-                                val presetBaseName = kppName.substringBeforeLast(".")
-                                importedPresets.add(presetBaseName)
-                            } else if (entryName.contains("brushes/")) {
-                                val brushName = entryName.substringAfterLast("/")
-                                if (brushName.isNotBlank() && !entry.isDirectory) {
-                                    val out = File(brushDir, brushName)
-                                    zip.getInputStream(entry).use { inS -> out.outputStream().use { inS.copyTo(it) } }
-                                }
-                            } else if (entryName.contains("patterns/")) {
-                                val patName = entryName.substringAfterLast("/")
-                                if (patName.isNotBlank() && !entry.isDirectory) {
-                                    val out = File(patternDir, patName)
-                                    zip.getInputStream(entry).use { inS -> out.outputStream().use { inS.copyTo(it) } }
-                                }
-                            }
-                        }
+                    }
+                    // 3. W-08：统一管线——paintoppresets/ 与根目录的 .kpp/.myb、嵌套 bundle；
+                    //    预设撞名改名、资源同名异内容改名并改写引用，绝不覆盖已有文件
+                    val result = com.reverie.paint.core.brushstore.BrushImportPipeline.importArchive(
+                        filename, tempZip.readBytes(), presetDir, brushDir, patternDir,
+                        com.reverie.paint.core.brushstore.BrushStoreBootstrap.active,
+                    )
+                    for (imp in result.imported) {
+                        importedPresets.add(imp.name)
+                        presetToTagMap[imp.wantedName]?.let { if (imp.name != imp.wantedName) presetToTagMap[imp.name] = it }
                     }
                 } finally {
                     tempZip.delete()

@@ -584,6 +584,12 @@ import kotlinx.coroutines.withContext
 
     /** Reset all parameters for the current brush back to factory defaults */
     private fun PaintViewModel.resetSingleBrushPresetState(presetName: String) {
+        if (BrushStoreVm.reset(this, presetName)) {
+            persistBrushParams()
+            toolBrushStates = toolBrushStates.mapValues { (_, s) -> s.copy(paramMemory = s.paramMemory - presetName) }
+            persistToolBrushStates()
+            return
+        }
         val dir = File(appContext.filesDir, "paintoppresets")
         val isMyb = File(dir, "$presetName.myb").exists() || (appContext.assets.list("paintoppresets")?.contains("$presetName.myb") == true)
         val ext = if (isMyb) "myb" else "kpp"
@@ -644,6 +650,7 @@ import kotlinx.coroutines.withContext
 
     /** Check if a brush preset has modified parameters */
     internal fun PaintViewModel.isBrushModified(name: String): Boolean {
+        BrushStoreVm.isModified(this, name)?.let { return it }
         return brushParams.containsKey(name)
     }
 

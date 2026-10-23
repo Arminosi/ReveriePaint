@@ -27,6 +27,36 @@ object PresetReadback {
         return p
     }
 
+    /** 预设元数据：重置时保留（导入时的作者/说明属于预设本身，不是用户调参） */
+    private val METADATA = setOf(ControlId.AUTHOR, ControlId.AUTHOR_LOCKED, ControlId.DESCRIPTION, ControlId.VERSION)
+
+    /** 旧记录里是否有偏离默认值的 APP_ONLY 调参（不含元数据）——v2 下"已修改"的另一半依据 */
+    fun appOnlyModified(legacy: BrushParams?): Boolean {
+        if (legacy == null) return false
+        val d = BrushParams()
+        return ControlId.entries.any { id ->
+            id.klass == ControlClass.APP_ONLY && id !in METADATA &&
+                PresetPropertyMap.spec(id).let { !PresetPropertyMap.same(id, it.get(legacy), it.get(d)) }
+        }
+    }
+
+    /** 重置后的旧记录：只留元数据；元数据也都是默认值时返回 null（删除记录） */
+    fun metadataOnly(legacy: BrushParams?): BrushParams? {
+        if (legacy == null) return null
+        val d = BrushParams()
+        var p = d
+        var any = false
+        for (id in METADATA) {
+            val sp = PresetPropertyMap.spec(id)
+            val v = sp.get(legacy)
+            if (!PresetPropertyMap.same(id, v, sp.get(d))) {
+                p = sp.set(p, v)
+                any = true
+            }
+        }
+        return if (any) p else null
+    }
+
     fun fromXml(xml: String?, appBase: BrushParams = BrushParams()): BrushParams =
         PresetPropertyMap.readParams(xml, appBase).copy(
             isCustomized = true,

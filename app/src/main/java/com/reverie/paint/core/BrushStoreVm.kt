@@ -236,10 +236,37 @@ internal object BrushStoreVm {
     fun revertStudio(name: String, initial: BrushOverrideStore.Overrides): Boolean {
         val e = BrushStoreBootstrap.managedEntry(name) ?: return false
         val dir = presetDir() ?: return false
-        BrushEditSession.discard(e.id)
-        BrushOverrideStore.replace(e.id, initial)
-        EffectivePresetBuilder.materialize(e.id, dir)
+        pendingKppReloadJob?.cancel()
+        BrushEditSession.locked {
+            BrushEditSession.discard(e.id)
+            BrushOverrideStore.replace(e.id, initial)
+            EffectivePresetBuilder.materialize(e.id, dir)
+        }
         BrushDiagnostics.log("studio_revert", "id" to e.id, "controls" to initial.controls.size)
         return true
+    }
+
+    // ------------------------------------------------------------ 重置 / 已修改（W-06）
+
+    /**
+     * 重置 = 清空覆盖（有效文件回到快照：内置为出厂、导入为导入时）+ 删掉旧记录里的调参（元数据保留）
+     * + 清掉各工具对该预设的尺寸记忆。返回 false 表示不归 v2 管。调用方负责持久化与重新选中。
+     */
+    fun reset(vm: PaintViewModel, name: String): Boolean {
+        val e = BrushStoreBootstrap.managedEntry(name) ?: return false
+        val dir = presetDir() ?: return false
+        pendingKppReloadJob?.cancel()
+        BrushEditSession.reset(e.id, dir) ?: return false
+        val keep = PresetReadback.metadataOnly(vm.brushParams[name])
+        if (keep != null) vm.brushParams[name] = keep else vm.brushParams.remove(name)
+        return true
+    }
+
+    /** v2 已修改：有覆盖，或旧记录里有 APP_ONLY 调参；null 表示不归 v2 管 */
+    fun isModified(vm: PaintViewModel, name: String): Boolean? {
+        val e = BrushStoreBootstrap.managedEntry(name) ?: return null
+        // 先读 brushParams（Compose 状态）：每次保存都会写它，列表角标借此重组
+        val app = PresetReadback.appOnlyModified(vm.brushParams[name])
+        return app || !BrushOverrideStore.get(e.id).isEmpty() || BrushEditSession.hasPending(e.id)
     }
 }

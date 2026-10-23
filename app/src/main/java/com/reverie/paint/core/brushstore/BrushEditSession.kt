@@ -86,6 +86,18 @@ object BrushEditSession {
         return out
     }
 
+    /** 在提交锁内执行（回滚、重置与防抖提交互斥） */
+    fun <T> locked(block: () -> T): T = synchronized(lock) { block() }
+
+    /** 重置（W-06）：丢弃待提交编辑、清空覆盖、有效文件回到快照字节 */
+    fun reset(id: String, presetDir: File): EffectivePresetBuilder.Result? = synchronized(lock) {
+        pending.remove(id)
+        BrushOverrideStore.clear(id)
+        val r = EffectivePresetBuilder.materialize(id, presetDir)
+        BrushDiagnostics.log("reset", "id" to id, "md5" to r?.md5)
+        r
+    }
+
     /** 测试用 */
     fun resetForTest() {
         synchronized(lock) { pending.clear() }

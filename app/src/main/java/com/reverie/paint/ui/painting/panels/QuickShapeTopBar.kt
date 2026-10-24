@@ -2,89 +2,76 @@
 package com.reverie.paint.ui.painting.panels
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.*
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerId
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.reverie.paint.R
 import com.reverie.paint.core.PaintViewModel
+import com.reverie.paint.core.updateQuickShapePreview
 import com.reverie.paint.core.cancelQuickShape
 import com.reverie.paint.core.commitQuickShape
 import com.reverie.paint.core.rotateQuickShapeBy
 import com.reverie.paint.core.scaleQuickShapeBy
 import com.reverie.paint.core.snapQuickShapeToAngle
 import com.reverie.paint.model.QuickShapeConversions
-import com.reverie.paint.model.QuickShapeType
+import com.reverie.paint.model.QuickShapeEditHint
 import com.reverie.paint.model.QuickShapeGeometry
-import com.reverie.paint.ui.components.ReSwitch
+import com.reverie.paint.model.QuickShapeType
+import com.reverie.paint.model.quickShapeEditCapabilities
 import com.reverie.paint.ui.theme.Morandi
-
-@Composable
-internal fun QuickShapeSettingRow(vm: PaintViewModel) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        QuickShapeOption(R.string.quick_shape_setting, R.string.quick_shape_setting_hint,
-            vm.quickShapeEnabled, vm::updateQuickShapeEnabled)
-        if (vm.quickShapeEnabled) {
-            QuickShapeOption(R.string.quick_shape_quad_setting, R.string.quick_shape_quad_hint,
-                vm.quickShapeQuadrilateralEnabled, vm::updateQuickShapeQuadrilateralEnabled)
-            QuickShapeOption(R.string.quick_shape_conversions, R.string.quick_shape_conversions_hint,
-                vm.quickShapeConversionsEnabled, vm::updateQuickShapeConversionsEnabled)
-            QuickShapeOption(R.string.quick_shape_curve_setting, R.string.quick_shape_curve_hint,
-                vm.quickShapeCurveEnabled, vm::updateQuickShapeCurveEnabled)
-            QuickShapeOption(R.string.quick_shape_relaxed, R.string.quick_shape_relaxed_hint,
-                vm.quickShapeRelaxedEnabled, vm::updateQuickShapeRelaxedEnabled)
-            QuickShapeOption(R.string.quick_shape_angle_snap, R.string.quick_shape_angle_snap_hint,
-                vm.quickShapeAngleSnapEnabled, vm::updateQuickShapeAngleSnapEnabled)
-            QuickShapeOption(R.string.quick_shape_per_point_pressure, R.string.quick_shape_per_point_pressure_hint,
-                vm.quickShapePerPointPressureEnabled, vm::updateQuickShapePerPointPressureEnabled)
-            QuickShapeOption(R.string.quick_shape_arc_setting, R.string.quick_shape_arc_setting_hint,
-                vm.quickShapeArcEnabled, vm::updateQuickShapeArcEnabled)
-            QuickShapeOption(R.string.quick_shape_box_handles, R.string.quick_shape_box_handles_hint,
-                vm.quickShapeBoxHandlesEnabled, vm::updateQuickShapeBoxHandlesEnabled)
-            if (vm.quickShapeBoxHandlesEnabled) {
-                QuickShapeOption(R.string.quick_shape_contour_setting, R.string.quick_shape_contour_setting_hint,
-                    vm.quickShapeContourEnabled, vm::updateQuickShapeContourEnabled)
-                if (vm.quickShapeContourEnabled) {
-                    QuickShapeOption(R.string.quick_shape_curved, R.string.quick_shape_curved_hint,
-                        vm.quickShapeCurvedContourEnabled, vm::updateQuickShapeCurvedContourEnabled)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun QuickShapeOption(title: Int, hint: Int, enabled: Boolean, onChanged: (Boolean) -> Unit) {
-    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-        Column(Modifier.weight(1f).padding(end = 8.dp)) {
-            Text(stringResource(title), color = Morandi.text, fontSize = 13.sp)
-            Text(stringResource(hint), color = Morandi.subText, fontSize = 11.sp)
-        }
-        ReSwitch(checked = enabled, onChecked = onChanged)
-    }
-}
+import com.reverie.paint.ui.theme.glassBorder
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun QuickShapeTopBar(vm: PaintViewModel, modifier: Modifier = Modifier,
-                     reshapeHeld: Boolean = false, onReshapePointer: (PointerId?) -> Unit = {}) {
+fun QuickShapeTopBar(
+    vm: PaintViewModel,
+    modifier: Modifier = Modifier,
+    reshapeHeld: Boolean = false,
+    onReshapePointer: (PointerId?) -> Unit = {},
+) {
     val shape = vm.activeQuickShape ?: return
     val reshapeCallback by rememberUpdatedState(onReshapePointer)
     DisposableEffect(vm) { onDispose { reshapeCallback(null) } }
-    val boxShape = shape.type == QuickShapeType.RECTANGLE || shape.type == QuickShapeType.CONTOUR ||
-        shape.type == QuickShapeType.QUADRILATERAL
-    val name = when (shape.type) {
+
+    val capabilities = quickShapeEditCapabilities(
+        type = shape.type,
+        boxHandles = vm.quickShapeBoxHandlesEnabled,
+        conversions = vm.quickShapeConversionsEnabled,
+        contour = vm.quickShapeContourEnabled,
+    )
+
+    val nameRes = when (shape.type) {
         QuickShapeType.LINE -> R.string.quick_shape_line
         QuickShapeType.QUADRILATERAL -> R.string.quick_shape_quad
         QuickShapeType.CURVE -> R.string.quick_shape_curve
@@ -95,129 +82,360 @@ fun QuickShapeTopBar(vm: PaintViewModel, modifier: Modifier = Modifier,
         QuickShapeType.RECTANGLE -> R.string.quick_shape_rectangle
         else -> R.string.quick_shape_triangle
     }
-    Column(modifier.widthIn(max = 480.dp).background(Morandi.panel, RoundedCornerShape(16.dp)).padding(12.dp)) {
-        Text(stringResource(R.string.quick_shape_title, stringResource(name)), color = Morandi.text, fontSize = 14.sp)
-        Text(stringResource(if (shape.type == QuickShapeType.CURVE) R.string.quick_shape_curve_edit_hint
-            else if (!vm.quickShapeBoxHandlesEnabled && (shape.type == QuickShapeType.QUADRILATERAL ||
-                shape.type == QuickShapeType.CONTOUR)) R.string.quick_shape_quad_edit_hint
-            else if (shape.type == QuickShapeType.ARC) R.string.quick_shape_arc_edit_hint
-            else if (vm.quickShapeBoxHandlesEnabled && boxShape) R.string.quick_shape_box_edit_hint
-            else R.string.quick_shape_edit_hint), color = Morandi.subText, fontSize = 12.sp)
-        if (vm.quickShapeBoxHandlesEnabled && vm.quickShapeContourEnabled && boxShape) {
-            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                val curved = if (shape.type == QuickShapeType.CONTOUR) shape.contourCurved
-                    else vm.quickShapeCurvedContourEnabled
-                for (mode in listOf(false, true)) {
-                    TextButton(enabled = !vm.quickShapeCommitting && !reshapeHeld, onClick = {
-                        vm.updateQuickShapeCurvedContourEnabled(mode)
-                        vm.activeQuickShape = QuickShapeGeometry.setContourCurved(shape, mode)
-                    }) {
-                        Text(stringResource(if (mode) R.string.quick_shape_contour_curves
-                            else R.string.quick_shape_contour_lines),
-                            color = if (mode == curved) Morandi.accent else Morandi.subText)
-                    }
-                }
-            }
-            val label = stringResource(R.string.quick_shape_hold_contour)
-            Box(Modifier.semantics { contentDescription = label }
-                .background(if (reshapeHeld) Morandi.accent else Morandi.panel, RoundedCornerShape(8.dp))
-                .pointerInput(vm) {
-                    awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false)
-                        down.consume()
-                        if (!vm.quickShapeCommitting) reshapeCallback(down.id)
-                        try {
-                            do {
-                                val event = awaitPointerEvent()
-                                val pointer = event.changes.firstOrNull { it.id == down.id }
-                                pointer?.consume()
-                            } while (pointer != null && pointer.pressed)
-                        } finally { reshapeCallback(null) }
-                    }
-                }.heightIn(min = 48.dp).padding(horizontal = 12.dp, vertical = 12.dp)) {
-                Text(label, color = Morandi.text, fontSize = 13.sp)
-            }
+
+    val hintRes = when (capabilities.hint) {
+        QuickShapeEditHint.LINE -> R.string.quick_shape_hint_line
+        QuickShapeEditHint.TRIANGLE -> R.string.quick_shape_hint_triangle
+        QuickShapeEditHint.CIRCLE -> R.string.quick_shape_hint_circle
+        QuickShapeEditHint.ELLIPSE -> R.string.quick_shape_hint_ellipse
+        QuickShapeEditHint.CONTOUR -> R.string.quick_shape_hint_contour
+        QuickShapeEditHint.QUAD -> R.string.quick_shape_hint_quad
+        QuickShapeEditHint.CURVE -> R.string.quick_shape_curve_edit_hint
+        QuickShapeEditHint.ARC -> R.string.quick_shape_arc_edit_hint
+        QuickShapeEditHint.BOX -> R.string.quick_shape_box_edit_hint
+        QuickShapeEditHint.GENERIC -> R.string.quick_shape_hint_generic
+    }
+
+    val actionEnabled = !vm.quickShapeCommitting && !reshapeHeld
+
+    Column(
+        modifier = modifier
+            .widthIn(max = 320.dp)
+            .shadow(16.dp, RoundedCornerShape(14.dp))
+            .background(Morandi.panel.copy(alpha = 0.75f), RoundedCornerShape(14.dp))
+            .glassBorder(RoundedCornerShape(14.dp))
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = stringResource(R.string.quick_shape_bar_title, stringResource(nameRes)),
+                color = Morandi.text,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = stringResource(hintRes),
+                color = Morandi.subText,
+                fontSize = 10.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .padding(start = 8.dp),
+            )
         }
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            if (boxShape && vm.quickShapeConversionsEnabled) {
-                for (target in QuickShapeConversions.Target.entries) {
-                    val label = when (target) {
-                        QuickShapeConversions.Target.PARALLELOGRAM -> R.string.quick_shape_to_parallelogram
-                        QuickShapeConversions.Target.RECTANGLE -> R.string.quick_shape_to_rectangle
-                        QuickShapeConversions.Target.SQUARE -> R.string.quick_shape_to_square
-                    }
-                    TextButton(enabled = !vm.quickShapeCommitting && !reshapeHeld, onClick = {
-                        vm.activeQuickShape = QuickShapeConversions.convert(shape, target)
-                    }) { Text(stringResource(label), color = Morandi.accent) }
-                }
-            }
-            when (shape.type) {
-                QuickShapeType.CIRCLE, QuickShapeType.ELLIPSE -> {
-                    val circle = shape.type == QuickShapeType.CIRCLE
-                    TextButton(enabled = !vm.quickShapeCommitting, onClick = {
-                        val radius = (shape.radiusX + shape.radiusY) / 2f
-                        vm.activeQuickShape = if (circle) shape.copy(type = QuickShapeType.ELLIPSE)
-                        else shape.copy(type = QuickShapeType.CIRCLE, radiusX = radius, radiusY = radius)
-                    }) {
-                        Text(stringResource(if (circle) R.string.quick_shape_to_ellipse else R.string.quick_shape_to_circle),
-                            color = Morandi.accent)
-                    }
-                }
-                QuickShapeType.RECTANGLE -> if (!vm.quickShapeConversionsEnabled) TextButton(
-                    enabled = !vm.quickShapeCommitting && !reshapeHeld, onClick = {
-                    val half = maxOf(shape.radiusX, shape.radiusY)
-                    vm.activeQuickShape = shape.copy(radiusX = half, radiusY = half)
-                }) { Text(stringResource(R.string.quick_shape_to_square), color = Morandi.accent) }
-                else -> Unit
-            }
-            // 精确摆正: 直线/矩形/四边形/轮廓。不受识别期吸附容差限制, 用户点名要哪个角度就摆到哪个角度
-            if (shape.type == QuickShapeType.LINE || shape.type == QuickShapeType.RECTANGLE ||
-                shape.type == QuickShapeType.QUADRILATERAL || shape.type == QuickShapeType.CONTOUR
+
+        val showSquareOnly = shape.type == QuickShapeType.RECTANGLE && !capabilities.showConversions
+        val hasActions = capabilities.showConversions ||
+            capabilities.showCircleEllipse ||
+            showSquareOnly ||
+            capabilities.showSnap ||
+            capabilities.showRotate ||
+            capabilities.showScale ||
+            capabilities.showContourMode
+
+        val hasConversions = capabilities.showConversions || capabilities.showCircleEllipse || showSquareOnly
+        if (hasConversions) {
+            Spacer(Modifier.height(6.dp))
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                verticalArrangement = Arrangement.spacedBy(5.dp),
             ) {
-                for (deg in listOf(0f, 90f, 45f)) {
-                    TextButton(enabled = !vm.quickShapeCommitting && !reshapeHeld,
-                        onClick = { vm.snapQuickShapeToAngle(deg) }) {
-                        Text(
-                            stringResource(
-                                when (deg) {
-                                    0f -> R.string.quick_shape_snap_horizontal
-                                    90f -> R.string.quick_shape_snap_vertical
-                                    else -> R.string.quick_shape_snap_diagonal
-                                },
-                            ),
-                            color = Morandi.accent,
+                // 形状转换（平行四边形/矩形/正方形）
+                if (capabilities.showConversions) {
+                    for (target in QuickShapeConversions.Target.entries) {
+                        val labelRes = when (target) {
+                            QuickShapeConversions.Target.PARALLELOGRAM -> R.string.quick_shape_to_parallelogram
+                            QuickShapeConversions.Target.RECTANGLE -> R.string.quick_shape_to_rectangle
+                            QuickShapeConversions.Target.SQUARE -> R.string.quick_shape_to_square
+                        }
+                        QuickShapeChip(
+                            label = stringResource(labelRes),
+                            enabled = actionEnabled,
+                            onClick = {
+                                vm.activeQuickShape = QuickShapeConversions.convert(shape, target)
+                                vm.updateQuickShapePreview()
+                            },
                         )
                     }
                 }
-            }
-            // 旋转 / 缩放: 闭合形状
-            val closedShape = shape.type == QuickShapeType.RECTANGLE || shape.type == QuickShapeType.CIRCLE ||
-                shape.type == QuickShapeType.ELLIPSE || shape.type == QuickShapeType.QUADRILATERAL ||
-                shape.type == QuickShapeType.CONTOUR
-            if (closedShape) {
-                TextButton(enabled = !vm.quickShapeCommitting && !reshapeHeld,
-                    onClick = { vm.rotateQuickShapeBy(-15f) }) {
-                    Text(stringResource(R.string.quick_shape_rotate_ccw), color = Morandi.accent)
+                // 圆/椭圆切换
+                if (capabilities.showCircleEllipse) {
+                    val isCircle = shape.type == QuickShapeType.CIRCLE
+                    QuickShapeChip(
+                        label = stringResource(
+                            if (isCircle) R.string.quick_shape_to_ellipse else R.string.quick_shape_to_circle
+                        ),
+                        enabled = actionEnabled,
+                        onClick = {
+                            val radius = (shape.radiusX + shape.radiusY) / 2f
+                            vm.activeQuickShape = if (isCircle) {
+                                shape.copy(type = QuickShapeType.ELLIPSE)
+                            } else {
+                                shape.copy(type = QuickShapeType.CIRCLE, radiusX = radius, radiusY = radius)
+                            }
+                            vm.updateQuickShapePreview()
+                        },
+                    )
                 }
-                TextButton(enabled = !vm.quickShapeCommitting && !reshapeHeld,
-                    onClick = { vm.rotateQuickShapeBy(15f) }) {
-                    Text(stringResource(R.string.quick_shape_rotate_cw), color = Morandi.accent)
+                // 矩形独立转正方
+                if (showSquareOnly) {
+                    QuickShapeChip(
+                        label = stringResource(R.string.quick_shape_to_square),
+                        enabled = actionEnabled,
+                        onClick = {
+                            val half = maxOf(shape.radiusX, shape.radiusY)
+                            vm.activeQuickShape = shape.copy(radiusX = half, radiusY = half)
+                            vm.updateQuickShapePreview()
+                        },
+                    )
                 }
-                TextButton(enabled = !vm.quickShapeCommitting && !reshapeHeld,
-                    onClick = { vm.scaleQuickShapeBy(0.8f) }) {
-                    Text(stringResource(R.string.quick_shape_scale_down), color = Morandi.accent)
-                }
-                TextButton(enabled = !vm.quickShapeCommitting && !reshapeHeld,
-                    onClick = { vm.scaleQuickShapeBy(1.25f) }) {
-                    Text(stringResource(R.string.quick_shape_scale_up), color = Morandi.accent)
-                }
-            }
-            TextButton(enabled = !vm.quickShapeCommitting, onClick = vm::commitQuickShape) {
-                Text(stringResource(R.string.common_done), color = Morandi.accent)
-            }
-            TextButton(enabled = !vm.quickShapeCommitting, onClick = vm::cancelQuickShape) {
-                Text(stringResource(R.string.quick_shape_keep_freehand), color = Morandi.text)
             }
         }
+
+        // 朝向吸附大类（水平 / 垂直 / 45°）
+        if (capabilities.showSnap) {
+            Spacer(Modifier.height(5.dp))
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                verticalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                QuickShapeChip(
+                    label = stringResource(R.string.quick_shape_snap_horizontal),
+                    enabled = actionEnabled,
+                    onClick = { vm.snapQuickShapeToAngle(0f) },
+                )
+                QuickShapeChip(
+                    label = stringResource(R.string.quick_shape_snap_vertical),
+                    enabled = actionEnabled,
+                    onClick = { vm.snapQuickShapeToAngle(90f) },
+                )
+                QuickShapeChip(
+                    label = stringResource(R.string.quick_shape_snap_diagonal),
+                    enabled = actionEnabled,
+                    onClick = { vm.snapQuickShapeToAngle(45f) },
+                )
+            }
+        }
+
+        // 几何微调大类（旋转 ↺ 15° / ↻ 15°，缩放 － / ＋）
+        val hasTransformTweak = capabilities.showRotate || capabilities.showScale
+        if (hasTransformTweak) {
+            Spacer(Modifier.height(5.dp))
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                verticalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                if (capabilities.showRotate) {
+                    QuickShapeChip(
+                        label = stringResource(R.string.quick_shape_rotate_ccw),
+                        enabled = actionEnabled,
+                        onClick = { vm.rotateQuickShapeBy(-15f) },
+                    )
+                    QuickShapeChip(
+                        label = stringResource(R.string.quick_shape_rotate_cw),
+                        enabled = actionEnabled,
+                        onClick = { vm.rotateQuickShapeBy(15f) },
+                    )
+                }
+                if (capabilities.showScale) {
+                    QuickShapeChip(
+                        label = stringResource(R.string.quick_shape_scale_down),
+                        enabled = actionEnabled,
+                        onClick = { vm.scaleQuickShapeBy(0.8f) },
+                    )
+                    QuickShapeChip(
+                        label = stringResource(R.string.quick_shape_scale_up),
+                        enabled = actionEnabled,
+                        onClick = { vm.scaleQuickShapeBy(1.25f) },
+                    )
+                }
+            }
+        }
+
+        // 轮廓编辑大类（仅 QUAD/CONTOUR 显示，矩形排除）
+        if (capabilities.showContourMode) {
+            Spacer(Modifier.height(5.dp))
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                verticalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                val curved = shape.contourCurved
+                QuickShapeChip(
+                    label = stringResource(R.string.quick_shape_contour_straight),
+                    enabled = actionEnabled,
+                    selected = !curved,
+                    onClick = {
+                        vm.updateQuickShapeCurvedContourEnabled(false)
+                        vm.activeQuickShape = QuickShapeGeometry.setContourCurved(shape, false)
+                        vm.updateQuickShapePreview()
+                    },
+                )
+                QuickShapeChip(
+                    label = stringResource(R.string.quick_shape_contour_curved),
+                    enabled = actionEnabled,
+                    selected = curved,
+                    onClick = {
+                        vm.updateQuickShapeCurvedContourEnabled(true)
+                        vm.activeQuickShape = QuickShapeGeometry.setContourCurved(shape, true)
+                        vm.updateQuickShapePreview()
+                    },
+                )
+            }
+        }
+
+        Spacer(Modifier.height(6.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = if (capabilities.showHoldReshape) {
+                Arrangement.SpaceBetween
+            } else {
+                Arrangement.End
+            },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (capabilities.showHoldReshape) {
+                val holdLabel = stringResource(R.string.quick_shape_hold_contour)
+                val holdEnabled = !vm.quickShapeCommitting
+                QuickShapeHoldChip(
+                    label = holdLabel,
+                    held = reshapeHeld,
+                    enabled = holdEnabled,
+                    onPointer = reshapeCallback,
+                )
+            }
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                QuickShapeActionButton(
+                    text = stringResource(R.string.quick_shape_keep_freehand),
+                    primary = false,
+                    enabled = !vm.quickShapeCommitting,
+                    onClick = vm::cancelQuickShape,
+                )
+                QuickShapeActionButton(
+                    text = stringResource(R.string.common_done),
+                    primary = true,
+                    enabled = !vm.quickShapeCommitting,
+                    onClick = vm::commitQuickShape,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun QuickShapeChip(
+    label: String,
+    enabled: Boolean,
+    selected: Boolean = false,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(8.dp)
+    val bg = if (selected) Morandi.accent else Morandi.panelHi
+    val fg = if (selected) Morandi.onAccent else Morandi.text
+    Box(
+        modifier = Modifier
+            .height(30.dp)
+            .graphicsLayer { alpha = if (enabled) 1f else 0.4f }
+            .clip(shape)
+            .background(bg)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 9.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            color = fg,
+            fontSize = 11.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+        )
+    }
+}
+
+@Composable
+private fun QuickShapeActionButton(
+    text: String,
+    primary: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(8.dp)
+    val bg = if (primary) Morandi.accent else Morandi.panelHi
+    val fg = if (primary) Morandi.onAccent else Morandi.text
+    Box(
+        modifier = Modifier
+            .height(32.dp)
+            .graphicsLayer { alpha = if (enabled) 1f else 0.4f }
+            .clip(shape)
+            .background(bg)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 12.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = text,
+            color = fg,
+            fontSize = 11.sp,
+            fontWeight = if (primary) FontWeight.SemiBold else FontWeight.Normal,
+        )
+    }
+}
+
+@Composable
+private fun QuickShapeHoldChip(
+    label: String,
+    held: Boolean,
+    enabled: Boolean,
+    onPointer: (PointerId?) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val shape = RoundedCornerShape(8.dp)
+    val bg = if (held) Morandi.accent else Morandi.panelHi
+    val fg = if (held) Morandi.onAccent else Morandi.text
+    Box(
+        modifier = modifier
+            .semantics { contentDescription = label }
+            .height(32.dp)
+            .graphicsLayer { alpha = if (enabled) 1f else 0.4f }
+            .clip(shape)
+            .background(bg)
+            // 追踪第二指按压与抬起状态，配合控制点拖拽实现双指变形
+            .pointerInput(enabled) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    down.consume()
+                    if (enabled) onPointer(down.id)
+                    try {
+                        do {
+                            val event = awaitPointerEvent()
+                            val pointer = event.changes.firstOrNull { it.id == down.id }
+                            pointer?.consume()
+                        } while (pointer != null && pointer.pressed)
+                    } finally {
+                        onPointer(null)
+                    }
+                }
+            }
+            .padding(horizontal = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            color = fg,
+            fontSize = 11.sp,
+            fontWeight = if (held) FontWeight.SemiBold else FontWeight.Normal,
+        )
     }
 }

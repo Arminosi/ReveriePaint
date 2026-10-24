@@ -653,10 +653,6 @@ internal fun SettingsTabPage(
 
                     // 卡片 2: 辅助与画布控制
                     SettingsCard {
-                        QuickShapeSettingRow(vm)
-
-                        SettingsInnerDivider()
-
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()

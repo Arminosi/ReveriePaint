@@ -22,7 +22,12 @@ object QuickShapePressure {
      * Align against the original recognition, so moving/rotating the edited shape cannot remap pressure.
      * After a non-rigid edit, correspondence is by normalized perimeter, not by absolute coordinates.
      */
-    fun stroke(original: FloatArray, recognized: QuickShapeResult, edited: QuickShapeResult): FloatArray {
+    fun stroke(
+        original: FloatArray,
+        recognized: QuickShapeResult,
+        edited: QuickShapeResult,
+        perPointPressure: Boolean = true,
+    ): FloatArray {
         val source = sourcePath(original) ?: return FloatArray(0)
         val target = Path.create(QuickShapeGeometry.outline(edited)) ?: return FloatArray(0)
         if (source.length <= 0.0 || target.length <= 0.0) return FloatArray(0)
@@ -47,6 +52,7 @@ object QuickShapePressure {
         for (i in knots.indices) {
             if (unique == 0 || knots[i] - knots[unique - 1] > 1e-10) knots[unique++] = knots[i]
         }
+        val avgPressure = if (!perPointPressure) average(original) else 1f
         val out = FloatArray(unique * 6)
         for (i in 0 until unique) {
             val t = knots[i]
@@ -54,7 +60,7 @@ object QuickShapePressure {
             val point = target.at(u)
             out[i * 6] = point.x
             out[i * 6 + 1] = point.y
-            out[i * 6 + 2] = pressure(original, source, t)
+            out[i * 6 + 2] = if (perPointPressure) pressure(original, source, t) else avgPressure
             out[i * 6 + 3] = original[3]
             out[i * 6 + 4] = original[4]
         }

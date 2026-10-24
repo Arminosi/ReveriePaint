@@ -1243,33 +1243,8 @@ fun PaintingPage(
                                     vm.persistQuickLayerState()
                                     moreToolsOpen = false
                                 }
-                                Tool.SYMMETRY -> {
-                                    if (vm.drawingGuide.mode == com.reverie.paint.model.GuideMode.SYMMETRY) {
-                                        vm.drawingGuide = vm.drawingGuide.copy(mode = com.reverie.paint.model.GuideMode.OFF, assistedDrawing = false)
-                                        drawingGuidePanelOpen = false
-                                    } else {
-                                        vm.drawingGuide = vm.drawingGuide.copy(mode = com.reverie.paint.model.GuideMode.SYMMETRY, assistedDrawing = true)
-                                        drawingGuidePanelOpen = true
-                                        vm.applyTool(Tool.BRUSH.id)
-                                    }
-                                    moreToolsOpen = false
-                                }
-                                Tool.PERSPECTIVE -> {
-                                    if (vm.drawingGuide.mode == com.reverie.paint.model.GuideMode.PERSPECTIVE) {
-                                        vm.drawingGuide = vm.drawingGuide.copy(mode = com.reverie.paint.model.GuideMode.OFF, assistedDrawing = false)
-                                        drawingGuidePanelOpen = false
-                                    } else {
-                                        val pts = if (vm.drawingGuide.perspectiveVanishingPoints.isEmpty()) {
-                                            listOf(com.reverie.paint.model.Point2D(vm.docWidth * 0.5f, vm.docHeight * 0.35f))
-                                        } else vm.drawingGuide.perspectiveVanishingPoints
-                                        vm.drawingGuide = vm.drawingGuide.copy(
-                                            mode = com.reverie.paint.model.GuideMode.PERSPECTIVE,
-                                            assistedDrawing = true,
-                                            perspectiveVanishingPoints = pts,
-                                        )
-                                        drawingGuidePanelOpen = true
-                                        vm.applyTool(Tool.BRUSH.id)
-                                    }
+                                Tool.DRAWING_GUIDE, Tool.SYMMETRY, Tool.PERSPECTIVE -> {
+                                    drawingGuidePanelOpen = !drawingGuidePanelOpen
                                     moreToolsOpen = false
                                 }
                                 Tool.SHADING_ASSIST -> {
@@ -1455,33 +1430,8 @@ fun PaintingPage(
                                     vm.persistQuickLayerState()
                                     moreToolsOpen = false
                                 }
-                                Tool.SYMMETRY -> {
-                                    if (vm.drawingGuide.mode == com.reverie.paint.model.GuideMode.SYMMETRY) {
-                                        vm.drawingGuide = vm.drawingGuide.copy(mode = com.reverie.paint.model.GuideMode.OFF, assistedDrawing = false)
-                                        drawingGuidePanelOpen = false
-                                    } else {
-                                        vm.drawingGuide = vm.drawingGuide.copy(mode = com.reverie.paint.model.GuideMode.SYMMETRY, assistedDrawing = true)
-                                        drawingGuidePanelOpen = true
-                                        vm.applyTool(Tool.BRUSH.id)
-                                    }
-                                    moreToolsOpen = false
-                                }
-                                Tool.PERSPECTIVE -> {
-                                    if (vm.drawingGuide.mode == com.reverie.paint.model.GuideMode.PERSPECTIVE) {
-                                        vm.drawingGuide = vm.drawingGuide.copy(mode = com.reverie.paint.model.GuideMode.OFF, assistedDrawing = false)
-                                        drawingGuidePanelOpen = false
-                                    } else {
-                                        val pts = if (vm.drawingGuide.perspectiveVanishingPoints.isEmpty()) {
-                                            listOf(com.reverie.paint.model.Point2D(vm.docWidth * 0.5f, vm.docHeight * 0.35f))
-                                        } else vm.drawingGuide.perspectiveVanishingPoints
-                                        vm.drawingGuide = vm.drawingGuide.copy(
-                                            mode = com.reverie.paint.model.GuideMode.PERSPECTIVE,
-                                            assistedDrawing = true,
-                                            perspectiveVanishingPoints = pts,
-                                        )
-                                        drawingGuidePanelOpen = true
-                                        vm.applyTool(Tool.BRUSH.id)
-                                    }
+                                Tool.DRAWING_GUIDE, Tool.SYMMETRY, Tool.PERSPECTIVE -> {
+                                    drawingGuidePanelOpen = !drawingGuidePanelOpen
                                     moreToolsOpen = false
                                 }
                                 Tool.SHADING_ASSIST -> {
@@ -2379,33 +2329,8 @@ fun PaintingPage(
                             vm.persistQuickLayerState()
                             moreToolsOpen = false
                         }
-                        Tool.SYMMETRY -> {
-                            if (vm.drawingGuide.mode == com.reverie.paint.model.GuideMode.SYMMETRY) {
-                                vm.drawingGuide = vm.drawingGuide.copy(mode = com.reverie.paint.model.GuideMode.OFF, assistedDrawing = false)
-                                drawingGuidePanelOpen = false
-                            } else {
-                                vm.drawingGuide = vm.drawingGuide.copy(mode = com.reverie.paint.model.GuideMode.SYMMETRY, assistedDrawing = true)
-                                drawingGuidePanelOpen = true
-                                vm.applyTool(Tool.BRUSH.id)
-                            }
-                            moreToolsOpen = false
-                        }
-                        Tool.PERSPECTIVE -> {
-                            if (vm.drawingGuide.mode == com.reverie.paint.model.GuideMode.PERSPECTIVE) {
-                                vm.drawingGuide = vm.drawingGuide.copy(mode = com.reverie.paint.model.GuideMode.OFF, assistedDrawing = false)
-                                drawingGuidePanelOpen = false
-                            } else {
-                                val pts = if (vm.drawingGuide.perspectiveVanishingPoints.isEmpty()) {
-                                    listOf(com.reverie.paint.model.Point2D(vm.docWidth * 0.5f, vm.docHeight * 0.35f))
-                                } else vm.drawingGuide.perspectiveVanishingPoints
-                                vm.drawingGuide = vm.drawingGuide.copy(
-                                    mode = com.reverie.paint.model.GuideMode.PERSPECTIVE,
-                                    assistedDrawing = true,
-                                    perspectiveVanishingPoints = pts,
-                                    )
-                                drawingGuidePanelOpen = true
-                                vm.applyTool(Tool.BRUSH.id)
-                            }
+                        Tool.DRAWING_GUIDE, Tool.SYMMETRY, Tool.PERSPECTIVE -> {
+                            drawingGuidePanelOpen = !drawingGuidePanelOpen
                             moreToolsOpen = false
                         }
                         else -> {

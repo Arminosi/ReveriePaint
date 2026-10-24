@@ -397,6 +397,12 @@ private fun PaintViewModel.recSessionDir(): File = File(appContext.filesDir, "re
 
 internal fun PaintViewModel.loadProject(p: com.reverie.paint.model.Project) {
     android.util.Log.d("RP_IO", "loadProject START: name=${p.name}, path=${p.filePath}, isAutoSaved=${p.isAutoSaved}")
+    if (quickShapeDraft?.nativeOriginalActive == true) {
+        touchCancel()
+        quickShapeDraft = null
+        activeQuickShape = null
+        isQuickShapeEditing = false
+    }
     stopPaintingTimer()
     resetAnimationState()
     resetProjectReferences(loading = true)
@@ -1316,6 +1322,12 @@ internal fun PaintViewModel.startPainting(
     animation: Boolean = false,
     animationFps: Int = DEFAULT_ANIMATION_FPS,
 ) {
+    if (quickShapeDraft?.nativeOriginalActive == true) {
+        touchCancel()
+        quickShapeDraft = null
+        activeQuickShape = null
+        isQuickShapeEditing = false
+    }
     resetProjectReferences()
     val actualName = name?.ifBlank { null } ?: generateNextProjectName()
     currentProjectFile = null // Reset so new artwork won't overwrite previous project file

@@ -6827,9 +6827,12 @@ class CanvasTouchView(context: Context) : View(context) {
                     quickShapeCandidate = null
                     if (!isCancel && v.quickShapeEnabled && candidate != null && capture != null && !capture.overflowed) {
                         realInk.release()
-                        v.beginQuickShape(candidate, capture.snapshot())
+                        val started = v.beginQuickShape(candidate, capture.snapshot())
                         resetMirrorBranches()
                         safeEndSymmetryUndoMacro()
+                        if (!started) {
+                            v.touchEnd()
+                        }
                     } else if (isCancel) {
                         realInk.release()
                         v.touchCancel()

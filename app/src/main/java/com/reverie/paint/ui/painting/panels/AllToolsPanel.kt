@@ -61,7 +61,7 @@ fun AllToolsPanel(
 
     val groupedTools = remember(vm.pinnedTools) {
         val customSet = vm.pinnedTools.toSet()
-        val moreTools = Tool.entries.filter { it !in customSet }
+        val moreTools = Tool.entries.filter { it !in customSet && it != Tool.SYMMETRY && it != Tool.PERSPECTIVE }
         ToolGroup.entries.map { g -> g to moreTools.filter { it.group == g } }
             .filter { it.second.isNotEmpty() }
     }
@@ -197,12 +197,13 @@ fun AllToolsPanel(
                                         Tool.QUICK_COLOR -> vm.quickColorWindowOpen
                                         Tool.QUICK_OKLCH -> vm.quickOklchWindowOpen
                                         Tool.QUICK_LAYER -> vm.quickLayerWindowOpen
+                                        Tool.DRAWING_GUIDE -> vm.drawingGuide.mode != GuideMode.OFF
                                         Tool.SYMMETRY -> vm.drawingGuide.mode == GuideMode.SYMMETRY
                                         Tool.PERSPECTIVE -> vm.drawingGuide.mode == GuideMode.PERSPECTIVE
                                         else -> tool == t
                                     }
                                     val cellSource = remember { MutableInteractionSource() }
-                                    val toolLabel = stringResource(t.labelRes())
+                                    val toolLabel = t.annotatedName(vm)
 
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,

@@ -122,25 +122,23 @@ fun DrawingGuidePanel(
                 }
             }
 
-            QuickShapeSettingRow(vm)
-
-            // Mode Selector: 现代胶囊分段器
+            // Mode Selector: 现代胶囊分段器 (顶部五档单选)
             SegmentedModeSelector(
                 currentMode = guide.mode,
                 onSelectMode = { newMode ->
+                    if (newMode == guide.mode) {
+                        return@SegmentedModeSelector
+                    }
                     if (newMode == GuideMode.OFF) {
                         vm.drawingGuide = guide.copy(mode = GuideMode.OFF, assistedDrawing = false)
-                        onDismiss()
-                    } else if (newMode == guide.mode) {
-                        vm.drawingGuide = guide.copy(mode = GuideMode.OFF, assistedDrawing = false)
-                        onDismiss()
                     } else {
                         val pts = if (guide.perspectiveVanishingPoints.isEmpty()) {
                             listOf(Point2D(vm.docWidth * 0.5f, vm.docHeight * 0.35f))
                         } else guide.perspectiveVanishingPoints
+                        val enableAssist = !(newMode == GuideMode.PERSPECTIVE && guide.perspective3d)
                         vm.drawingGuide = guide.copy(
                             mode = newMode,
-                            assistedDrawing = true,
+                            assistedDrawing = enableAssist,
                             perspectiveVanishingPoints = pts,
                         )
                     }
@@ -185,6 +183,7 @@ fun DrawingGuidePanel(
                     PerspectiveSubModeSelector(
                         is3d = guide.perspective3d,
                         onToggle = { is3d ->
+                            if (is3d == guide.perspective3d) return@PerspectiveSubModeSelector
                             vm.drawingGuide = guide.copy(perspective3d = is3d, assistedDrawing = !is3d)
                         }
                     )
@@ -431,6 +430,9 @@ fun DrawingGuidePanel(
                     }
                 }
             }
+
+            // 速创形状折叠抽屉
+            QuickShapeCollapsibleDrawer(vm)
         }
     }
 }
@@ -445,7 +447,7 @@ private fun SegmentedModeSelector(
     modifier: Modifier = Modifier,
 ) {
     val modes = listOf(
-        GuideMode.OFF to androidx.compose.ui.res.stringResource(R.string.guide_mode_off),
+        GuideMode.OFF to androidx.compose.ui.res.stringResource(R.string.guide_mode_off_short),
         GuideMode.GRID_2D to androidx.compose.ui.res.stringResource(R.string.guide_mode_2d_grid),
         GuideMode.ISOMETRIC to androidx.compose.ui.res.stringResource(R.string.guide_mode_isometric),
         GuideMode.PERSPECTIVE to androidx.compose.ui.res.stringResource(R.string.guide_mode_perspective),

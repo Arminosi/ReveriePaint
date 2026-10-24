@@ -1676,16 +1676,15 @@ import kotlinx.coroutines.withContext
                         preset, candidateName, matchedTip, matchedTipFileName, tipUuidToFileName, packBaseName,
                     )
                     if (com.reverie.paint.core.brushstore.BrushStoreBootstrap.active) {
-                        // W-09：快照 = 转换后的 kpp，source.json 带 abrParams + 转换器版本；旧记录只留元数据
+                        // W-09：快照 = 转换后的 kpp，source.json 带 abrParams + 转换器版本；旧记录保存完整官方 bp
                         // APP_ONLY 的转换结果（无压感动态时 pressureEnabled=false）作为基线写进 source.json：重置回到它
                         val baseline = com.reverie.paint.core.brushstore.PresetReadback.baselineJson(converted.bp)
                         com.reverie.paint.core.brushstore.BrushImportPipeline.importAbr(
                             candidateName, converted.kppBytes, AbrPresetConverter.abrParamsJson(preset),
                             AbrPresetConverter.CONVERTER_VERSION, filename, presetDir, baseline,
+                            com.reverie.paint.core.brushstore.OfficialBpJson.toJson(converted.bp),
                         )
-                        com.reverie.paint.core.brushstore.PresetReadback.metadataOnly(
-                            converted.bp, com.reverie.paint.core.brushstore.PresetReadback.baselineFromJson(baseline),
-                        )?.let { brushParams[candidateName] = it }
+                        brushParams[candidateName] = converted.bp
                     } else {
                         File(presetDir, "$candidateName.kpp").writeBytes(converted.kppBytes)
                         brushParams[candidateName] = converted.bp

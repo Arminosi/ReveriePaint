@@ -253,15 +253,15 @@ object BrushImportPipeline {
         pack: String,
         presetDir: File,
         appBaseline: JSONObject = JSONObject(),
+        officialBp: JSONObject? = null,
     ): String {
         val id = BrushIdentity.newImportedId()
-        PresetSnapshotStore.putImported(
-            id, "kpp", kppBytes,
-            JSONObject().put("provenance", PROVENANCE_ABR).put("pack", pack).put("file", "$name.kpp")
-                .put("md5", BrushDiagnostics.md5(kppBytes))
-                .put("abrConverterVersion", converterVersion).put("abrParams", abrParams)
-                .put("appBaseline", appBaseline),
-        )
+        val source = JSONObject().put("provenance", PROVENANCE_ABR).put("pack", pack).put("file", "$name.kpp")
+            .put("md5", BrushDiagnostics.md5(kppBytes))
+            .put("abrConverterVersion", converterVersion).put("abrParams", abrParams)
+            .put("appBaseline", appBaseline)
+        if (officialBp != null) source.put("officialBp", officialBp)
+        PresetSnapshotStore.putImported(id, "kpp", kppBytes, source)
         BrushIdentity.register(BrushIdentity.Entry(id, name, "kpp", BrushIdentity.Kind.IMPORTED, pack))
         EffectivePresetBuilder.materialize(id, presetDir)
         BrushDiagnostics.log("import_abr", "name" to name, "id" to id, "pack" to pack, "converter" to converterVersion)

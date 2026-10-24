@@ -32,7 +32,7 @@ import kotlinx.coroutines.withContext
  *     - 已定制 → 先把旧记录序列化备份到 `brush_store/parity_backup/`（只写不覆盖，
  *       文件名经 [BrushIdentity.dirNameFor] 清洗），再用官方 bp 叠加覆盖
  *       （[BrushOverrideStore] controls 经 [PresetPropertyMap.applyToParams]），APP_ONLY
- *       控件按旧记录相对快照 appBaseline 的偏离回填（[applyAppOnlyCopy]），元数据保留，
+ *       控件按旧记录相对快照 appBaseline 的偏离回填（[repairAbrRecord]），元数据保留，
  *       isCustomized=true（kind="abr_edited"）；
  *   - ABR 家族且 bp 取不到（W-09 之前导入、无 abrParams）：不修，记入 prefs
  *     StringSet `brush_parity_reimport` 重导名单（kind="parity_no_bp"）；
@@ -55,10 +55,6 @@ object ParityRepair {
 
     /** 备份目录：filesDir/brush_store/parity_backup（[BrushStoreBootstrap.STORE_DIR] 之下） */
     const val BACKUP_SUBDIR = "parity_backup"
-
-    /** 与 [PresetReadback] 的 METADATA 同一集合（那边是 private，这里显式列出） */
-    private val METADATA_IDS =
-        setOf(ControlId.AUTHOR, ControlId.AUTHOR_LOCKED, ControlId.DESCRIPTION, ControlId.VERSION)
 
     // ------------------------------------------------------------ 迁移主入口
 
@@ -90,21 +86,12 @@ object ParityRepair {
                     }
                     if (rec == null || rec.isCustomized != true) {
                         val kind = if (rec == null) "missing" else "metadata"
-                        writes[name] = keepMetadata(bp, rec)
+                        writes[name] = repairAbrRecord(bp, rec, emptyMap(), BrushParams())
                         repaired++
                         BrushDiagnostics.log("parity_repair", "name" to name, "id" to entry.id, "kind" to kind)
                     } else {
                         backupRecord(backupDir, entry.id, name, rec)
-                        var fixed = PresetPropertyMap.applyToParams(bp, controlsOf(entry.id, name))
-                        fixed = applyAppOnlyCopy(fixed, rec, entry.id)
-                        fixed = keepMetadata(fixed, rec)
-                        fixed = fixed.copy(
-                            isCustomized = true,
-                            dynamicsCustomized = bp.dynamicsCustomized || rec.dynamicsCustomized,
-                            smudgeCustomized = rec.smudgeCustomized,
-                            spacingCustomized = rec.spacingCustomized,
-                        )
-                        writes[name] = fixed
+                        writes[name] = repairAbrRecord(bp, rec, controlsOf(entry.id, name), PresetReadback.baseline(entry.id))
                         repaired++
                         BrushDiagnostics.log("parity_repair", "name" to name, "id" to entry.id, "kind" to "abr_edited")
                     }
@@ -166,16 +153,7 @@ object ParityRepair {
             val baseline = OfficialUiBaseline.nonCustomized(
                 d, parsed, saved, isBuiltIn, effectiveCompOp, engineTipFilename, enginePaintOpId,
             )
-            var fixed = PresetPropertyMap.applyToParams(baseline, controlsOf(entry.id, preset.name))
-            fixed = applyAppOnlyCopy(fixed, rec, entry.id)
-            fixed = keepMetadata(fixed, rec)
-            // 非 ABR：标志全用 rec 的值
-            fixed = fixed.copy(
-                isCustomized = true,
-                dynamicsCustomized = rec.dynamicsCustomized,
-                smudgeCustomized = rec.smudgeCustomized,
-                spacingCustomized = rec.spacingCustomized,
-            )
+            val fixed = repairNonAbrRecord(baseline, rec, controlsOf(entry.id, preset.name), PresetReadback.baseline(entry.id))
             vm.brushParams[preset.name] = fixed
             vm.persistBrushParams()
         }
@@ -237,37 +215,10 @@ object ParityRepair {
     }
 
     /**
-     * APP_ONLY 拷贝：对 APP_ONLY 且非元数据四项的每个控件，若旧记录该字段值与快照
-     * appBaseline（[PresetReadback.baseline]，读不到即默认 BrushParams）不同，把旧值
-     * set 进 [fixed]（[PresetPropertyMap.spec] 的单控件 get/set 是公开 API）。
+     * 旧记录序列化备份：`parity_backup/<清洗后的 id>.json`（已存在则跳过不覆盖）。
+     * 纯 File IO（无 Android 依赖），JVM 单测直接调用。
      */
-    private fun applyAppOnlyCopy(fixed: BrushParams, rec: BrushParams, entryId: String): BrushParams {
-        val base = PresetReadback.baseline(entryId)
-        var p = fixed
-        for (cid in ControlId.entries) {
-            if (cid.klass != ControlClass.APP_ONLY || cid in METADATA_IDS) continue
-            val sp = PresetPropertyMap.spec(cid)
-            val recVal = sp.get(rec)
-            if (!PresetPropertyMap.same(cid, recVal, sp.get(base))) {
-                p = sp.set(p, recVal)
-            }
-        }
-        return p
-    }
-
-    /** 元数据四字段保留旧记录的值（rec 为 null 时原样返回） */
-    private fun keepMetadata(target: BrushParams, rec: BrushParams?): BrushParams {
-        if (rec == null) return target
-        var p = target
-        for (cid in METADATA_IDS) {
-            val sp = PresetPropertyMap.spec(cid)
-            p = sp.set(p, sp.get(rec))
-        }
-        return p
-    }
-
-    /** 旧记录序列化备份：`parity_backup/<清洗后的 id>.json`（已存在则跳过不覆盖） */
-    private fun backupRecord(backupDir: File, entryId: String, name: String, rec: BrushParams) {
+    internal fun backupRecord(backupDir: File, entryId: String, name: String, rec: BrushParams) {
         runCatching {
             val f = File(backupDir, BrushIdentity.dirNameFor(entryId) + ".json")
             if (f.exists()) return
@@ -286,4 +237,82 @@ object ParityRepair {
         if (value !in cur) return
         prefs.edit().putStringSet(key, cur - value).apply()
     }
+}
+
+// ------------------------------------------------------------ 记录修复纯公式（runOnce/repairPendingForSelect 与 JVM 测试共用）
+
+/** 元数据四字段（与 [PresetReadback] 的 METADATA 同一集合，那边是 private） */
+private val PARITY_METADATA_IDS =
+    setOf(ControlId.AUTHOR, ControlId.AUTHOR_LOCKED, ControlId.DESCRIPTION, ControlId.VERSION)
+
+/**
+ * ABR 记录修复（runOnce 与测试共用）：bp + 覆盖 + APP_ONLY 回填 + 元数据 + 标志。
+ * - rec 为 null 或未定制：官方 bp 原样，元数据四字段保留 rec 的值（无 rec 即 bp 本身）；
+ * - rec 已定制：官方 bp 叠加 [controls]，APP_ONLY 且非元数据控件按 rec 相对 [appBaseline]
+ *   的偏离回填，元数据保留，isCustomized=true，dc = bp.dc || rec.dc，sc/spc = rec。
+ * 与 runOnce 原内联公式逐字一致，仅把 appBaseline 由 entryId 解析改为调用方传入。
+ */
+internal fun repairAbrRecord(
+    bp: BrushParams,
+    rec: BrushParams?,
+    controls: Map<ControlId, Any>,
+    appBaseline: BrushParams,
+): BrushParams {
+    if (rec == null || rec.isCustomized != true) return keepParityMetadata(bp, rec)
+    var fixed = PresetPropertyMap.applyToParams(bp, controls)
+    fixed = applyParityAppOnlyCopy(fixed, rec, appBaseline)
+    fixed = keepParityMetadata(fixed, rec)
+    return fixed.copy(
+        isCustomized = true,
+        dynamicsCustomized = bp.dynamicsCustomized || rec.dynamicsCustomized,
+        smudgeCustomized = rec.smudgeCustomized,
+        spacingCustomized = rec.spacingCustomized,
+    )
+}
+
+/** 非 ABR 记录修复：基线 + 覆盖 + APP_ONLY 回填 + 元数据 + 记录标志（isCustomized=true，dc/sc/spc 全用 rec） */
+internal fun repairNonAbrRecord(
+    baseline: BrushParams,
+    rec: BrushParams,
+    controls: Map<ControlId, Any>,
+    appBaseline: BrushParams,
+): BrushParams {
+    var fixed = PresetPropertyMap.applyToParams(baseline, controls)
+    fixed = applyParityAppOnlyCopy(fixed, rec, appBaseline)
+    fixed = keepParityMetadata(fixed, rec)
+    return fixed.copy(
+        isCustomized = true,
+        dynamicsCustomized = rec.dynamicsCustomized,
+        smudgeCustomized = rec.smudgeCustomized,
+        spacingCustomized = rec.spacingCustomized,
+    )
+}
+
+/**
+ * APP_ONLY 拷贝：对 APP_ONLY 且非元数据四项的每个控件，若旧记录该字段值与
+ * [appBaseline] 不同，把旧值 set 进 [fixed]（[PresetPropertyMap.spec] 的单控件
+ * get/set 是公开 API；baseline 由调用方经 PresetReadback.baseline 解析后传入）。
+ */
+private fun applyParityAppOnlyCopy(fixed: BrushParams, rec: BrushParams, appBaseline: BrushParams): BrushParams {
+    var p = fixed
+    for (cid in ControlId.entries) {
+        if (cid.klass != ControlClass.APP_ONLY || cid in PARITY_METADATA_IDS) continue
+        val sp = PresetPropertyMap.spec(cid)
+        val recVal = sp.get(rec)
+        if (!PresetPropertyMap.same(cid, recVal, sp.get(appBaseline))) {
+            p = sp.set(p, recVal)
+        }
+    }
+    return p
+}
+
+/** 元数据四字段保留旧记录的值（rec 为 null 时原样返回） */
+private fun keepParityMetadata(target: BrushParams, rec: BrushParams?): BrushParams {
+    if (rec == null) return target
+    var p = target
+    for (cid in PARITY_METADATA_IDS) {
+        val sp = PresetPropertyMap.spec(cid)
+        p = sp.set(p, sp.get(rec))
+    }
+    return p
 }

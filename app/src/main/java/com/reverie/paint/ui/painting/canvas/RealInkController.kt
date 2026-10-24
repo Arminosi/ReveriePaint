@@ -780,8 +780,13 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
         var n = baked
         val cap = FrontBufferCompose.MAX_PACKET_RECTS
         if (!next.sameCursor(shown)) {
-            n = appendCursorFootprint(shown, n, cap, viewW, viewH)
-            n = appendCursorFootprint(next, n, cap, viewW, viewH)
+            // 按 tip 并新旧足迹 (对称时 2 块而非 4), half+1 盖住 2.2px 环的 AA (half() 已含 +2)。
+            val half = footCursor.half(maxOf(shown.r, next.r)) + 1f
+            n = FrontBufferCompose.appendCursorTransitionBoxes(
+                shown.x, shown.y, shown.cursorOn, shown.symX, shown.symY, shown.symCount,
+                next.x, next.y, next.cursorOn, next.symX, next.symY, next.symCount,
+                half, viewW, viewH, screenRects, n, cap,
+            )
         }
         if (!FrontBufferCompose.sameGuide(next.guideKind, next.seg, shown.guideKind, shown.seg,
                 DynamicGuidePainter.KIND_LINE, DynamicGuidePainter.KIND_LINE_VP)
@@ -789,6 +794,9 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
             n = appendGuideFootprint(shown, n, cap, viewW, viewH)
             n = appendGuideFootprint(next, n, cap, viewW, viewH)
         }
+        // 足迹已在墨脏区内 → 丢; 与墨相交 → 并进墨块。对称下常把光标足迹吃进两笔镜像脏区。
+        n = FrontBufferCompose.dropContainedAfter(screenRects, baked, n)
+        n = FrontBufferCompose.absorbOverlappingAfter(screenRects, baked, n)
         if (n <= 0) {
             // 收尾包: 没有墨也没有要擦的光标/导引线。
             baseState.copyFrom(shownState)
@@ -806,11 +814,10 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
         var maxRectW = 0
         for (i in 0 until n) {
             val d = i * 4
-            if (i >= baked) {
-                FrontBufferCompose.screenToBmpRect(p, screenRects[d], screenRects[d + 1], screenRects[d + 2],
-                    screenRects[d + 3], bmpScratch)
-                System.arraycopy(bmpScratch, 0, bmpRects, d, 4)
-            }
+            // 吸收可能撑大墨块: 全部按屏幕矩形反算源, 保证盖住。
+            FrontBufferCompose.screenToBmpRect(p, screenRects[d], screenRects[d + 1], screenRects[d + 2],
+                screenRects[d + 3], bmpScratch)
+            System.arraycopy(bmpScratch, 0, bmpRects, d, 4)
             val w = screenRects[d + 2] - screenRects[d]
             if (w > maxRectW) maxRectW = w
             bakePx += w.toLong() * (screenRects[d + 3] - screenRects[d + 1])
@@ -859,32 +866,29 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
                 return false
             }
         bakeCanvas.setBitmap(slotBitmap)
-        var allBaked = true
+        // 吸收后墨块可能带上光标边距: 一律按足迹容忍 (无瓦片也算成功, 棋盘格/透明已铺)。
+        // 原先 "墨块无瓦片 → 整包失败" 在吸收撑大后会误伤对称笔。
+        var inkCovered = baked <= 0
         for (i in 0 until n) {
             val d = i * 4
             val px = packXY[i * 2]
             val py = packXY[i * 2 + 1]
             val ox = screenRects[d] - px
             val oy = screenRects[d + 1] - py
-            if (i < baked) {
-                if (!bakeRect(tiles, p, bmpRects[d], bmpRects[d + 1], bmpRects[d + 2], bmpRects[d + 3], ox, oy,
-                        screenRects[d], screenRects[d + 1], screenRects[d + 2], screenRects[d + 3], clipScreen = true)
-                ) {
-                    allBaked = false
-                    break
-                }
-            } else if (bmpRects[d + 2] > bmpRects[d] && bmpRects[d + 3] > bmpRects[d + 1]) {
-                // 足迹块: 文档内重烤 (没有瓦片的空白处就是棋盘格/透明), 文档外清成透明。
-                bakeRect(tiles, p, bmpRects[d], bmpRects[d + 1], bmpRects[d + 2], bmpRects[d + 3], ox, oy,
+            if (bmpRects[d + 2] > bmpRects[d] && bmpRects[d + 3] > bmpRects[d + 1]) {
+                val drew = bakeRect(tiles, p, bmpRects[d], bmpRects[d + 1], bmpRects[d + 2], bmpRects[d + 3], ox, oy,
                     screenRects[d], screenRects[d + 1], screenRects[d + 2], screenRects[d + 3], clipScreen = true)
+                if (i < baked && drew) inkCovered = true
             } else {
-                clearSlotRect(px, py, px + screenRects[d + 2] - screenRects[d], py + screenRects[d + 3] - screenRects[d + 1])
+                clearSlotRect(px, py, px + screenRects[d + 2] - screenRects[d],
+                    py + screenRects[d + 3] - screenRects[d + 1])
             }
         }
         bakeCanvas.setBitmap(null)
         FbGeomLog.presentFrame(snapCount, baked, minL, minT, reqW, reqH, slotBitmap.width, slotBitmap.height,
             screenRects, bmpRects, canvasBounds, clipped)
-        if (!allBaked) {
+        if (baked > 0 && !inkCovered) {
+            // 墨脏区一块瓦片都没画上: 与旧逻辑一样整包放弃, 避免空洞。
             slot.busy.set(false)
             returnPending(snapCount, seq)
             return false
@@ -940,14 +944,6 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
             }
         }
         return true
-    }
-
-    private fun appendCursorFootprint(s: OverlayState, count: Int, cap: Int, viewW: Int, viewH: Int): Int {
-        if (!s.cursorOn) return count
-        // 光标外接方框 + 2px: 环描边 2.2px 的抗锯齿边会越出 half() 半个像素, 足迹必须盖住全部旧像素。
-        val half = footCursor.half(s.r) + 2f
-        return FrontBufferCompose.appendCursorBoxes(s.x, s.y, half, s.symX, s.symY, s.symCount, viewW, viewH,
-            screenRects, count, cap)
     }
 
     private fun appendGuideFootprint(s: OverlayState, count: Int, cap: Int, viewW: Int, viewH: Int): Int {

@@ -654,6 +654,13 @@ private fun ReplayExportDialog(
                                 }
                             }
                         }
+                        if (outW >= 3840 || outH >= 2160) {
+                            Text(
+                                text = stringResource(R.string.replay_export_hint_4k),
+                                color = colors.subText,
+                                fontSize = 11.sp,
+                            )
+                        }
                     }
 
                     // 5. 叠加层与定格开关

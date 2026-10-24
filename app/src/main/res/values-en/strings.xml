@@ -3010,8 +3010,10 @@
     <string name="replay_export_err_storage_permission">Storage permission is required to save to system gallery</string>
     <string name="replay_export_stage_analyzing">Analyzing replay range and event stream…</string>
     <string name="replay_export_stage_rendering_frame">Rendering frame %1$d/%2$d…</string>
+    <string name="replay_export_stage_rendering_frame_eta">Rendering frame %1$d/%2$d (ETA %3$ds)…</string>
     <string name="replay_export_stage_holding_frame">Writing final hold frame %1$d/%2$d…</string>
     <string name="replay_export_stage_finalizing">Finalizing export file…</string>
     <string name="replay_export_stage_saving_gallery">Saving to system gallery…</string>
+    <string name="replay_export_hint_4k">4K export takes longer, 1080p recommended</string>
 </resources>
 

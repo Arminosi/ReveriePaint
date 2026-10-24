@@ -53,8 +53,13 @@ internal class AnimatedGifEncoder {
      * 添加单帧位图。
      * @param bitmap 待添加帧位图
      * @param isCancelled 取消状态回调，被触发时立即中断并返回 false
+     * @param repeatCount 重复帧数 (默认 1)。大于 1 时 (如结尾定格) 累加单帧延迟，无需重复量化与压缩
      */
-    fun addFrame(bitmap: Bitmap, isCancelled: () -> Boolean = { false }): Boolean {
+    fun addFrame(
+        bitmap: Bitmap,
+        isCancelled: () -> Boolean = { false },
+        repeatCount: Int = 1,
+    ): Boolean {
         val stream = out ?: return false
         val w = bitmap.width
         val h = bitmap.height
@@ -127,7 +132,9 @@ internal class AnimatedGifEncoder {
 
         if (isCancelled()) return false
 
-        writeGraphicControlExtension(stream, hasAlpha, delayCentiseconds, transparentIndex)
+        val effectiveDelay = (delayCentiseconds.toLong() * repeatCount.coerceAtLeast(1))
+            .coerceIn(1L, 65535L).toInt()
+        writeGraphicControlExtension(stream, hasAlpha, effectiveDelay, transparentIndex)
         writeImageDescriptor(stream, w, h)
         writePalette(stream, palette)
         writePixels(stream, indexedPixels, w, h)

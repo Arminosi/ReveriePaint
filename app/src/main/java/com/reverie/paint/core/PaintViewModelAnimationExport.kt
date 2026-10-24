@@ -142,15 +142,16 @@ internal class FrameEncodingSession(
         bitmap: Bitmap,
         isCancelled: () -> Boolean,
         frameNumber: Int,
+        repeatCount: Int = 1,
     ) {
         if (isCancelled()) {
             throw InterruptedException(vm.getString(R.string.replay_export_err_cancelled))
         }
         val ok =
             when (format) {
-                "gif" -> gifEncoder?.addFrame(bitmap, isCancelled) ?: false
-                "mp4" -> mp4Encoder?.addFrame(bitmap, isCancelled) ?: false
-                "zip" -> zipEncoder?.addFrame(bitmap, isCancelled) ?: false
+                "gif" -> gifEncoder?.addFrame(bitmap, isCancelled, repeatCount) ?: false
+                "mp4" -> mp4Encoder?.addFrame(bitmap, isCancelled, repeatCount) ?: false
+                "zip" -> zipEncoder?.addFrame(bitmap, isCancelled, repeatCount) ?: false
                 else -> false
             }
         if (!ok) {

@@ -111,16 +111,30 @@ internal class Mp4VideoEncoder {
         }
     }
 
-    /** 提交单帧位图 */
-    fun addFrame(bitmap: Bitmap, isCancelled: () -> Boolean = { false }): Boolean {
+    /** 提交单帧或重复帧位图 */
+    fun addFrame(
+        bitmap: Bitmap,
+        isCancelled: () -> Boolean = { false },
+        repeatCount: Int = 1,
+    ): Boolean {
         if (isCancelled()) return false
         val helper = eglHelper ?: return false
+        val count = repeatCount.coerceAtLeast(1)
         try {
             helper.drawBitmap(bitmap)
             helper.setPresentationTime(currentPtsNs)
             helper.swapBuffers()
             drainEncoder(endOfStream = false, isCancelled = isCancelled)
             currentPtsNs += frameDurationNs
+
+            for (i in 1 until count) {
+                if (isCancelled()) return false
+                helper.redraw()
+                helper.setPresentationTime(currentPtsNs)
+                helper.swapBuffers()
+                drainEncoder(endOfStream = false, isCancelled = isCancelled)
+                currentPtsNs += frameDurationNs
+            }
             return true
         } catch (e: Exception) {
             return false
@@ -370,6 +384,28 @@ internal class Mp4VideoEncoder {
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureId)
             GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bitmap, 0)
+            GLES20.glUniform1i(uTextureLoc, 0)
+
+            GLES20.glEnableVertexAttribArray(aPositionLoc)
+            GLES20.glVertexAttribPointer(aPositionLoc, 2, GLES20.GL_FLOAT, false, 0, vertexBuffer)
+
+            GLES20.glEnableVertexAttribArray(aTexCoordLoc)
+            GLES20.glVertexAttribPointer(aTexCoordLoc, 2, GLES20.GL_FLOAT, false, 0, texCoordBuffer)
+
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+
+            GLES20.glDisableVertexAttribArray(aPositionLoc)
+            GLES20.glDisableVertexAttribArray(aTexCoordLoc)
+        }
+
+        fun redraw() {
+            GLES20.glClearColor(1f, 1f, 1f, 1f)
+            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+
+            GLES20.glUseProgram(programId)
+
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureId)
             GLES20.glUniform1i(uTextureLoc, 0)
 
             GLES20.glEnableVertexAttribArray(aPositionLoc)

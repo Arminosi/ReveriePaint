@@ -19,10 +19,15 @@ import com.reverie.paint.model.RecordingEvents.LAYER_OP
 import com.reverie.paint.model.RecordingEvents.STROKE_END
 import com.reverie.paint.model.RecordingEvents.STROKE_MOVE
 import com.reverie.paint.model.RecordingEvents.TOOL_OP
+import android.os.SystemClock
+import com.reverie.paint.core.export.ExportProfiler
 import java.io.File
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+
+/** 导出脏区增量渲染总开关 (默认开启; 若遇异常可设为 false 一键降级回全量渲染) */
+internal var exportIncremental: Boolean = true
 
 /**
  * 回放导出参数配置 (复用 FrameEncodingSession 与 saveExportFileToGalleryAsync)。
@@ -257,11 +262,43 @@ internal fun PaintViewModel.exportReplay(
             r.pos = 0
             s.currentMs = 0L
 
+            val profiler = ExportProfiler()
+            profiler.start()
+            val exportStartRealtimeMs = SystemClock.elapsedRealtime()
+            var lastProgressPostTimeMs = 0L
+
+            fun postProgressThrottled(curFrame: Int, totalFrames: Int, stageMsg: String, force: Boolean = false) {
+                val now = SystemClock.elapsedRealtime()
+                if (force || now - lastProgressPostTimeMs >= 100L || curFrame >= totalFrames) {
+                    lastProgressPostTimeMs = now
+                    val elapsedMs = now - exportStartRealtimeMs
+                    val etaSec = if (curFrame > 0 && curFrame < totalFrames && elapsedMs > 500L) {
+                        val remainFrames = totalFrames - curFrame
+                        val msPerFrame = elapsedMs.toDouble() / curFrame
+                        ((remainFrames * msPerFrame) / 1000.0).roundToInt().coerceAtLeast(1)
+                    } else {
+                        0
+                    }
+                    val fullMsg = if (etaSec > 0) {
+                        getString(R.string.replay_export_stage_rendering_frame_eta, curFrame, totalFrames, etaSec)
+                    } else {
+                        stageMsg
+                    }
+                    mainHandler.post {
+                        onProgress(curFrame, totalFrames, fullMsg)
+                    }
+                }
+            }
+
+            val outDirtyRect = IntArray(4)
+            var forceFullNext = true // 首帧、尺寸变动或结构事件强制全量渲染
+
             encodeSession.start()
 
             fun captureAndEncodeFrame(
                 frameIdx: Int,
                 drawCursorOverlay: Boolean,
+                repeatCount: Int = 1,
             ) {
                 if (isCancelled()) {
                     throw InterruptedException(getString(R.string.replay_export_err_cancelled))
@@ -273,62 +310,89 @@ internal fun PaintViewModel.exportReplay(
                     srcBmp?.recycle()
                     srcBmp = Bitmap.createBitmap(curDocW, curDocH, Bitmap.Config.ARGB_8888)
                     fullFrameBmp = srcBmp
+                    forceFullNext = true
                 }
-                ReverieCoreBridge.renderToBuffer(srcBmp, true, null)
 
-                // 1. 等比居中缩放画布至目标尺寸 (兼容回放中途 T_CROP 裁切画布)
-                outCanvas.drawColor(Color.BLACK, PorterDuff.Mode.SRC)
-                srcRect.set(0, 0, curDocW, curDocH)
-                val fitScale = min(targetW.toFloat() / curDocW, targetH.toFloat() / curDocH)
-                val drawW = curDocW * fitScale
-                val drawH = curDocH * fitScale
-                val left = (targetW - drawW) * 0.5f
-                val top = (targetH - drawH) * 0.5f
-                dstRectF.set(left, top, left + drawW, top + drawH)
-                outCanvas.drawBitmap(srcBmp, srcRect, dstRectF, scalePaint)
+                val forceFullThisFrame = forceFullNext || !exportIncremental || frameIdx == 1
+                forceFullNext = false
 
-                // 2. 零分配叠加笔刷光标轨迹圆环 (区分画笔 / 橡皮擦 / 涂抹，仅在激活且非定格帧时绘制)
-                if (drawCursorOverlay && options.showBrushCursor && s.cursorActive) {
-                    val cx = left + s.cursorX * fitScale
-                    val cy = top + s.cursorY * fitScale
-                    val pressureScale = 0.35f + 0.65f * s.cursorPressure.coerceIn(0.1f, 1f)
-                    val maxRadius = min(targetW, targetH) * 0.22f
-                    val radius =
-                        (s.cursorBrushSize * 0.5f * fitScale * pressureScale)
-                            .coerceIn(min(4f, maxRadius), maxRadius)
-                    outCanvas.drawCircle(cx, cy, radius + 1.5f, cursorOuterPaint)
-                    val ringColor =
-                        when {
-                            s.cursorIsEraser -> 0xEE7DD3FC.toInt() // 橡皮擦: 天蓝色环
-                            s.cursorToolMode == 3 -> 0xFFFBBF24.toInt() // 涂抹: 琥珀色环
-                            else -> 0xEEFFFFFF.toInt() // 画笔: 纯白内环
+                profiler.measureRender {
+                    profiler.renderCalls++
+                    if (forceFullThisFrame) profiler.renderFull++ else profiler.renderIncremental++
+                    val ok = ReverieCoreBridge.renderToBuffer(srcBmp, forceFullThisFrame, outDirtyRect)
+                    if (!ok) profiler.renderSkips++
+                    ok
+                }
+
+                // 100% 原始尺寸直传门禁：无光标、无水印、尺寸严格相等且画面不透明 (避免透明底预乘反转引起亮边)
+                val isZeroCopyEligible = !options.showBrushCursor &&
+                    watermarkText.isEmpty() &&
+                    targetW == curDocW && targetH == curDocH &&
+                    !srcBmp.hasAlpha()
+
+                if (isZeroCopyEligible) {
+                    profiler.measureEncode {
+                        encodeSession.addFrame(srcBmp, isCancelled, frameIdx, repeatCount)
+                    }
+                } else {
+                    profiler.measureComposite {
+                        // 1. 等比居中缩放画布至目标尺寸 (兼容回放中途 T_CROP 裁切画布)
+                        outCanvas.drawColor(Color.BLACK, PorterDuff.Mode.SRC)
+                        srcRect.set(0, 0, curDocW, curDocH)
+                        val fitScale = min(targetW.toFloat() / curDocW, targetH.toFloat() / curDocH)
+                        val drawW = curDocW * fitScale
+                        val drawH = curDocH * fitScale
+                        val left = (targetW - drawW) * 0.5f
+                        val top = (targetH - drawH) * 0.5f
+                        dstRectF.set(left, top, left + drawW, top + drawH)
+                        outCanvas.drawBitmap(srcBmp, srcRect, dstRectF, scalePaint)
+
+                        // 2. 零分配叠加笔刷光标轨迹圆环 (区分画笔 / 橡皮擦 / 涂抹，仅在激活且非定格帧时绘制)
+                        if (drawCursorOverlay && options.showBrushCursor && s.cursorActive) {
+                            val cx = left + s.cursorX * fitScale
+                            val cy = top + s.cursorY * fitScale
+                            val pressureScale = 0.35f + 0.65f * s.cursorPressure.coerceIn(0.1f, 1f)
+                            val maxRadius = min(targetW, targetH) * 0.22f
+                            val radius =
+                                (s.cursorBrushSize * 0.5f * fitScale * pressureScale)
+                                    .coerceIn(min(4f, maxRadius), maxRadius)
+                            outCanvas.drawCircle(cx, cy, radius + 1.5f, cursorOuterPaint)
+                            val ringColor =
+                                when {
+                                    s.cursorIsEraser -> 0xEE7DD3FC.toInt() // 橡皮擦: 天蓝色环
+                                    s.cursorToolMode == 3 -> 0xFFFBBF24.toInt() // 涂抹: 琥珀色环
+                                    else -> 0xEEFFFFFF.toInt() // 画笔: 纯白内环
+                                }
+                            cursorInnerPaint.color = ringColor
+                            outCanvas.drawCircle(cx, cy, radius, cursorInnerPaint)
+                            cursorDotPaint.color =
+                                when {
+                                    s.cursorIsEraser -> 0xCC7DD3FC.toInt()
+                                    s.cursorToolMode == 3 -> 0xCCFBBF24.toInt()
+                                    else -> s.cursorColorArgb
+                                }
+                            outCanvas.drawCircle(cx, cy, max(2.2f, radius * 0.18f), cursorDotPaint)
                         }
-                    cursorInnerPaint.color = ringColor
-                    outCanvas.drawCircle(cx, cy, radius, cursorInnerPaint)
-                    cursorDotPaint.color =
-                        when {
-                            s.cursorIsEraser -> 0xCC7DD3FC.toInt()
-                            s.cursorToolMode == 3 -> 0xCCFBBF24.toInt()
-                            else -> s.cursorColorArgb
+
+                        // 3. 零分配叠加右下角作者签名水印
+                        if (watermarkText.isNotEmpty()) {
+                            val boxW = wmTextWidth + wmPaddingH * 2f
+                            val boxH = wmFontSize + wmPaddingV * 2f
+                            val boxLeft = targetW - boxW - wmMargin
+                            val boxTop = targetH - boxH - wmMargin
+                            wmBoxRectF.set(boxLeft, boxTop, boxLeft + boxW, boxTop + boxH)
+                            val corner = boxH * 0.35f
+                            outCanvas.drawRoundRect(wmBoxRectF, corner, corner, watermarkBgPaint)
+                            val textX = boxLeft + wmPaddingH
+                            val textY = boxTop + wmPaddingV + wmFontSize * 0.82f
+                            outCanvas.drawText(watermarkText, textX, textY, watermarkTextPaint)
                         }
-                    outCanvas.drawCircle(cx, cy, max(2.2f, radius * 0.18f), cursorDotPaint)
-                }
+                    }
 
-                // 3. 零分配叠加右下角作者签名水印
-                if (watermarkText.isNotEmpty()) {
-                    val boxW = wmTextWidth + wmPaddingH * 2f
-                    val boxH = wmFontSize + wmPaddingV * 2f
-                    val boxLeft = targetW - boxW - wmMargin
-                    val boxTop = targetH - boxH - wmMargin
-                    wmBoxRectF.set(boxLeft, boxTop, boxLeft + boxW, boxTop + boxH)
-                    val corner = boxH * 0.35f
-                    outCanvas.drawRoundRect(wmBoxRectF, corner, corner, watermarkBgPaint)
-                    val textX = boxLeft + wmPaddingH
-                    val textY = boxTop + wmPaddingV + wmFontSize * 0.82f
-                    outCanvas.drawText(watermarkText, textX, textY, watermarkTextPaint)
+                    profiler.measureEncode {
+                        encodeSession.addFrame(outBmp, isCancelled, frameIdx, repeatCount)
+                    }
                 }
-
-                encodeSession.addFrame(outBmp, isCancelled, frameIdx)
             }
 
             // 单一统一事件循环: [0, startMs) 静默快进画布状态，[startMs, endMs] 采样编码，彻底消除区间边界 off-by-one
@@ -346,7 +410,13 @@ internal fun PaintViewModel.exportReplay(
                 if (s.totalMs > 0 && s.currentMs > endMs && endMs < s.totalMs) {
                     break
                 }
-                dispatchReplayLocked(s, type, r, render = false)
+                profiler.measureDispatch {
+                    dispatchReplayLocked(s, type, r, render = false)
+                }
+                // 结构性事件强制下一帧全量渲染，避免局部脏区遗漏全局图层/滤镜变化
+                if (type == LAYER_OP || type == TOOL_OP || type == FILTER || type == FILTER_LUT) {
+                    forceFullNext = true
+                }
                 if (s.currentMs < startMs) {
                     continue
                 }
@@ -357,9 +427,7 @@ internal fun PaintViewModel.exportReplay(
                         emittedFrames++
                         val curFrame = emittedFrames
                         val stageMsg = getString(R.string.replay_export_stage_rendering_frame, curFrame, totalOutputFrames)
-                        mainHandler.post {
-                            onProgress(curFrame, totalOutputFrames, stageMsg)
-                        }
+                        postProgressThrottled(curFrame, totalOutputFrames, stageMsg)
                         captureAndEncodeFrame(curFrame, drawCursorOverlay = true)
                     }
                 }
@@ -368,14 +436,12 @@ internal fun PaintViewModel.exportReplay(
             // 闭合末尾笔画并写入最终成图帧及定格帧 (定格帧隐藏笔刷光标以展示干净成图)
             s.cursorActive = false
             ReverieCoreBridge.touchStrokeEnd()
-            while (emittedFrames < totalOutputFrames) {
-                emittedFrames++
-                val curFrame = emittedFrames
-                val holdMsg = getString(R.string.replay_export_stage_holding_frame, curFrame, totalOutputFrames)
-                mainHandler.post {
-                    onProgress(curFrame, totalOutputFrames, holdMsg)
-                }
-                captureAndEncodeFrame(curFrame, drawCursorOverlay = false)
+            val remainingHoldFrames = totalOutputFrames - emittedFrames
+            if (remainingHoldFrames > 0) {
+                emittedFrames = totalOutputFrames
+                val holdMsg = getString(R.string.replay_export_stage_holding_frame, totalOutputFrames, totalOutputFrames)
+                postProgressThrottled(totalOutputFrames, totalOutputFrames, holdMsg, force = true)
+                captureAndEncodeFrame(totalOutputFrames, drawCursorOverlay = false, repeatCount = remainingHoldFrames)
             }
 
             val finalizeMsg = getString(R.string.replay_export_stage_finalizing)
@@ -386,7 +452,10 @@ internal fun PaintViewModel.exportReplay(
             if (isCancelled()) {
                 throw InterruptedException(getString(R.string.replay_export_err_cancelled))
             }
-            encodeSession.finish(isCancelled)
+            profiler.measureFinish {
+                encodeSession.finish(isCancelled)
+            }
+            profiler.finish(options.format, targetW, targetH, totalOutputFrames, targetFile.length())
             mainHandler.post { onSuccess(targetFile) }
         } catch (t: Throwable) {
             targetFile.delete()
@@ -402,6 +471,8 @@ internal fun PaintViewModel.exportReplay(
             encodeSession.closeQuietly()
             fullFrameBmp?.recycle()
             outFrameBmp?.recycle()
+            // 关键残影防护：无条件强制显示缓冲全量重绘，杜绝增量导出对显示缓冲与瓦片网格留下的局部脏区残影
+            displayBufferInvalid = true
             // 恢复导出前的回放进度画面；若导出期间已退出回放，session 已被 stop()
             // 且快照被删除，此时再 seek 会走 newDocument 兜底并清空当前文档
             if (replaySession === s) {

@@ -3010,8 +3010,10 @@
     <string name="replay_export_err_storage_permission">需要存储权限才能保存到系统相册</string>
     <string name="replay_export_stage_analyzing">正在分析回放区间与事件流…</string>
     <string name="replay_export_stage_rendering_frame">正在渲染第 %1$d/%2$d 帧…</string>
+    <string name="replay_export_stage_rendering_frame_eta">正在渲染第 %1$d/%2$d 帧 (预计还需 %3$d 秒)…</string>
     <string name="replay_export_stage_holding_frame">正在写入成图定格帧 %1$d/%2$d…</string>
     <string name="replay_export_stage_finalizing">正在封装导出文件…</string>
     <string name="replay_export_stage_saving_gallery">正在写入系统相册…</string>
+    <string name="replay_export_hint_4k">4K 分辨率导出耗时较长，建议优先选择 1080p</string>
 </resources>
 

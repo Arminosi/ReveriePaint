@@ -1928,13 +1928,13 @@ class PaintViewModel : ViewModel() {
     var stylusAudioEnabled by mutableStateOf(false)
     var stylusAudioVolume by mutableFloatStateOf(0.6f)
     var stylusAudioType by mutableStateOf(StylusAudioType.PENCIL)
-    var stylusStrokePredictionEnabled by mutableStateOf(true)
+    var stylusStrokePredictionEnabled by mutableStateOf(false)
     /**
-     * 前缓冲预测 (本次低延迟技术的总开关, 默认关)。
+     * 前缓冲预测 (本次低延迟技术的总开关, 默认开 = "APP软件算法")。
      * 开启时启用: 卡尔曼运动预测 + 墨迹空窗回填 + 前缓冲直出 + 光标跟随 + 悬停前瞻;
      * 关闭时回到上游原版行为 (仅"超低延迟笔迹预测"开关的 OEM 硬件尾线)。
      */
-    var frontBufferPredictionEnabled by mutableStateOf(false)
+    var frontBufferPredictionEnabled by mutableStateOf(true)
 
     /**
      * 新建画布后，前缓冲在这段 uptime 之前不贴真墨、也不贴 #81 预览。
@@ -3090,11 +3090,11 @@ class PaintViewModel : ViewModel() {
             updateStylusStrokePredictionEnabled(false)
             updateFrontBufferPredictionEnabled(false)
         } else {
-            // 重新开启时默认优先选择当前记忆的算法，或默认开启硬件 SDK 预测
+            // 重新开启时默认优先选择当前记忆的算法，没记忆过则默认 APP 软件算法
             val prefAlgo = if (::appContext.isInitialized) {
                 appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
-                    .getString("stylusPredictionLastAlgorithm", "HARDWARE") ?: "HARDWARE"
-            } else "HARDWARE"
+                    .getString("stylusPredictionLastAlgorithm", "SOFTWARE") ?: "SOFTWARE"
+            } else "SOFTWARE"
 
             if (prefAlgo == "SOFTWARE") {
                 updateFrontBufferPredictionEnabled(true)
@@ -4003,11 +4003,15 @@ class PaintViewModel : ViewModel() {
             stylusAudioVolume = prefs.getFloat("stylusAudioVolume", 0.6f)
             stylusAudioType = StylusAudioType.fromOrdinal(prefs.getInt("stylusAudioType", StylusAudioType.PENCIL.ordinal))
             samsungSideButtonErase = prefs.getBoolean("samsungSideButtonErase", true)
-            stylusStrokePredictionEnabled = prefs.getBoolean("stylusStrokePredictionEnabled", true)
+            // 首次安装 (预测开关都没存过) 默认 APP 软件算法 (前缓冲); 存过的老用户保留原选择与原默认。
+            val predictionPrefSaved = prefs.contains("stylusStrokePredictionEnabled") ||
+                prefs.contains("frontBufferPredictionEnabled") ||
+                prefs.contains("stylusFrontBufferPreviewEnabled")
+            stylusStrokePredictionEnabled = prefs.getBoolean("stylusStrokePredictionEnabled", predictionPrefSaved)
             // 迁移: 旧版"前缓冲笔尖直出"独立开关升级为"前缓冲预测"总开关, 保留老用户选择
             frontBufferPredictionEnabled = prefs.getBoolean(
                 "frontBufferPredictionEnabled",
-                prefs.getBoolean("stylusFrontBufferPreviewEnabled", false),
+                prefs.getBoolean("stylusFrontBufferPreviewEnabled", !predictionPrefSaved),
             )
             motionPredictorEnabled = stylusStrokePredictionEnabled
             samsungSingleClickAction = prefs.getString("samsungSingleClickAction", "toggle_eraser") ?: "toggle_eraser"

@@ -177,4 +177,60 @@ class FrontBufferComposeTest {
         assertFalse(FrontBufferCompose.packShelves(intArrayOf(0, 0, 2000, 10), 1, 1024, 4096, IntArray(2), IntArray(2)))
         assertFalse(FrontBufferCompose.packShelves(intArrayOf(0, 0, 10, 5000), 1, 1024, 4096, IntArray(2), IntArray(2)))
     }
+
+    /** 新旧光标按 tip 并成一块: 1 对称时 2 块 (不是分别 append 的 4 块), 且盖住新旧位置。 */
+    @Test
+    fun cursorTransitionUnionsPerTip() {
+        val rects = IntArray(4 * 8)
+        val sym0x = floatArrayOf(200f)
+        val sym0y = floatArrayOf(200f)
+        val sym1x = floatArrayOf(210f)
+        val sym1y = floatArrayOf(210f)
+        val n = FrontBufferCompose.appendCursorTransitionBoxes(
+            100f, 100f, true, sym0x, sym0y, 1,
+            108f, 104f, true, sym1x, sym1y, 1,
+            10f, 400, 400, rects, 0, 8,
+        )
+        assertEquals(2, n)
+        // 主 tip 新旧
+        for ((x, y) in listOf(90 to 90, 117 to 113, 100 to 100, 108 to 104)) {
+            assertTrue("prim ($x,$y)", covers(rects, n, x, y))
+        }
+        // 对称 tip 新旧
+        for ((x, y) in listOf(190 to 190, 219 to 219, 200 to 200, 210 to 210)) {
+            assertTrue("sym ($x,$y)", covers(rects, n, x, y))
+        }
+    }
+
+    /** 足迹块完全落在某一墨脏区内 → 丢掉 (那块已经会重烤)。 */
+    @Test
+    fun dropFootprintsContainedInInk() {
+        val rects = intArrayOf(
+            0, 0, 100, 100, // ink
+            200, 200, 250, 250, // ink
+            10, 10, 20, 20, // foot inside first
+            180, 180, 220, 220, // foot not contained (straddles)
+            210, 210, 240, 240, // foot inside second
+        )
+        val n = FrontBufferCompose.dropContainedAfter(rects, inkCount = 2, total = 5)
+        assertEquals(3, n) // 2 ink + straddling foot
+        assertEquals(0, rects[0]); assertEquals(100, rects[2])
+        assertEquals(200, rects[4]); assertEquals(250, rects[6])
+        assertEquals(180, rects[8]); assertEquals(220, rects[10])
+    }
+
+    /** 与墨脏区相交的足迹并进墨块, 少一次独立烘焙。 */
+    @Test
+    fun absorbOverlappingFootprintsIntoInk() {
+        val rects = intArrayOf(
+            50, 50, 110, 110, // ink
+            100, 100, 120, 120, // foot overlaps → absorb
+            300, 300, 320, 320, // foot far → keep
+        )
+        val n = FrontBufferCompose.absorbOverlappingAfter(rects, inkCount = 1, total = 3)
+        assertEquals(2, n)
+        assertEquals(50, rects[0]); assertEquals(50, rects[1])
+        assertEquals(120, rects[2]); assertEquals(120, rects[3])
+        assertEquals(300, rects[4]); assertEquals(320, rects[6])
+    }
 }

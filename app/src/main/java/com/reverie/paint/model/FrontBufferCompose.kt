@@ -187,6 +187,121 @@ object FrontBufferCompose {
     }
 
     /**
+     * 新旧光标状态按 tip 并成一块足迹 (主 tip + 各对称 tip 各一块), 比分别
+     * [appendCursorBoxes] 两次少一半烘焙块; 并集覆盖新旧全部像素, 恒等。
+     * [half] 为外接半边 (已含描边/AA 余量)。任一侧未亮则只取亮的一侧。
+     */
+    fun appendCursorTransitionBoxes(
+        x0: Float, y0: Float, on0: Boolean, symX0: FloatArray, symY0: FloatArray, n0: Int,
+        x1: Float, y1: Float, on1: Boolean, symX1: FloatArray, symY1: FloatArray, n1: Int,
+        half: Float,
+        viewW: Int, viewH: Int,
+        rects: IntArray, count: Int, cap: Int,
+    ): Int {
+        var n = count
+        n = appendTipUnion(x0, y0, on0, x1, y1, on1, half, viewW, viewH, rects, n, cap)
+        val m0 = n0.coerceAtMost(min(symX0.size, symY0.size))
+        val m1 = n1.coerceAtMost(min(symX1.size, symY1.size))
+        val m = max(m0, m1)
+        for (i in 0 until m) {
+            val aOn = i < m0 && symX0[i].isFinite() && symY0[i].isFinite() && on0
+            val bOn = i < m1 && symX1[i].isFinite() && symY1[i].isFinite() && on1
+            val ax = if (aOn) symX0[i] else Float.NaN
+            val ay = if (aOn) symY0[i] else Float.NaN
+            val bx = if (bOn) symX1[i] else Float.NaN
+            val by = if (bOn) symY1[i] else Float.NaN
+            n = appendTipUnion(ax, ay, aOn, bx, by, bOn, half, viewW, viewH, rects, n, cap)
+        }
+        return n
+    }
+
+    private fun appendTipUnion(
+        x0: Float, y0: Float, on0: Boolean,
+        x1: Float, y1: Float, on1: Boolean,
+        half: Float, viewW: Int, viewH: Int,
+        rects: IntArray, count: Int, cap: Int,
+    ): Int {
+        if (!on0 && !on1) return count
+        var l = Float.POSITIVE_INFINITY
+        var t = Float.POSITIVE_INFINITY
+        var r = Float.NEGATIVE_INFINITY
+        var b = Float.NEGATIVE_INFINITY
+        if (on0 && x0.isFinite() && y0.isFinite()) {
+            l = min(l, x0 - half); t = min(t, y0 - half)
+            r = max(r, x0 + half); b = max(b, y0 + half)
+        }
+        if (on1 && x1.isFinite() && y1.isFinite()) {
+            l = min(l, x1 - half); t = min(t, y1 - half)
+            r = max(r, x1 + half); b = max(b, y1 + half)
+        }
+        if (!(l < r && t < b)) return count
+        return appendBox(rects, count, cap, floor(l).toInt(), floor(t).toInt(), ceil(r).toInt(), ceil(b).toInt(),
+            viewW, viewH)
+    }
+
+    /**
+     * 丢掉 [inkCount, total) 里完全落在某一墨脏区 (`rects[0, inkCount)`) 内的块。
+     * 那些像素本包已经会重烤, 再烤一次是浪费。返回新的 total (前缀墨块不动)。
+     */
+    fun dropContainedAfter(rects: IntArray, inkCount: Int, total: Int): Int {
+        if (inkCount <= 0 || total <= inkCount) return total
+        var w = inkCount
+        for (i in inkCount until total) {
+            val o = i * 4
+            val fl = rects[o]; val ft = rects[o + 1]; val fr = rects[o + 2]; val fb = rects[o + 3]
+            var contained = false
+            for (j in 0 until inkCount) {
+                val jo = j * 4
+                if (fl >= rects[jo] && ft >= rects[jo + 1] && fr <= rects[jo + 2] && fb <= rects[jo + 3]) {
+                    contained = true
+                    break
+                }
+            }
+            if (contained) continue
+            if (w != i) {
+                val wo = w * 4
+                rects[wo] = fl; rects[wo + 1] = ft; rects[wo + 2] = fr; rects[wo + 3] = fb
+            }
+            w++
+        }
+        return w
+    }
+
+    /**
+     * 与任一墨脏区相交 (含边) 的足迹并进该墨块 (取并集), 从足迹段删掉。
+     * 少一次独立 bakeRect; 并集只变大, 恒等。不相交的足迹保留。返回新 total。
+     */
+    fun absorbOverlappingAfter(rects: IntArray, inkCount: Int, total: Int): Int {
+        if (inkCount <= 0 || total <= inkCount) return total
+        var w = inkCount
+        for (i in inkCount until total) {
+            val o = i * 4
+            val fl = rects[o]; val ft = rects[o + 1]; val fr = rects[o + 2]; val fb = rects[o + 3]
+            var absorbed = false
+            for (j in 0 until inkCount) {
+                val jo = j * 4
+                val il = rects[jo]; val it = rects[jo + 1]; val ir = rects[jo + 2]; val ib = rects[jo + 3]
+                // 相交或触边
+                if (fr > il && fl < ir && fb > it && ft < ib) {
+                    if (fl < il) rects[jo] = fl
+                    if (ft < it) rects[jo + 1] = ft
+                    if (fr > ir) rects[jo + 2] = fr
+                    if (fb > ib) rects[jo + 3] = fb
+                    absorbed = true
+                    break
+                }
+            }
+            if (absorbed) continue
+            if (w != i) {
+                val wo = w * 4
+                rects[wo] = fl; rects[wo + 1] = ft; rects[wo + 2] = fr; rects[wo + 3] = fb
+            }
+            w++
+        }
+        return w
+    }
+
+    /**
      * 货架打包: 把 [count] 块矩形 (`l,t,r,b`) 依次排进宽 [maxW] 的槽位图, 第 i 块的左上角写进
      * `outXY[2i], outXY[2i+1]`, 槽位图所需尺寸写进 `outWH`。单块比 [maxW] 宽或总高超过 [maxH]
      * 返回 false。

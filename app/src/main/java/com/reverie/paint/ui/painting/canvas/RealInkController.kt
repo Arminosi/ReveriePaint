@@ -254,7 +254,9 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
      */
     fun arm(allowed: Boolean, wantsExtras: Boolean, clips: UiClipSnapshot): Boolean {
         val overlay = view.frontBufferOverlay
-        val hold = allowed && overlay != null && overlay.canRenderPreview
+        // 缓冲几何门控: 表面 (androidx 据它分配前缓冲 HardwareBuffer) 未建好或与画布 View 不重合时
+        // 这一笔不按住 —— 包会被静默丢弃/贴错位置, 见 FrontBufferSurfaceGate。
+        val hold = allowed && overlay != null && overlay.canRenderPreview && overlay.bufferGeometryMatches(view)
         val seq = synchronized(pendingLock) {
             pendingCount = 0
             ++strokeSeq
@@ -392,6 +394,7 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
         }
         val overlay = view.frontBufferOverlay ?: return false
         if (!overlay.canRenderPreview) return false
+        if (!overlay.bufferStillValid) return false
         val p = pose ?: return false
         return p.bmpW > 0 && p.bmpH > 0
     }

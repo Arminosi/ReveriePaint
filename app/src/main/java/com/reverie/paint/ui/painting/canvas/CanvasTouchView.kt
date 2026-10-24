@@ -4051,7 +4051,13 @@ class CanvasTouchView(context: Context) : View(context) {
             bmpW = bw,
             bmpH = bh,
         )
-        if (pose != realInk.pose) realInk.pose = pose
+        val old = realInk.pose
+        if (pose != old) {
+            // 按住期间 pose 变了 (如 Compose 的 viewW/viewH/翻转在运笔中写进来): 前缓冲上已有的增量墨
+            // 是按旧 pose 烤的, 不能再混入新 pose 的包。松开并登记追赶, 窗口按新 pose 画整笔后清前缓冲。
+            if (FrontBufferSurfaceGate.poseChangeReleases(realInk.held, old, pose)) realInk.releaseAndCatchUp()
+            realInk.pose = pose
+        }
     }
 
     private fun screenToDoc(screenPos: Offset): Offset {

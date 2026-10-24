@@ -23,6 +23,8 @@ import android.os.Build
 import android.util.AttributeSet
 import android.util.Log
 import android.view.MotionEvent
+import android.view.SurfaceHolder
+import android.view.View
 import android.view.SurfaceView
 import androidx.annotation.RequiresApi
 import androidx.graphics.lowlatency.CanvasFrontBufferedRenderer
@@ -31,6 +33,7 @@ import com.reverie.paint.core.stylus.FrontBufferProbe
 import com.reverie.paint.model.CanvasPose
 import com.reverie.paint.model.FrontBufferCompose
 import com.reverie.paint.model.FrontBufferHolePolicy
+import com.reverie.paint.model.FrontBufferSurfaceGate
 import com.reverie.paint.model.RealInkPresent
 import com.reverie.paint.model.UiClipSnapshot
 import com.reverie.paint.perf.FbGeomLog
@@ -328,6 +331,63 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
     private val holeLocalMatrix = Matrix()
     private val holeCursorBox = IntArray(4)
 
+    // ---- 前缓冲表面几何 (UI 线程写; 渲染线程逐帧只读) ----
+    @Volatile private var surfaceValid = false
+    @Volatile private var surfaceW = 0
+    @Volatile private var surfaceH = 0
+    private val geomLocSelf = IntArray(2)
+    private val geomLocTarget = IntArray(2)
+
+    private val surfaceGeometryCallback = object : SurfaceHolder.Callback {
+        override fun surfaceCreated(holder: SurfaceHolder) {
+            // 尺寸要等 surfaceChanged; androidx 也是那时才分配缓冲。
+        }
+
+        override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+            onSurfaceGeometry(valid = true, w = width, h = height)
+        }
+
+        override fun surfaceDestroyed(holder: SurfaceHolder) {
+            onSurfaceGeometry(valid = false, w = 0, h = 0)
+        }
+    }
+
+    private fun onSurfaceGeometry(valid: Boolean, w: Int, h: Int) {
+        val ctl = realInk
+        val release = FrontBufferSurfaceGate.surfaceEventReleases(ctl?.held == true, surfaceW, surfaceH, valid, w, h)
+        surfaceW = w
+        surfaceH = h
+        surfaceValid = valid
+        if (!valid) {
+            // 缓冲连同上面的墨已被 androidx 销毁, 账本作废 (没有可清的东西了)。
+            hasContent = false
+            hasInkContent = false
+        }
+        if (release && ctl != null) {
+            // 旧缓冲 (含本笔已上屏的增量墨) 已丢弃: 松开, 窗口全量接管这一笔, 与关低延迟同图。
+            ctl.release()
+            targetTouchView?.postInvalidate()
+        }
+    }
+
+    /**
+     * 落笔 (UI 线程): 前缓冲表面已就绪且与 [target] 完全重合, 真墨才能按住。零分配, 每笔一次。
+     */
+    internal fun bufferGeometryMatches(target: View): Boolean {
+        if (!isRendererInitialized) return false
+        getLocationOnScreen(geomLocSelf)
+        target.getLocationOnScreen(geomLocTarget)
+        return FrontBufferSurfaceGate.geometryMatches(
+            surfaceValid, surfaceW, surfaceH,
+            width, height, geomLocSelf[0], geomLocSelf[1],
+            target.width, target.height, geomLocTarget[0], geomLocTarget[1],
+        )
+    }
+
+    /** 按住期间 (任一线程, 逐帧): 缓冲仍有效且尺寸未变。只读几个 volatile 字段。 */
+    internal val bufferStillValid: Boolean
+        get() = FrontBufferSurfaceGate.stillValid(surfaceValid, surfaceW, surfaceH, width, height)
+
     init {
         // 设为完全透明与顶层覆盖
         setZOrderOnTop(true)
@@ -337,6 +397,16 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
 
         if (FrontBufferProbe.isSupported() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             initRenderer()
+            // 必须排在 androidx 渲染器自己的回调之后注册 (回调按注册顺序执行): 走到这里时
+            // 渲染器已按同一 (w, h) 建好/重建缓冲, 我们记下的就是缓冲的真实几何。
+            if (isRendererInitialized) {
+                holder.addCallback(surfaceGeometryCallback)
+                val sf = holder.surface
+                if (sf != null && sf.isValid) {
+                    val f = holder.surfaceFrame
+                    onSurfaceGeometry(valid = true, w = f.width(), h = f.height())
+                }
+            }
         }
     }
 
@@ -1555,6 +1625,10 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
      * 释放前缓冲渲染器资源。
      */
     fun release() {
+        holder.removeCallback(surfaceGeometryCallback)
+        surfaceValid = false
+        surfaceW = 0
+        surfaceH = 0
         hasContent = false
         hasInkContent = false
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {

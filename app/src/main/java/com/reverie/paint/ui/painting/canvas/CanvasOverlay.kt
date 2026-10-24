@@ -1594,7 +1594,7 @@ internal fun CanvasOverlay(
             }
 
             drawColorLoupe(
-                pickerActive = pickerActive.value,
+                pickerActive = pickerActive.value && (tool == Tool.PICKER || isCursorTouching.value),
                 pickerScreenPos = pickerScreenPos.value,
                 pickerInitialColor = pickerInitialColor.value,
                 pickerCurrentColor = pickerCurrentColor.value,

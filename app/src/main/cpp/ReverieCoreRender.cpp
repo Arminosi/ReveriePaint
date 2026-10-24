@@ -639,11 +639,11 @@ bool ReverieCore::renderTileToBuffer(quint8 *buffer, int bufW, int bufH, int doc
         const int localX = r.x() - docX;
         const int localY = r.y() - docY;
         quint8 *dst = buffer + size_t(localY) * size_t(bufW) * 4 + size_t(localX) * 4;
-        // 脏区宽度过半张瓦片时直接读整行带 (宽 = bufW, 行步长与瓦片缓冲一致) 并就地转码,
-        // 省掉暂存缓冲的二次搬运。条件:
-        //  - 只有内部瓦片 (tileRect 与瓦片同宽) 才能按 bufW 行步长读;
-        //  - 液化预览叠加时不走整带: 带内脏区以外的像素会被改回未叠加的投影。
-        const bool wholeBand = r.width() >= bufW / 2 && tileRect.width() == bufW && !blendPreview;
+        // 只有当脏区正好完整横贯整张瓦片宽度 (localX == 0 且 r.width() == bufW) 时,
+        // 整行带才全部属于已合成的脏区, 此时可直接按 bufW 行步长就地读取与转码。
+        // 若脏区未覆盖整行, 绝不能读整行带: 脏区外的投影像素在本帧未参与合成 (含陈旧历史像素),
+        // 读取整行会把未合成的陈旧数据写进瓦片, 导致画面横贯条带与线条断层/错位。
+        const bool wholeBand = localX == 0 && r.width() == bufW && tileRect.width() == bufW && !blendPreview;
         QRect local(localX, localY, r.width(), r.height());
         if (wholeBand) {
             const QRect band(docX, r.y(), bufW, r.height());

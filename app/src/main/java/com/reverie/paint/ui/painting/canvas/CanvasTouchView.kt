@@ -116,6 +116,9 @@ class CanvasTouchView(context: Context) : View(context) {
             if (field != value) {
                 field = value
                 clearPredictionState(triggerInvalidate = true)
+                if (value != Tool.PICKER && !isLongPressPickerActive) {
+                    pickerActive?.value = false
+                }
             }
         }
     var tfState: TransformState? = null
@@ -874,6 +877,13 @@ class CanvasTouchView(context: Context) : View(context) {
     private var isLongPressPickerActive = false
     private var longPressToken = 0L
     private var activeLongPressToken = 0L
+
+    private fun dismissPickerOverlay() {
+        if (isLongPressPickerActive || (tool != Tool.PICKER && pickerActive?.value == true)) {
+            pickerActive?.value = false
+            isLongPressPickerActive = false
+        }
+    }
 
     private val longPressRunnable = Runnable {
         val v = vm ?: return@Runnable
@@ -2579,7 +2589,7 @@ class CanvasTouchView(context: Context) : View(context) {
         isPendingLongPress = false
         removeCallbacks(flushEdgeFingerRunnable)
         isPendingEdgeFinger = false
-        isLongPressPickerActive = false
+        dismissPickerOverlay()
         longPressToken++
         if (activeTouchView == this) activeTouchView = null
         realInk.release()
@@ -4215,6 +4225,7 @@ class CanvasTouchView(context: Context) : View(context) {
                 cancelPendingShapeGesture()
                 isTransformActive = false
                 isContinuousUndoing = false
+                dismissPickerOverlay()
                 return true
             }
             // 存在手写笔 Pointer 时，强制清除手指计数，避免手掌贴屏引发视口晃动或多指手势
@@ -4354,7 +4365,7 @@ class CanvasTouchView(context: Context) : View(context) {
                     firstDocPos = docPos
                     currentStrokeDocPos = docPos
                     shapeEndDocPos = docPos
-                    isLongPressPickerActive = false
+                    dismissPickerOverlay()
 
                     if (checkHitGuideHandle(screenPos)) {
                         isPendingLongPress = false
@@ -4556,6 +4567,7 @@ class CanvasTouchView(context: Context) : View(context) {
             removeCallbacks(longPressRunnable)
             longPressToken++
             isPendingLongPress = false
+            dismissPickerOverlay()
             if (isPendingEdgeFinger) {
                 removeCallbacks(flushEdgeFingerRunnable)
                 isPendingEdgeFinger = false
@@ -4895,6 +4907,7 @@ class CanvasTouchView(context: Context) : View(context) {
                     removeCallbacks(continuousUndoRunnable)
                     removeCallbacks(continuousRedoRunnable)
                     isContinuousUndoing = false
+                    dismissPickerOverlay()
                     if (strokeStarted) {
                         cachedDriver?.feedbackManager?.setWritingHapticsEnabled(false)
                         cachedDriver?.feedbackManager?.stopStrokeSound()
@@ -4945,7 +4958,7 @@ class CanvasTouchView(context: Context) : View(context) {
                 currentStrokeDocPos = docPos
                 shapeEndDocPos = docPos
                 updateCursorAngleFromDocMove(docPos.x, docPos.y, true)
-                isLongPressPickerActive = false
+                dismissPickerOverlay()
                 removeCallbacks(longPressRunnable)
                 longPressToken++
                 if (isPendingEdgeFinger) {

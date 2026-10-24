@@ -14,6 +14,7 @@ import com.reverie.paint.core.brushstore.BrushStoreBootstrap
 import com.reverie.paint.core.brushstore.EffectivePresetBuilder
 import com.reverie.paint.core.brushstore.PresetReadback
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
@@ -115,6 +116,10 @@ internal object BrushStoreVm {
     /** 每次选笔 after 完成时捕获的 UI 基线（id → 上游 after 值），供 mergeEdit 判定"用户真正改了什么" */
     private val uiBaseline = HashMap<String, BrushParams>()
 
+    /** 供 [com.reverie.paint.core.brushstore.BrushEditSession] 读取基线（不直接暴露可变 Map） */
+    internal fun uiBaselineOf(id: String): BrushParams? = uiBaseline[id]
+    internal fun setUiBaseline(id: String, p: BrushParams) { uiBaseline[id] = p }
+
     fun captureUiBaseline(vm: PaintViewModel, name: String?) {
         if (name.isNullOrBlank()) return
         val e = BrushStoreBootstrap.managedEntry(name) ?: return
@@ -202,33 +207,28 @@ internal object BrushStoreVm {
         vm.applySensorXmlToDynamicOptions(parsed.sensorXml, parsed)
     }
 
-    /**
-     * v2 保存一次编辑：VM 参数暂存，防抖后与有效字节回读做差、并入覆盖、materialize；
-     * 改动含 REBUILD 控件时重新 loadBrushPreset（不再逐个 setter 回放）。返回 false 表示不归 v2 管。
-     */
-    fun onSaved(vm: PaintViewModel, name: String, p: BrushParams, isEraserPreset: Boolean, immediate: Boolean): Boolean {
-        val e = BrushStoreBootstrap.managedEntry(name) ?: return false
-        val dir = presetDir() ?: return false
+    /** v2 保存：只 stage + 120ms 防抖落盘（flush → mergeEdit → materialize），不碰引擎 */
+    private var persistJob: Job? = null
+
+    fun onSavedPersist(vm: PaintViewModel, name: String, p: BrushParams) {
+        val e = BrushStoreBootstrap.managedEntry(name) ?: return
+        val dir = presetDir() ?: return
         BrushEditSession.stage(e.id, p, PresetReadback.appBase(p))
-        val targetIdx = vm.brushPresetIndex
-        pendingKppReloadJob?.cancel()
-        pendingKppReloadJob = vm.viewModelScope.launch(Dispatchers.Default) {
-            if (!immediate) delay(120L)
+        persistJob?.cancel()
+        persistJob = vm.viewModelScope.launch(Dispatchers.Default) {
+            delay(120L)
             val c = BrushEditSession.flush(e.id, dir) ?: return@launch
-            if (!c.needsReload) return@launch
-            vm.runCore(render = false) {
-                if (vm.brushPresetIndex != targetIdx) return@runCore
-                val isEraser = vm.currentToolId == "eraser" || isEraserPreset
-                BrushEngineApplier.selectAndApply(
-                    BrushEngineApplier.NativeEngine,
-                    targetIdx,
-                    nonPresetState(vm, isEraser, vm.brushSize, vm.brushOpacity, vm.brushFlow, p),
-                    e.id,
-                )
-                vm.fetchBrushOutlinePolygons()
-            }
+            if (c.needsReload) BrushDiagnostics.log("v2_persist_needs_reload", "name" to name, "keys" to c.changedKeys.joinToString(","))
         }
-        return true
+    }
+
+    /** 旧重载块 loadBrushPreset 之前同步调用：取消/抢先防抖任务并立即落盘，保证加载的是含本次编辑的有效字节 */
+    fun flushNow(name: String) {
+        val e = BrushStoreBootstrap.managedEntry(name) ?: return
+        val dir = presetDir() ?: return
+        persistJob?.cancel()
+        persistJob = null
+        BrushEditSession.flush(e.id, dir)
     }
 
     /** 临时覆盖（物理橡皮等）结束后重新加载原预设；返回 false 表示不归 v2 管。须在渲染线程调用。 */

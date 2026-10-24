@@ -100,11 +100,12 @@ object BrushEngineApplier {
         current: BrushOverrideStore.Overrides,
         edited: BrushParams,
         appBase: BrushParams = BrushParams(),
+        uiBaseline: BrushParams? = null,
     ): BrushOverrideStore.Overrides {
         val ctx = effectiveXml?.let { PresetContext.of(it) } ?: PresetContext.MYPAINT
         val effP = PresetReadback.fromXml(effectiveXml, appBase)
         val snapP = PresetReadback.fromXml(snapshotXml, appBase)
-        val changed = PresetPropertyMap.diff(effP, edited, ctx).filter { (id, v) ->
+        val changed = PresetPropertyMap.diff(uiBaseline ?: effP, edited, ctx).filter { (id, v) ->
             if (id.klass == ControlClass.APP_ONLY) return@filter false
             if (id.curveOption != null) {
                 // VM 会为预设里不存在的标准通道补一条"未启用"的线性曲线，这不是编辑

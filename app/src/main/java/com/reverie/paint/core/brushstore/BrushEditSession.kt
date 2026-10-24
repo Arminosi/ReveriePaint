@@ -5,6 +5,7 @@
 package com.reverie.paint.core.brushstore
 
 import com.reverie.paint.core.BrushParams
+import com.reverie.paint.core.BrushStoreVm
 import com.reverie.paint.core.KppHelper
 import java.io.File
 
@@ -65,12 +66,13 @@ object BrushEditSession {
         val target = EffectivePresetBuilder.targetFile(presetDir, entry)
         val effXml = if (target.exists()) KppHelper.readPresetXml(target.readBytes(), stripEmbeddedResources = true) else snapXml
         val cur = BrushOverrideStore.get(id)
-        val merged = BrushEngineApplier.mergeEdit(snapXml, effXml ?: snapXml, cur, edited, appBase)
+        val merged = BrushEngineApplier.mergeEdit(snapXml, effXml ?: snapXml, cur, edited, appBase, BrushStoreVm.uiBaselineOf(id))
         val changed = changedKeys(cur.controls, merged.controls)
         if (changed.isNotEmpty()) BrushOverrideStore.replace(id, merged)
         val res = EffectivePresetBuilder.materialize(id, presetDir)
         val reload = changed.any { ControlId.fromKey(it)?.klass == ControlClass.REBUILD }
         BrushDiagnostics.log("commit", "id" to id, "changed" to changed.joinToString(","), "reload" to reload)
+        BrushStoreVm.setUiBaseline(id, edited)
         return Commit(id, changed, reload, res)
     }
 

@@ -555,8 +555,8 @@ import kotlinx.coroutines.launch
         val p = currentBrushParamsFromVm(name, dc, sc, spc, existing, isEraserPreset)
         brushParams[name] = p
         schedulePersistBrushParams()
-        // v2：APP_ONLY 仍随旧记录保存；kpp 语义差分并入覆盖、materialize，必要时整份重载
-        if (BrushStoreVm.onSaved(this, name, p, isEraserPreset, immediateReload)) return
+        // v2：只落盘（stage + 防抖 commit/materialize），引擎重载由下面的旧块负责
+        BrushStoreVm.onSavedPersist(this, name, p)
         val dir = File(appContext.filesDir, "paintoppresets")
         val kppFile = File(dir, "$name.kpp")
         if (kppFile.exists()) {
@@ -570,6 +570,7 @@ import kotlinx.coroutines.launch
                     runCore(render = false) {
                         if (brushPresetIndex != targetIdx) return@runCore
                         val pSnapshot = brushParams[name] ?: return@runCore
+                        BrushStoreVm.flushNow(name)
                         if (ReverieCoreBridge.loadBrushPreset(targetIdx)) {
                             if (pSnapshot.tipAsset.isNotBlank()) ReverieCoreBridge.setBrushTipAsset(pSnapshot.tipAsset)
                             ReverieCoreBridge.setPresetIsEraser(isEraserPreset)

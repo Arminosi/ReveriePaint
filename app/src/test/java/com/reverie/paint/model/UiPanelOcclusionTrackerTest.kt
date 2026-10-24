@@ -12,9 +12,9 @@ import org.junit.Test
 class UiPanelOcclusionTrackerTest {
 
     @Test
-    fun `all 22 slots can be registered updated and cleared`() {
+    fun `all 23 slots can be registered updated and cleared`() {
         val tracker = UiPanelOcclusionTracker()
-        assertEquals(22, UiPanelSlot.COUNT)
+        assertEquals(23, UiPanelSlot.COUNT)
 
         for (slot in UiPanelSlot.entries) {
             val token = tracker.nextToken()
@@ -24,8 +24,8 @@ class UiPanelOcclusionTrackerTest {
             assertEquals(1f, tracker.left(slot))
             assertEquals(4f, tracker.bottom(slot))
         }
-        assertEquals(22, tracker.activeCount())
-        assertEquals(22, tracker.snapshot().count)
+        assertEquals(23, tracker.activeCount())
+        assertEquals(23, tracker.snapshot().count)
 
         for (slot in UiPanelSlot.entries) {
             assertTrue(tracker.clear(slot, tracker.ownerToken(slot)))
@@ -464,8 +464,8 @@ class UiPanelOcclusionTrackerTest {
             val base = slot.ordinal * 100f
             assertTrue(tracker.update(slot, token, base, base + 1f, base + 50f, base + 51f))
         }
-        assertEquals(22, tracker.activeCount())
-        assertEquals(22, tracker.snapshot().count)
+        assertEquals(23, tracker.activeCount())
+        assertEquals(23, tracker.snapshot().count)
 
         for (slot in UiPanelSlot.entries) {
             assertTrue(tracker.clear(slot, tracker.ownerToken(slot)))
@@ -482,8 +482,8 @@ class UiPanelOcclusionTrackerTest {
             assertEquals(base + 60f, tracker.right(slot), 0f)
             assertEquals(base + 62f, tracker.bottom(slot), 0f)
         }
-        assertEquals(22, tracker.activeCount())
-        assertEquals(22, tracker.snapshot().count)
+        assertEquals(23, tracker.activeCount())
+        assertEquals(23, tracker.snapshot().count)
 
         val out = FloatArray(4)
         for (slot in UiPanelSlot.entries) {
@@ -571,5 +571,57 @@ class UiPanelOcclusionTrackerTest {
 
         assertEquals(versionBefore, tracker.version)
         assertFalse(tracker.isActive(UiPanelSlot.TOP_BAR))
+    }
+
+    // ---- Round 7: 面板避让与孔径快照的兼容性 (rebuildUiExclusionSnapshot 以快照相等判定是否交还) ----
+
+    @Test
+    fun `evasion fade alone keeps the clip snapshot equal so a held stroke is not released`() {
+        val tracker = UiPanelOcclusionTracker()
+        val t = tracker.nextToken()
+        tracker.update(UiPanelSlot.PINNED_LAYER_PANEL, t, 100f, 100f, 400f, 600f, padH = 18f, padT = 12f, padB = 26f)
+        val before = tracker.snapshot()
+        val v0 = tracker.version
+        assertTrue(tracker.evaluateSlotEvasion(UiPanelSlot.PINNED_LAYER_PANEL, 390f, 300f, 392f, 302f, 32f, 40f))
+        assertTrue(tracker.version > v0)
+        // 50% 渐隐的面板仍须被挖孔: 快照不变 -> 只 updateActiveUiClips, 不 releaseAndCatchUp。
+        assertEquals(before, tracker.snapshot())
+        assertFalse(tracker.evaluateSlotEvasion(UiPanelSlot.PINNED_LAYER_PANEL, 1000f, 1000f, 1001f, 1001f, 32f, 40f))
+        assertEquals(before, tracker.snapshot())
+    }
+
+    @Test
+    fun `panel moving or collapsing mid-stroke changes the snapshot so the stale hole is dropped`() {
+        val tracker = UiPanelOcclusionTracker()
+        val t = tracker.nextToken()
+        tracker.update(UiPanelSlot.QUICK_COLOR, t, 100f, 100f, 300f, 300f, padH = 18f, padT = 12f, padB = 26f)
+        val held = tracker.snapshot()
+        tracker.setEvaded(UiPanelSlot.QUICK_COLOR, true)
+        // 移动: 孔径跟随新 bounds, 与按住时的快照不等 -> 交还主画布。
+        tracker.update(UiPanelSlot.QUICK_COLOR, t, 120f, 100f, 320f, 300f, padH = 18f, padT = 12f, padB = 26f)
+        val moved = tracker.snapshot()
+        assertFalse(held == moved)
+        assertEquals(120f - 18f, moved.left(0))
+        // 收起: 槽位清除后快照里不再有该孔。
+        tracker.clear(UiPanelSlot.QUICK_COLOR, t)
+        val collapsed = tracker.snapshot()
+        assertFalse(moved == collapsed)
+        assertEquals(0, collapsed.count)
+        assertFalse(tracker.isEvaded(UiPanelSlot.QUICK_COLOR))
+    }
+
+    @Test
+    fun `layer filter adjust card is clipped but never evades`() {
+        val slot = UiPanelSlot.LAYER_FILTER_ADJUST_CARD
+        assertFalse(slot.evadable)
+        assertFalse(UiPanelSlot.EVADABLE_ARRAY.contains(slot))
+        assertEquals(10, UiPanelSlot.EVADABLE.size)
+        val tracker = UiPanelOcclusionTracker()
+        val t = tracker.nextToken()
+        tracker.update(slot, t, 10f, 10f, 310f, 410f, padH = 18f, padT = 12f, padB = 26f)
+        assertEquals(1, tracker.snapshot().count)
+        assertTrue(tracker.hitTest(50f, 50f))
+        assertFalse(tracker.evaluateSlotEvasion(slot, 50f, 50f, 51f, 51f, 32f, 40f))
+        assertFalse(tracker.isEvaded(slot))
     }
 }

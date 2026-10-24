@@ -216,6 +216,8 @@ fun PaintingPage(
     var textDialogPos by remember { mutableStateOf<Pair<Float, Float>?>(null) }
     var brushPanelOpen by remember { mutableStateOf(false) }
     var layerPanelOpen by remember { mutableStateOf(false) }
+    // 图层面板未钉住且在滤镜调节页 (无遮罩, 画布可落笔) 时由 LayerPanel 回报。
+    var layerPanelPassThrough by remember { mutableStateOf(false) }
     var targetFilterLayers by remember { mutableStateOf<List<Int>?>(null) }
     var targetLayerDetailId by remember { mutableStateOf<Long?>(null) }
     LaunchedEffect(layerPanelOpen) {
@@ -740,9 +742,17 @@ fun PaintingPage(
                 liquifyMode = liquifyMode,
                 liquifyBrushSize = liquifyBrushSize,
                 overlayPanelsOpen = com.reverie.paint.model.RealInkHoldPolicy.overlayPanelsBlockHold(
-                    brushPanelBlocking = brushPanelOpen && !(vm.panelPinningEnabled && vm.isBrushPanelPinned),
-                    layerPanelBlocking = layerPanelOpen && !(vm.panelPinningEnabled && vm.isLayerPanelPinned),
-                    colorPanelBlocking = colorPanelOpen && !vm.isColorPanelPinned,
+                    brushPanelBlocking = com.reverie.paint.model.RealInkHoldPolicy.brushPanelBlocksHold(
+                        open = brushPanelOpen, pinned = vm.panelPinningEnabled && vm.isBrushPanelPinned,
+                    ),
+                    layerPanelBlocking = com.reverie.paint.model.RealInkHoldPolicy.layerPanelBlocksHold(
+                        open = layerPanelOpen,
+                        pinned = vm.panelPinningEnabled && vm.isLayerPanelPinned,
+                        filterAdjustPassThrough = layerPanelPassThrough,
+                    ),
+                    colorPanelBlocking = com.reverie.paint.model.RealInkHoldPolicy.colorPanelBlocksHold(
+                        open = colorPanelOpen, pinned = vm.isColorPanelPinned,
+                    ),
                     settingsPanelOpen = settingsPanelOpen,
                     moreToolsOpen = moreToolsOpen,
                     drawingGuidePanelOpen = drawingGuidePanelOpen,
@@ -2267,6 +2277,7 @@ fun PaintingPage(
                 initialTargetFilters = targetFilterLayers,
                 initialDetailLayerId = targetLayerDetailId,
                 onInitialDetailConsumed = { targetLayerDetailId = null },
+                onCanvasPassThroughChanged = { layerPanelPassThrough = it },
                 initialFilterCategoryId = filterCategoryHint,
                 onStartFilterSession = { session ->
                     layerPanelOpen = false

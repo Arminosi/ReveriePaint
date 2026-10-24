@@ -83,6 +83,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -209,6 +210,8 @@ fun LayerPanel(
     onStartFilterSession: ((FilterSession) -> Unit)? = null,
     initialDetailLayerId: Long? = null,
     onInitialDetailConsumed: () -> Unit = {},
+    /** 未钉住时是否处于无遮罩 (画布可落笔) 的滤镜调节页; 宿主据此决定是否挡真墨按住。 */
+    onCanvasPassThroughChanged: (Boolean) -> Unit = {},
 ) {
     var view by remember(initialTargetFilters) {
         mutableStateOf<LayerView>(
@@ -236,6 +239,10 @@ fun LayerPanel(
     val baseTopOffsetPx = remember(density) { with(density) { 44.dp.roundToPx() } }
 
     val isFilterAdjust = view is LayerView.FilterAdjust
+    val latestPassThroughCb by rememberUpdatedState(onCanvasPassThroughChanged)
+    // 先登记孔径 (本帧布局), 再放开按住 (效果在布局后执行, 宿主下一帧重组)。
+    LaunchedEffect(isFilterAdjust) { latestPassThroughCb(isFilterAdjust) }
+    DisposableEffect(Unit) { onDispose { latestPassThroughCb(false) } }
 
     val cardContent: @Composable (Modifier) -> Unit = { cardModifier ->
         Column(
@@ -492,6 +499,10 @@ fun LayerPanel(
                         if (vm.floatingUiConfig.enabled) {
                             Modifier.offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
                         } else Modifier
+                    )
+                    // 滤镜调节页无全屏遮罩, 画布可落笔: 卡片登记孔径, 前缓冲不盖它 (挂在 shadow/clip 之前)。
+                    .then(
+                        if (isFilterAdjust) Modifier.reportUiSlot(vm, UiPanelSlot.LAYER_FILTER_ADJUST_CARD) else Modifier
                     )
             )
         }

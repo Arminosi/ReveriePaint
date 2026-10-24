@@ -29,6 +29,7 @@ import androidx.graphics.lowlatency.CanvasFrontBufferedRenderer
 import androidx.graphics.surface.SurfaceControlCompat
 import com.reverie.paint.core.stylus.FrontBufferProbe
 import com.reverie.paint.model.CanvasPose
+import com.reverie.paint.model.FrontBufferCompose
 import com.reverie.paint.model.FrontBufferHolePolicy
 import com.reverie.paint.model.RealInkPresent
 import com.reverie.paint.model.UiClipSnapshot
@@ -78,9 +79,26 @@ class FrontBufferPathPacket(
     var slotOriginY: Int = 0
 
     /** 离散脏区: 屏幕矩形与对应的显示位图矩形 (`l, t, r, b`), 一一对应, 共 [rectCount] 块。 */
-    val screenRects: IntArray = IntArray(RealInkPresent.MAX_DISCRETE_RECTS * 4)
-    val bmpRects: IntArray = IntArray(RealInkPresent.MAX_DISCRETE_RECTS * 4)
+    val screenRects: IntArray = IntArray(FrontBufferCompose.MAX_PACKET_RECTS * 4)
+    val bmpRects: IntArray = IntArray(FrontBufferCompose.MAX_PACKET_RECTS * 4)
     var rectCount: Int = 0
+
+    /** 前 [inkCount] 块是墨脏区 (其余是 compose 包的光标/导引线足迹)。赎回排队包时只赎墨脏区。 */
+    var inkCount: Int = 0
+
+    /**
+     * compose 包 ([FrontBufferHolePolicy.MODE_COMPOSE]): 第 i 块从槽位图 `packXY[2i], packXY[2i+1]` 处
+     * SRC 贴到屏幕矩形 i, 再在全部矩形的并集内按窗口同一顺序重画覆盖层 (像素网格 → 导引线 → 光标 →
+     * 绘图辅助线)。不用备份层, 不挖孔。
+     */
+    var compose: Boolean = false
+    val packXY: IntArray = IntArray(FrontBufferCompose.MAX_PACKET_RECTS * 2)
+
+    /** compose: 文档完整覆盖的整像素屏幕矩形 (`l, t, r, b`); 静态覆盖层只画在这里面。 */
+    val docInner: IntArray = IntArray(4)
+
+    /** compose: 落笔时录的静态覆盖层 (null = 没有)。 */
+    internal var decor: FrontBufferDecor? = null
 
     /** 画布 pose 四边形在屏幕上的包围盒; 贴图矩形一律夹在其内。 */
     val canvasScreen: IntArray = IntArray(4)
@@ -213,6 +231,21 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
     /** [clearPreview] 之后的下一包: 备份层账本与光标账本一起作废。 */
     @Volatile
     private var strokeResetPending = false
+
+    /**
+     * 前缓冲内容代次: 每次前缓冲被整层清掉 (commit / 多缓冲重画) 自增。compose 的渲染线程据此把
+     * "前缓冲上此刻画着的光标/导引线" 账本作废 (清掉之后上面什么都没有)。
+     */
+    @Volatile
+    internal var frontGeneration: Int = 0
+        private set
+
+    // ---- compose (GL 线程, 零分配) ----
+    private val composeRegion = android.graphics.Region()
+    private val composePath = Path()
+    private val composeSrc = Rect()
+    private val composeDst = RectF()
+    private val composeBounds = Rect()
 
     private val screenInkPaint = Paint().apply {
         xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC)
@@ -355,6 +388,7 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
                     try {
                         // 多缓冲层保持透明清空，正式墨迹由底层的 CanvasTouchView / Krita 负责
                         canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+                        frontGeneration++
                         clearStrokeLayerDirty()
                         invalidatePrevOverlay()
                     } finally {
@@ -591,14 +625,15 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
     }
 
     /**
-     * 取回还在排队的真墨包: 把它的位图矩形逐块抄进 [outBmpRects] 并返回块数 (没有排队包返回 0)。
-     * 调用方把这些脏区并回积压一起重烤, 被顶掉的那一帧不会在按住期间留下断口。
+     * 取回还在排队的真墨包: 把它的墨脏区位图矩形逐块抄进 [outBmpRects] 并返回块数; 没有排队包返回 -1
+     * (有排队包但只有足迹时返回 0)。调用方把这些脏区并回积压一起重烤, 被顶掉的那一帧不会在按住期间
+     * 留下断口; compose 据返回值 >= 0 得知那一包没上屏, 把光标/导引线账本回退到它之前。
      */
     fun reclaimQueuedInkRegions(outBmpRects: IntArray): Int {
         synchronized(submitLock) {
-            val q = queuedPacket ?: return 0
+            val q = queuedPacket ?: return -1
             queuedPacket = null
-            val n = minOf(q.rectCount, RealInkPresent.MAX_DISCRETE_RECTS, outBmpRects.size / 4)
+            val n = minOf(q.inkCount, RealInkPresent.MAX_DISCRETE_RECTS, outBmpRects.size / 4)
             if (n > 0) System.arraycopy(q.bmpRects, 0, outBmpRects, 0, n * 4)
             releaseInkRef(q)
             q.inFlight.set(false)
@@ -648,7 +683,10 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
         try {
             packet.ink = true
             packet.isClear = false
+            packet.compose = false
+            packet.decor = null
             packet.rectCount = n
+            packet.inkCount = n
             System.arraycopy(screenRects, 0, packet.screenRects, 0, n * 4)
             System.arraycopy(bmpRects, 0, packet.bmpRects, 0, n * 4)
             System.arraycopy(canvasBounds, 0, packet.canvasScreen, 0, 4)
@@ -688,6 +726,96 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
             packet.uiClipCount = 0
             packet.inFlight.set(false)
             Log.w(TAG, "renderInkScreenRegions error: ${t.message}")
+            return false
+        }
+    }
+
+    /**
+     * 提交一个 compose 包 (见 [FrontBufferPathPacket.compose])。[screenRects]/[bmpRects] 共 [count] 块,
+     * 前 [inkCount] 块是墨脏区 (可以为 0: 抬笔收尾包只擦光标/导引线), 其余是足迹; [packXY] 是每块在
+     * [screenBitmap] 里的左上角。光标/导引线是这一包要画的新状态 (cursorR <= 0 / KIND_NONE = 不画)。
+     *
+     * 返回 false 时 [slotBusy] 的所有权仍在调用方。
+     */
+    internal fun renderComposeRegions(
+        screenBitmap: Bitmap,
+        screenRects: IntArray,
+        bmpRects: IntArray,
+        packXY: IntArray,
+        inkCount: Int,
+        count: Int,
+        pose: CanvasPose,
+        cursorX: Float,
+        cursorY: Float,
+        cursorR: Float,
+        cursorStyle: Int,
+        symCursorX: FloatArray,
+        symCursorY: FloatArray,
+        symCursorCount: Int,
+        guideKind: Int,
+        guideSeg: FloatArray,
+        uiClips: UiClipSnapshot,
+        slotBusy: AtomicBoolean,
+        canvasBounds: IntArray,
+        docInner: IntArray,
+        decor: FrontBufferDecor?,
+    ): Boolean {
+        if (!isRendererInitialized) return false
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
+        if (screenBitmap.isRecycled) return false
+        val n = minOf(count, FrontBufferCompose.MAX_PACKET_RECTS)
+        if (n <= 0) return false
+        val packet = obtainInkPacket() ?: run {
+            if (!discardQueuedInk()) return false
+            obtainInkPacket() ?: return false
+        }
+        try {
+            packet.ink = true
+            packet.isClear = false
+            packet.compose = true
+            packet.rectCount = n
+            packet.inkCount = inkCount.coerceIn(0, n)
+            System.arraycopy(screenRects, 0, packet.screenRects, 0, n * 4)
+            System.arraycopy(bmpRects, 0, packet.bmpRects, 0, n * 4)
+            System.arraycopy(packXY, 0, packet.packXY, 0, n * 2)
+            System.arraycopy(canvasBounds, 0, packet.canvasScreen, 0, 4)
+            System.arraycopy(docInner, 0, packet.docInner, 0, 4)
+            packet.slotOriginX = 0
+            packet.slotOriginY = 0
+            packet.inkBitmap = screenBitmap
+            packet.pose = pose
+            packet.cursorX = cursorX
+            packet.cursorY = cursorY
+            packet.cursorR = cursorR
+            packet.cursorStyle = cursorStyle
+            val sc = symCursorCount.coerceIn(0, 16)
+            packet.symCursorCount = sc
+            if (sc > 0) {
+                System.arraycopy(symCursorX, 0, packet.symCursorX, 0, sc)
+                System.arraycopy(symCursorY, 0, packet.symCursorY, 0, sc)
+            }
+            packet.wantsExtras = false
+            packet.uiClipCount = uiClips.copyInto(packet.uiClipRects, MAX_UI_CLIPS)
+            packet.holeMask = null
+            packet.holeHitBits = 0
+            if (guideKind == DynamicGuidePainter.KIND_LINE || guideKind == DynamicGuidePainter.KIND_LINE_VP) {
+                packet.guideKind = guideKind
+                System.arraycopy(guideSeg, 0, packet.guideSeg, 0, DynamicGuidePainter.SEG_SIZE)
+            } else {
+                packet.guideKind = DynamicGuidePainter.KIND_NONE
+            }
+            packet.decor = decor
+            packet.inkSlotBusy = slotBusy
+            return submitInkPacket(packet)
+        } catch (t: Throwable) {
+            packet.inkSlotBusy = null
+            packet.inkBitmap = null
+            packet.decor = null
+            packet.compose = false
+            packet.guideKind = DynamicGuidePainter.KIND_NONE
+            packet.uiClipCount = 0
+            packet.inFlight.set(false)
+            Log.w(TAG, "renderComposeRegions error: ${t.message}")
             return false
         }
     }
@@ -820,6 +948,7 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
     /** 归还一个包的槽位图 (同一个包只归还一次, 重复调用是空操作)。 */
     private fun releaseInkRef(packet: FrontBufferPathPacket) {
         packet.inkBitmap = null
+        packet.decor = null
         packet.holeMask = null
         packet.holeHitBits = 0
         val slot = packet.inkSlotBusy ?: return
@@ -831,6 +960,16 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
 
     @RequiresApi(Build.VERSION_CODES.Q)
     private fun drawInkPacket(canvas: Canvas, bufferWidth: Int, bufferHeight: Int, param: FrontBufferPathPacket) {
+        if (param.compose) {
+            if (!FbGeomLog.timingEnabled) {
+                drawComposePacket(canvas, bufferWidth, bufferHeight, param)
+                return
+            }
+            val t0 = System.nanoTime()
+            drawComposePacket(canvas, bufferWidth, bufferHeight, param)
+            FbGeomLog.frontPresented(System.nanoTime() - t0)
+            return
+        }
         if (param.holeMask == null || !FbGeomLog.timingEnabled) {
             drawInkPacketImpl(canvas, bufferWidth, bufferHeight, param)
             return
@@ -954,6 +1093,110 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
         if (willDrawCursor) drawHoldCursor(canvas, param)
         canvas.restore()
         rememberOverlayBounds(param, willDrawCursor)
+    }
+
+    /**
+     * compose 包 (GL 线程): 每块 SRC 贴烤好的 "棋盘格 + 瓦片" (文档外的足迹部分是透明), 然后只在
+     * 这些矩形的并集里按窗口同一顺序、同一函数、同一变换重画覆盖层 —— 像素网格 (窗口 drawCanvas 里
+     * 瓦片之后) → 动态导引线 (第 2.5 段) → 光标 (第 3 段) → CanvasOverlay (蚂蚁线不在 compose 里,
+     * 绘图辅助线)。矩形外前缓冲上的像素不动: 它们是更早的包画的, 状态没变 (光标/导引线变了的新旧
+     * 足迹都在这一包的矩形里)。全程 UI 避让区 clipOut (避让区内由窗口画)。
+     */
+    private fun drawComposePacket(canvas: Canvas, bufferWidth: Int, bufferHeight: Int, param: FrontBufferPathPacket) {
+        if (bufferWidth != strokeBufferW || bufferHeight != strokeBufferH) {
+            strokeBufferW = bufferWidth
+            strokeBufferH = bufferHeight
+            canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+            strokeLayerDirty.setEmpty()
+            invalidatePrevOverlay()
+            strokeLayer = null
+            strokeCanvas = null
+        }
+        val reset = strokeResetPending
+        strokeResetPending = false
+        strokeStartPending = false
+        if (reset) clearStrokeLayerDirty()
+        // 模式按笔画定 (落笔时), compose 包之前不会有同一笔的 H-min 包; H-min 的光标账本在这里作废。
+        prevOverlayValid = false
+        prevGuideKind = DynamicGuidePainter.KIND_NONE
+        lastTipValid = false
+
+        val bmp = param.inkBitmap
+        val n = param.rectCount
+        if (bmp == null || bmp.isRecycled || n <= 0) return
+        val sr = param.screenRects
+        var l = Int.MAX_VALUE
+        var t = Int.MAX_VALUE
+        var r = Int.MIN_VALUE
+        var b = Int.MIN_VALUE
+        for (i in 0 until n) {
+            val s = i * 4
+            if (sr[s] < l) l = sr[s]
+            if (sr[s + 1] < t) t = sr[s + 1]
+            if (sr[s + 2] > r) r = sr[s + 2]
+            if (sr[s + 3] > b) b = sr[s + 3]
+        }
+        canvas.save()
+        clipOutUi(canvas, param, l.toFloat(), t.toFloat(), r.toFloat(), b.toFloat())
+        for (i in 0 until n) {
+            val s = i * 4
+            val w = sr[s + 2] - sr[s]
+            val h = sr[s + 3] - sr[s + 1]
+            if (w <= 0 || h <= 0) continue
+            val px = param.packXY[i * 2]
+            val py = param.packXY[i * 2 + 1]
+            composeSrc.set(px, py, px + w, py + h)
+            composeDst.set(sr[s].toFloat(), sr[s + 1].toFloat(), sr[s + 2].toFloat(), sr[s + 3].toFloat())
+            canvas.drawBitmap(bmp, composeSrc, composeDst, screenInkPaint)
+        }
+        // 覆盖层只画在这一包更新过的像素里 (整数边的矩形并集, AA 裁剪在整数边上没有部分覆盖)。
+        val region = composeRegion
+        region.setEmpty()
+        for (i in 0 until n) {
+            val s = i * 4
+            if (sr[s + 2] > sr[s] && sr[s + 3] > sr[s + 1]) {
+                region.op(sr[s], sr[s + 1], sr[s + 2], sr[s + 3], android.graphics.Region.Op.UNION)
+            }
+        }
+        val guideOn = param.guideKind == DynamicGuidePainter.KIND_LINE ||
+            param.guideKind == DynamicGuidePainter.KIND_LINE_VP
+        if (!region.isEmpty) {
+            if (region.isRect) {
+                region.getBounds(composeBounds)
+                canvas.clipRect(composeBounds)
+            } else {
+                composePath.rewind()
+                region.getBoundaryPath(composePath)
+                canvas.clipPath(composePath)
+            }
+            val decor = param.decor
+            val di = param.docInner
+            val docOk = di[2] > di[0] && di[3] > di[1]
+            val under = decor?.under
+            if (under != null && docOk) {
+                canvas.save()
+                canvas.clipRect(di[0], di[1], di[2], di[3])
+                canvas.drawPicture(under)
+                canvas.restore()
+            }
+            if (guideOn) guidePainter.draw(canvas, param.guideKind, param.guideSeg)
+            if (param.cursorR > 0f && param.cursorX.isFinite() && param.cursorY.isFinite() && param.cursorStyle != 4) {
+                cursorPainter.drawAll(canvas, param.cursorX, param.cursorY, param.cursorR, param.cursorStyle,
+                    param.symCursorX, param.symCursorY, param.symCursorCount)
+            }
+            val over = decor?.over
+            if (over != null && docOk) {
+                canvas.save()
+                canvas.clipRect(di[0], di[1], di[2], di[3])
+                canvas.drawPicture(over)
+                canvas.restore()
+            }
+        }
+        canvas.restore()
+        noteGuideOnScreen(guideOn)
+        if (FbGeomLog.identityCheckEnabled) {
+            FbGeomLog.composeIdentityCheck(bmp, param.packXY, sr, n, param.docInner)
+        }
     }
 
     @RequiresApi(Build.VERSION_CODES.Q)
@@ -1295,6 +1538,7 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
         hasContent = false
         hasInkContent = false
         synchronized(submitLock) { releaseQueuedLocked() }
+        frontGeneration++
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             try {
                 @Suppress("UNCHECKED_CAST")

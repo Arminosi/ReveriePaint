@@ -322,6 +322,11 @@ class CanvasTouchView(context: Context) : View(context) {
 
     /** H-1: 前缓冲孔洞掩码 (几何变化后在后台构建, 落笔只取现成的)。 */
     internal val holeMasks by lazy(LazyThreadSafetyMode.NONE) { FrontBufferHoleMaskBuilder(this) }
+
+    // compose ([FrontBufferHolePolicy.MODE_COMPOSE]): 前缓冲重放的静态覆盖层 (像素网格 / 绘图辅助线),
+    // 与窗口同一组绘制函数录成 Picture。只在覆盖层状态变了时重录 (空闲帧里, 不在落笔路径上)。
+    private val composeDecorRecorder by lazy(LazyThreadSafetyMode.NONE) { FrontBufferDecorRecorder(this) }
+    private var composeDecor: FrontBufferDecor? = null
     private var localPressure = 1f
     private var localCursorAngle = 0f
     private var lastCursorMoveDocX = Float.NaN
@@ -2877,7 +2882,14 @@ class CanvasTouchView(context: Context) : View(context) {
             if (!realInk.held && !localIsTouching && FrontBufferFeatureFlags.holeMode != FrontBufferHolePolicy.MODE_OFF) {
                 // 视图动画 (适配复位 / 旋转吸附) 还在跑时按连续变化防抖; 否则静止后第一帧立即建。
                 val settled = fitAnimator?.isRunning != true && snapAnimator?.isRunning != true
-                realInk.pose?.let { holeMasks.scheduleIfStale(v, it, settled) }
+                realInk.pose?.let { pose ->
+                    if (composeApplies(v, pose)) {
+                        // compose 不用掩码: 静止后把静态覆盖层录好, 落笔时直接用。
+                        if (settled) composeDecorFor(v, pose)
+                    } else {
+                        holeMasks.scheduleIfStale(v, pose, settled)
+                    }
+                }
             }
         }
 
@@ -3150,7 +3162,8 @@ class CanvasTouchView(context: Context) : View(context) {
         val dynamicGuideKind = computeDynamicGuide(v, dynamicGuideSeg)
         if (dynamicGuideKind == DYNAMIC_GUIDE_ABORT_FRAME) return
         if (FrontBufferHolePolicy.windowGuideHolesOnly(
-                FrontBufferFeatureFlags.snapHold, realInk.held, frontBufferOverlay?.guideOnScreen == true,
+                FrontBufferFeatureFlags.snapHold, realInk.composeStroke, realInk.held,
+                frontBufferOverlay?.guideOnScreen == true,
             )) {
             // 按住真墨 (或松开后前缓冲导引线尚未擦掉): 孔洞外由前缓冲画导引线, 窗口只补孔洞内与
             // UI 避让区内, 同一像素不会两个表面同时画。
@@ -3654,12 +3667,22 @@ class CanvasTouchView(context: Context) : View(context) {
         var allowed = v.frontBufferPredictionEnabled && (!hasSymmetry || v.mirrorGate.isQueueing) &&
             v.displayTiles.drawable() != null && FrontBufferProbe.realInkHoldAllowed() &&
             strokeFbReady && !v.anim.shiftTraceActive
+        // compose: 覆盖层 (像素网格/绘图辅助线/动态导引线/光标) 由前缓冲按窗口同一顺序画进去 ——
+        // 不挖孔、不建掩码、不让窗口重画、吸附线也按住。只有蚂蚁线可见或画布旋转/镜像时这一笔退回 H-min。
+        val modeFlag = FrontBufferFeatureFlags.holeMode
+        val composePose = realInk.pose
+        val compose = allowed && composePose != null && composeApplies(v, composePose)
+        if (compose) {
+            realInk.setStrokeCompose(true, composeDecorFor(v, composePose!!))
+        } else {
+            realInk.setStrokeCompose(false, null)
+        }
         // H-1: 覆盖层 (参考线/对称轴/像素网格/选区蚂蚁线...) 在前缓冲上挖孔, 由窗口画孔内。
-        val holeMode = FrontBufferFeatureFlags.holeMode
-        var holeArm = FrontBufferHolePolicy.ARM_NO_HOLES
+        val holeMode = if (compose) FrontBufferHolePolicy.MODE_COMPOSE else FrontBufferHolePolicy.holeModeFor(modeFlag)
+        var holeArm = if (compose) FrontBufferHolePolicy.ARM_COMPOSE else FrontBufferHolePolicy.ARM_NO_HOLES
         var holeMask: HoleMask? = null
         var holeCov = 0f
-        if (allowed && holeMode != FrontBufferHolePolicy.MODE_OFF) {
+        if (!compose && allowed && holeMode != FrontBufferHolePolicy.MODE_OFF) {
             val pose = realInk.pose
             val other = holeOtherOverlayActive(v)
             val mask = if (pose != null && !other) holeMasks.readyFor(v, pose) else null
@@ -3682,8 +3705,9 @@ class CanvasTouchView(context: Context) : View(context) {
         val cursorMode = if (t == Tool.ERASER) v.eraserCursorMode else v.brushCursorMode
         val cursorWhileDrawing = (cursorMode == 1 || cursorMode == 3) && v.cursorStyleMode != 4
         // 吸附导引线由前缓冲画, 擦旧位置要靠备份层: 可能出现导引线的笔画从首帧起维护备份层。
-        val extras = cursorWhileDrawing || predictedTipEligible(v) ||
-            FrontBufferHolePolicy.snapNeedsExtras(snapGuidePossible(v), FrontBufferFeatureFlags.snapHold)
+        // compose 不需要备份层: 旧光标/导引线处按 pose 重烤瓦片恢复。预测笔尖 (关低延迟时没有) 不画。
+        val extras = !compose && (cursorWhileDrawing || predictedTipEligible(v) ||
+            FrontBufferHolePolicy.snapNeedsExtras(snapGuidePossible(v), FrontBufferFeatureFlags.snapHold))
         val armed = realInk.arm(allowed, extras, uiClipSnapshot)
         if (holeMode != FrontBufferHolePolicy.MODE_OFF) {
             com.reverie.paint.perf.FbGeomLog.holeArm(realInk.currentStrokeSeq, holeMode, holeArm, holeCov)
@@ -3712,6 +3736,46 @@ class CanvasTouchView(context: Context) : View(context) {
         val t = effTool()
         if (t != Tool.BRUSH && t != Tool.ERASER && t != Tool.SMUDGE) return true
         return FrontBufferHolePolicy.snapForcesNormal(snapGuidePossible(v), FrontBufferFeatureFlags.snapHold)
+    }
+
+    /**
+     * 当前状态下这一笔能否走 compose: 模式开着、画笔/橡皮/涂抹、没有可见蚂蚁线 (随时间流动, 两表面
+     * 无法锁相)、画布轴对齐 (旋转/镜像时窗口的双线性采样前缓冲在 CPU 上复刻不出逐像素一致)。
+     */
+    private fun composeApplies(v: PaintViewModel, pose: CanvasPose): Boolean {
+        val t = effTool()
+        val other = t != Tool.BRUSH && t != Tool.ERASER && t != Tool.SMUDGE
+        return FrontBufferHolePolicy.composeEligible(FrontBufferFeatureFlags.holeMode, antsVisible(v),
+            FrontBufferCompose.isAxisAligned(pose), other)
+    }
+
+    /** 选区蚂蚁线此刻是否可见 (与 [FrontBufferDecorRecorder] 同一判据; 运笔时不可能正在框选)。 */
+    private fun antsVisible(v: PaintViewModel): Boolean =
+        v.selectionOutlinePath != null && CanvasDecorGeometry.selectionOutlineVisible(
+            hasSelection = v.hasSelection,
+            isTransform = tool == Tool.TRANSFORM,
+            isSelecting = false,
+            selectionMode = v.selectionMode,
+        )
+
+    /** compose 的静态覆盖层: 状态没变就用已录的那份 (几次引用比较), 变了才重录。 */
+    private fun composeDecorFor(v: PaintViewModel, pose: CanvasPose): FrontBufferDecor? {
+        val tr = tool == Tool.TRANSFORM
+        if (composeDecorRecorder.isStale(v, pose, tr)) {
+            composeDecor = composeDecorRecorder.record(v, pose, tr, forMask = false)
+        }
+        return composeDecor
+    }
+
+    /**
+     * 窗口这一帧会在第 2.5 段中止 (3D 透视辅助, 见 [computeDynamicGuide]): 关低延迟时光标根本画不出来,
+     * 前缓冲也不画, 才同图。
+     */
+    private fun dynamicGuideAbortsFrame(v: PaintViewModel): Boolean {
+        val g = v.drawingGuide
+        val assistTool = tool == Tool.BRUSH || tool == Tool.ERASER || tool == Tool.SMUDGE
+        return g.mode == GuideMode.PERSPECTIVE && g.perspective3d && g.assistedDrawing && localIsTouching &&
+            strokeStarted && assistTool
     }
 
     /** 这一笔可能出现动态吸附导引线 (2D 透视 / 等轴测 / 2D 网格 且开了辅助绘图)。 */
@@ -3903,7 +3967,9 @@ class CanvasTouchView(context: Context) : View(context) {
         val style = v.cursorStyleMode
         realInk.cursorStyle = style
         val showWhileDrawing = cursorMode == 1 || cursorMode == 3
-        if (!showWhileDrawing || style == 4 || (t != Tool.BRUSH && t != Tool.ERASER && t != Tool.SMUDGE)) {
+        if (!showWhileDrawing || style == 4 || (t != Tool.BRUSH && t != Tool.ERASER && t != Tool.SMUDGE) ||
+            dynamicGuideAbortsFrame(v)
+        ) {
             realInk.cursorR = 0f
             realInk.symCursorCount = 0
             if (holeCursorBoxValid) invalidateHoleCursor()

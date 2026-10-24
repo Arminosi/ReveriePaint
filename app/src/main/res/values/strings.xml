@@ -2569,10 +2569,10 @@
     <string name="canvas_adjust_collapse">折叠面板</string>
     <string name="canvas_adjust_expand">展开面板</string>
     <string name="canvas_toast_scale_success">已将图像缩放至 %1$d × %2$d</string>
-    <string name="settings_sync">云同步</string>
-    <string name="settings_nav_sync_sub">使用你自己的 WebDAV 服务器备份与同步工程</string>
-    <string name="settings_group_sync">云同步与备份</string>
-    <string name="sync_page_title">云同步</string>
+    <string name="settings_sync">同步与备份</string>
+    <string name="settings_nav_sync_sub">使用 WebDAV 云端同步或本地归档备份数据</string>
+    <string name="settings_group_sync">同步与备份</string>
+    <string name="sync_page_title">同步与备份</string>
     <string name="sync_page_subtitle">无账号, 数据保存在你自有的服务器</string>
     <string name="sync_category_server">服务器</string>
     <string name="sync_field_server">服务器地址</string>

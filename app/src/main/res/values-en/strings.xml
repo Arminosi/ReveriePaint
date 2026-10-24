@@ -2569,10 +2569,10 @@
     <string name="canvas_adjust_collapse">Collapse panel</string>
     <string name="canvas_adjust_expand">Expand panel</string>
     <string name="canvas_toast_scale_success">Scaled image to %1$d × %2$d</string>
-    <string name="settings_sync">Cloud Sync</string>
-    <string name="settings_nav_sync_sub">Back up and sync projects to your own WebDAV server</string>
-    <string name="settings_group_sync">Cloud Sync &amp; Backup</string>
-    <string name="sync_page_title">Cloud Sync</string>
+    <string name="settings_sync">Sync &amp; Backup</string>
+    <string name="settings_nav_sync_sub">Sync and back up data via WebDAV or local archives</string>
+    <string name="settings_group_sync">Sync &amp; Backup</string>
+    <string name="sync_page_title">Sync &amp; Backup</string>
     <string name="sync_page_subtitle">Account-free; data stays on your own server</string>
     <string name="sync_category_server">Server</string>
     <string name="sync_field_server">Server address</string>

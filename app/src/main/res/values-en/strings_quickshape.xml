@@ -33,4 +33,10 @@
 
     <!-- Guide Mode Off Short Label -->
     <string name="guide_mode_off_short">Off</string>
+
+    <!-- Companion Guide Lines Switch -->
+    <string name="tool_guide_lines">Guide Lines</string>
+    <string name="tool_guide_lines_desc">Show or hide drawing guide lines without affecting assisted snapping</string>
+
+    <string name="quick_shape_stroke_too_large">Stroke is too large for QuickShape live editing</string>
 </resources>

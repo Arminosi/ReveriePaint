@@ -648,6 +648,16 @@ object ReverieCoreBridge {
 
     external fun touchStrokeCancel()
 
+    external fun setStrokeReplayClock(pixelsPerSecond: Double)
+    external fun setStrokeReplaySeed(seed: Int)
+    external fun currentStrokeSeed(): Int
+    external fun lastFlushHadInk(): Boolean
+    external fun stashOpenStrokePatch(): Boolean
+    external fun restoreStashedStrokePatchOpen(): Boolean
+    external fun commitStashedStrokePatch()
+    external fun revertOpenRestorePatch()
+    external fun discardStashedStrokePatch()
+
     external fun setBrushTexture(
         enabled: Boolean,
         scale: Double,

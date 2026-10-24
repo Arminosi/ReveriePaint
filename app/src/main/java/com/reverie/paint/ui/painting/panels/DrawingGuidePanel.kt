@@ -4,13 +4,7 @@
 
 package com.reverie.paint.ui.painting.panels
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -43,7 +37,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.reverie.paint.R
 import com.reverie.paint.core.PaintViewModel
-import com.reverie.paint.model.DrawingGuideConfig
 import com.reverie.paint.model.GuideMode
 import com.reverie.paint.model.Point2D
 import com.reverie.paint.model.SymmetryType
@@ -157,12 +150,19 @@ fun DrawingGuidePanel(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(
-                            text = androidx.compose.ui.res.stringResource(R.string.guide_assist_title),
-                            color = Morandi.text,
-                            fontSize = 12.5.sp,
-                            fontWeight = FontWeight.Medium,
-                        )
+                        Column {
+                            Text(
+                                text = androidx.compose.ui.res.stringResource(R.string.guide_assist_title),
+                                color = Morandi.text,
+                                fontSize = 12.5.sp,
+                                fontWeight = FontWeight.Medium,
+                            )
+                            Text(
+                                if (guide.mode == GuideMode.SYMMETRY) androidx.compose.ui.res.stringResource(R.string.guide_assist_symmetry_desc) else androidx.compose.ui.res.stringResource(R.string.guide_assist_align_desc),
+                                color = Morandi.subText,
+                                fontSize = 10.5.sp,
+                            )
+                        }
                         Switch(
                             checked = guide.assistedDrawing,
                             onCheckedChange = { vm.drawingGuide = guide.copy(assistedDrawing = it) },

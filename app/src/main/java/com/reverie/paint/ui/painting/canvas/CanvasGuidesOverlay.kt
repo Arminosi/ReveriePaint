@@ -13,6 +13,8 @@ import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.unit.dp
 import com.reverie.paint.core.PaintViewModel
 import com.reverie.paint.model.GuideMode
+import com.reverie.paint.model.PERSPECTIVE_RAY_COUNT_MAX
+import com.reverie.paint.model.PERSPECTIVE_RAY_COUNT_MIN
 import com.reverie.paint.model.Perspective3DMath
 import com.reverie.paint.model.Point2D
 import com.reverie.paint.model.Point3D
@@ -37,7 +39,7 @@ internal fun DrawScope.drawDrawingGuides(
     }
                 // ---- 绘图辅助与参考线渲染 (Drawing Guides & Symmetry) ----
                 val guide = vm.drawingGuide
-                if (guide.mode != GuideMode.OFF) {
+                if (guide.mode != GuideMode.OFF && vm.drawingGuideLinesVisible) {
                     val guideCol = parseColor(guide.colorHex).copy(alpha = guide.opacity)
                     val gStroke = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.dp.toPx() / (zoom * fitScale))
                     val docW = bmp.width.toFloat()

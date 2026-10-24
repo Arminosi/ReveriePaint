@@ -128,9 +128,10 @@ void ReverieCore::touchStrokeStart(qreal x, qreal y, qreal pressure, qreal tiltX
     m_strokeColor = m_brushColor;
     m_strokeOpacity = m_brushOpacity;
     m_idleKickPainted = false;
+    m_lastFlushHadInk = false;
     m_strokeTimer.restart();
     m_strokeCounter++;
-    const int strokeSeed = int(quint32(m_strokeCounter) * 1664525u + 1013904223u);
+    const int strokeSeed = (m_replaySeed >= 0) ? m_replaySeed : int(quint32(m_strokeCounter) * 1664525u + 1013904223u);
     m_randomSource = new KisRandomSource(strokeSeed);
     m_perStrokeRandomSource = new KisPerStrokeRandomSource();
     // The stroke paints straight onto the layer device with per-dab opacity
@@ -719,6 +720,11 @@ bool ReverieCore::appendStrokeSample(const QPointF &imgPos, qreal pressure, qrea
     s.rotation = rotation;
     if (timeSeconds >= 0.0) {
         s.time = timeSeconds;
+    } else if (m_replayPixelsPerSecond > 0.0) {
+        double lastTime = m_strokeSamples.isEmpty() ? 0.0 : m_strokeSamples.last().time;
+        QPointF lastPos = m_strokeSamples.isEmpty() ? m_strokeStartImg : m_strokeSamples.last().imgPos;
+        double dist = std::hypot(imgPos.x() - lastPos.x(), imgPos.y() - lastPos.y());
+        s.time = lastTime + dist / m_replayPixelsPerSecond;
     } else {
         s.time = m_strokeTimer.elapsed() / 1000.0;
     }
@@ -1371,6 +1377,9 @@ bool ReverieCore::flushStrokeBatch()
             }
         }
         if (m_dirtyCb) m_dirtyCb(m_dirtyCtx);
+        // gpu-render-v2: 本批落墨则记录 (原实现为 if (strokeHadInk) m_lastFlushHadInk = true,
+        // 本实现的 strokeHadInk 等价于 strokeDirty 非空), 供 Stash 事务恢复判断
+        m_lastFlushHadInk = true;
         bumpLayerThumbGen(m_layers[m_currentLayer].node);
     }
     return !strokeDirty.isNull();
@@ -1848,6 +1857,149 @@ bool ReverieCore::strokeAirbrushTick()
         markStrokeDirty(tickDirty);
     }
     return true;
+}
+
+void ReverieCore::setStrokeReplayClock(double pixelsPerSecond)
+{
+    m_replayPixelsPerSecond = (pixelsPerSecond > 0.0) ? pixelsPerSecond : 0.0;
+}
+
+void ReverieCore::setStrokeReplaySeed(int seed)
+{
+    m_replaySeed = seed;
+}
+
+int ReverieCore::currentStrokeSeed()
+{
+    return (m_replaySeed >= 0) ? m_replaySeed : int(quint32(m_strokeCounter) * 1664525u + 1013904223u);
+}
+
+bool ReverieCore::stashOpenStrokePatch()
+{
+    if (!m_document) return false;
+    KisPaintLayer *pl = (m_currentLayer >= 0 && m_currentLayer < m_layers.size())
+        ? dynamic_cast<KisPaintLayer *>(m_layers[m_currentLayer].node)
+        : nullptr;
+    if (!pl) return false;
+
+    KisPaintDeviceSP srcDevice = nullptr;
+    bool isIndirect = false;
+    if (pl->hasTemporaryTarget() && pl->temporaryTarget() && !pl->temporaryTarget()->exactBounds().isEmpty()) {
+        srcDevice = pl->temporaryTarget();
+        isIndirect = true;
+    } else {
+        srcDevice = pl->paintDevice();
+        isIndirect = false;
+    }
+    if (!srcDevice) return false;
+
+    const int margin = qMax(int(m_brushSize * 2.0), 32) + 16;
+    QRect strokeRect = m_accumulatedStrokeBounds.toAlignedRect().adjusted(-margin, -margin, margin, margin);
+    QRect docRect(0, 0, m_document->width(), m_document->height());
+    QRect cropRect = strokeRect.intersected(docRect);
+
+    if (cropRect.isEmpty() || cropRect.width() <= 0 || cropRect.height() <= 0) {
+        return false;
+    }
+
+    qint64 pixelCount = qint64(cropRect.width()) * qint64(cropRect.height());
+    if (pixelCount > 16000000) {
+        return false;
+    }
+
+    const int pixelSize = srcDevice->pixelSize();
+    qint64 byteCount = pixelCount * pixelSize;
+    m_strokeStash.bounds = cropRect;
+    m_strokeStash.bytes.resize(byteCount);
+    srcDevice->readBytes(reinterpret_cast<quint8 *>(m_strokeStash.bytes.data()), cropRect);
+    m_strokeStash.valid = true;
+    m_strokeStash.wasIndirect = isIndirect;
+    return true;
+}
+
+bool ReverieCore::restoreStashedStrokePatchOpen()
+{
+    if (!m_strokeStash.valid || m_strokeStash.bounds.isEmpty() || m_strokeStash.bytes.isEmpty()) {
+        return false;
+    }
+    KisPaintLayer *pl = (m_currentLayer >= 0 && m_currentLayer < m_layers.size())
+        ? dynamic_cast<KisPaintLayer *>(m_layers[m_currentLayer].node)
+        : nullptr;
+    if (!pl || !pl->paintDevice()) return false;
+
+    if (m_openRestoreTransaction) {
+        m_openRestoreTransaction->revert();
+        delete m_openRestoreTransaction;
+        m_openRestoreTransaction = nullptr;
+    }
+
+    m_openRestoreTransaction = new KisTransaction(pl->paintDevice());
+    if (m_strokeStash.wasIndirect) {
+        KisPaintDeviceSP tempDevice = new KisPaintDevice(pl->colorSpace());
+        tempDevice->writeBytes(reinterpret_cast<const quint8 *>(m_strokeStash.bytes.constData()), m_strokeStash.bounds);
+        KisPainter gc(pl->paintDevice());
+        pl->setupTemporaryPainter(&gc);
+        if (gc.compositeOpId().isEmpty()) {
+            gc.setCompositeOpId(QStringLiteral("normal"));
+        }
+        if (m_toolMode == ToolEraser) {
+            gc.setCompositeOpId(QStringLiteral("erase"));
+        }
+        if (m_selection) {
+            gc.setSelection(m_selection);
+        }
+        gc.setChannelFlags(pl->alphaLocked() ? pl->channelLockFlags() : QBitArray());
+        gc.bitBlt(m_strokeStash.bounds.topLeft(), tempDevice, m_strokeStash.bounds);
+        gc.end();
+    } else {
+        pl->paintDevice()->writeBytes(reinterpret_cast<const quint8 *>(m_strokeStash.bytes.constData()), m_strokeStash.bounds);
+    }
+    pl->paintDevice()->setDirty(m_strokeStash.bounds);
+    markRegionDirty(m_strokeStash.bounds);
+    recompositeProjection();
+    markDirty();
+    return true;
+}
+
+void ReverieCore::commitStashedStrokePatch()
+{
+    if (m_openRestoreTransaction) {
+        if (m_undoCaptureEnabled && m_document && m_document->undoAdapter()) {
+            m_openRestoreTransaction->commit(m_document->undoAdapter());
+        } else {
+            KUndo2Command *cmd = m_openRestoreTransaction->endAndTake();
+            delete cmd;
+        }
+        delete m_openRestoreTransaction;
+        m_openRestoreTransaction = nullptr;
+    }
+    m_strokeStash.valid = false;
+    m_strokeStash.wasIndirect = false;
+    m_strokeStash.bytes.clear();
+    m_strokeStash.bounds = QRect();
+}
+
+void ReverieCore::revertOpenRestorePatch()
+{
+    if (m_openRestoreTransaction) {
+        m_openRestoreTransaction->revert();
+        delete m_openRestoreTransaction;
+        m_openRestoreTransaction = nullptr;
+        if (KisPaintDeviceSP target = currentPaintDevice()) {
+            target->setDirty();
+        }
+        recompositeProjection();
+        markDirty();
+    }
+}
+
+void ReverieCore::discardStashedStrokePatch()
+{
+    revertOpenRestorePatch();
+    m_strokeStash.valid = false;
+    m_strokeStash.wasIndirect = false;
+    m_strokeStash.bytes.clear();
+    m_strokeStash.bounds = QRect();
 }
 
 // Fast ARM NEON SIMD blitter to convert Krita's native BGRA/ARGB32 projection bytes

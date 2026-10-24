@@ -2085,6 +2085,10 @@ class CanvasTouchView(context: Context) : View(context) {
     private fun checkHitGuideHandle(screenPos: Offset): Boolean {
         val v = vm ?: return false
         if (!drawingGuidePanelOpen && !v.drawingGuidePanelOpen) return false
+        if (!v.drawingGuideLinesVisible) {
+            draggingGuideHandleIndex = -1
+            return false
+        }
         val guide = v.drawingGuide
         if (guide.mode == GuideMode.PERSPECTIVE) {
             if (guide.perspective3d) {
@@ -5744,8 +5748,10 @@ class CanvasTouchView(context: Context) : View(context) {
                 }
 
                 v.quickShapeCapture?.let { capture ->
+                    // 已经按住认出之后，抬笔的几 dp 抖动不能清掉结果。继续画过 24dp 才重新计时。
+                    val slop = if (quickShapeCandidate != null) 24f * density else 5f * density
                     if (capture.moved(event.getX(pointerIndex), event.getY(pointerIndex),
-                            SystemClock.uptimeMillis(), 5f * density)) {
+                            SystemClock.uptimeMillis(), slop)) {
                         quickShapeCandidate = null
                         removeCallbacks(quickShapeHold)
                         postDelayed(quickShapeHold, 650L)
@@ -6821,13 +6827,15 @@ class CanvasTouchView(context: Context) : View(context) {
                 if (strokeStarted) {
                     cachedDriver?.feedbackManager?.setWritingHapticsEnabled(false)
                     cachedDriver?.feedbackManager?.stopStrokeSound()
-                    val candidate = quickShapeCandidate
                     val capture = v.quickShapeCapture
                     v.quickShapeCapture = null
+                    // 只有按住满 650ms 并且当时认出图形，抬笔才进入编辑。没按住的笔迹保持手绘。
+                    val recognized = quickShapeCandidate
                     quickShapeCandidate = null
-                    if (!isCancel && v.quickShapeEnabled && candidate != null && capture != null && !capture.overflowed) {
+                    if (!isCancel && v.quickShapeEnabled && effTool() == Tool.BRUSH &&
+                        recognized != null && capture != null && !capture.overflowed) {
                         realInk.release()
-                        val started = v.beginQuickShape(candidate, capture.snapshot())
+                        val started = v.beginQuickShape(recognized, capture.snapshot())
                         resetMirrorBranches()
                         safeEndSymmetryUndoMacro()
                         if (!started) {

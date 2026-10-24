@@ -83,6 +83,9 @@ data class QuickShapeResult(
     val contourCurved: Boolean = false,
 )
 
+const val PERSPECTIVE_RAY_COUNT_MIN = 6
+const val PERSPECTIVE_RAY_COUNT_MAX = 36
+
 /**
  * 绘图参考线配置
  */
@@ -97,7 +100,7 @@ data class DrawingGuideConfig(
     val symmetryCenterY: Float = 0.5f,
     val symmetryRotationDeg: Float = 0f, // 对称轴旋转角度 (度数)
     val perspectiveVanishingPoints: List<Point2D> = emptyList(), // 1~3 点透视点 (画布物理坐标)
-    val perspectiveRayCount: Int = 16, // 透视灭点放射线密度 (支持 2~120+ 自由定义)
+    val perspectiveRayCount: Int = 16, // 透视灭点放射线密度 (PERSPECTIVE_RAY_COUNT_MIN ~ PERSPECTIVE_RAY_COUNT_MAX, 支持自由定义)
     val perspective3d: Boolean = false, // 启用 3D 空间透视网格模式 (自由旋转视角)
     val perspectiveYawDeg: Float = 45f, // 3D 偏航角 (-180°..180°)
     val perspectivePitchDeg: Float = -20f, // 3D 俯仰角 (-85°..85°, 0° 为两点透视平视)

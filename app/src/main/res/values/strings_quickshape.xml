@@ -33,4 +33,10 @@
 
     <!-- 辅助模式单选简短文案 -->
     <string name="guide_mode_off_short">关</string>
+
+    <!-- 伴生辅助线开关 -->
+    <string name="tool_guide_lines">辅助线</string>
+    <string name="tool_guide_lines_desc">显示或隐藏绘图参考线，不影响吸附辅助</string>
+
+    <string name="quick_shape_stroke_too_large">笔画尺寸过大，无法启用速创形状实时编辑</string>
 </resources>

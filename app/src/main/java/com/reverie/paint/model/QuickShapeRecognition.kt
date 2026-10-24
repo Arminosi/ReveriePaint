@@ -3,7 +3,11 @@ package com.reverie.paint.model
 
 import kotlin.math.*
 
-/** Conservative recognition: an unsupported or ambiguous stroke stays freehand. */
+/**
+ * 原版保守识别。认不出或含糊的笔迹留在手绘。
+ * ShapeSnap 不替换这条流水线，只补原版两处结构性漏识：
+ * 端点缺口超过外接框的 22% 时原版直接放弃闭合图形；面积过小的扁三角形在拐角检查前就被丢掉。
+ */
 internal object QuickShapeRecognition {
     fun fit(input: List<Point2D>, recognizeArcs: Boolean, relaxed: Boolean,
             recognizeQuadrilaterals: Boolean, recognizeCurves: Boolean): QuickShapeResult? {
@@ -25,6 +29,10 @@ internal object QuickShapeRecognition {
             }
         }
         if (direct > span * 0.22f || length < span * 2f) {
+            // 缺口还在半个外接框以内，并且笔迹已经绕过一圈：用 ShapeSnap 补闭合图形。开口弧仍走下面的原版。
+            if (direct <= span * 0.45f && length >= span * 1.7f) {
+                recoverClosed(clean, trianglesOnly = false)?.let { return it }
+            }
             if (recognizeCurves) QuickShapeCurve.fit(points, length, relaxed)?.let { return it }
             return if (recognizeArcs) QuickShapeArc.fit(points, length, relaxed) else null
         }
@@ -39,13 +47,11 @@ internal object QuickShapeRecognition {
         val area = abs(loop.zipWithNext().sumOf { (a, b) ->
             a.x.toDouble() * b.y - b.x.toDouble() * a.y
         } / 2).toFloat()
-        if (area < span * span * 0.06f) return null
-        if (corners.size == 3 && convex(corners)) {
-            val perimeter = perimeter(corners)
-            if (length / perimeter in 0.9f..1.12f && pathError(points, corners) < span * 0.027f) {
-                return QuickShapeResult(QuickShapeType.TRIANGLE, corners, corners.reduce { a, b -> a + b } / 3f)
-            }
+        if (area < span * span * 0.06f) {
+            triangle(corners, points, length, span)?.let { return it }
+            return recoverClosed(clean, trianglesOnly = true)
         }
+        triangle(corners, points, length, span)?.let { return it }
         if (recognizeQuadrilaterals) {
             val tolerances = if (relaxed) listOf(0.035f, 0.05f, 0.07f) else listOf(0.035f)
             for (tolerance in tolerances) {
@@ -111,6 +117,32 @@ internal object QuickShapeRecognition {
             val r = (ellipse.radiusX + ellipse.radiusY) / 2f
             ellipse.copy(type = QuickShapeType.CIRCLE, radiusX = r, radiusY = r, rotationRad = 0f)
         } else ellipse
+    }
+
+    /** 原版三角形条件。扁三角形不再被面积门槛提前丢掉。 */
+    private fun triangle(corners: List<Point2D>, points: List<Point2D>, length: Float, span: Float): QuickShapeResult? {
+        if (corners.size != 3 || !convex(corners)) return null
+        val perimeter = perimeter(corners)
+        if (length / perimeter !in 0.9f..1.12f || pathError(points, corners) >= span * 0.027f) return null
+        return QuickShapeResult(QuickShapeType.TRIANGLE, corners, corners.reduce { a, b -> a + b } / 3f)
+    }
+
+    /**
+     * 只在原版已经放弃时调用。不要直线和圆弧，避免把开口笔迹吸走。
+     * 扁三角形这一路再限制为三角形，避免外接椭圆把扁形抢走。
+     */
+    private fun recoverClosed(raw: List<Point2D>, trianglesOnly: Boolean): QuickShapeResult? {
+        val shape = ShapeSnapDetector.detect(
+            raw,
+            recognizeArcs = false,
+            recognizeQuadrilaterals = false,
+        ) ?: return null
+        return when (shape.type) {
+            QuickShapeType.TRIANGLE -> shape
+            QuickShapeType.RECTANGLE, QuickShapeType.CIRCLE, QuickShapeType.ELLIPSE ->
+                if (trianglesOnly) null else shape
+            else -> null
+        }
     }
 
     private fun orientedBox(points: List<Point2D>, angle: Float, type: QuickShapeType): QuickShapeResult {

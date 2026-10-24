@@ -12,9 +12,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerId
@@ -24,7 +21,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.reverie.paint.core.PaintViewModel
-import com.reverie.paint.core.quickShapePreviewWidth
+import com.reverie.paint.core.requestQuickShapePreview
 import com.reverie.paint.model.CanvasViewTransform
 import com.reverie.paint.model.Point2D
 import com.reverie.paint.model.QuickShapeGeometry
@@ -49,15 +46,9 @@ internal fun QuickShapeEditor(
     var size by remember { mutableStateOf(IntSize.Zero) }
     val scale by rememberUpdatedState(fitScale)
     val density = LocalDensity.current.density
-    val outline = remember(shape) { QuickShapeGeometry.outline(shape) }
     val handles = remember(shape, vm.quickShapeBoxHandlesEnabled) {
         QuickShapeGeometry.handles(shape, vm.quickShapeBoxHandlesEnabled)
     }
-    val outlineColor = remember(vm.brushColor) {
-        val parsed = runCatching { Color(android.graphics.Color.parseColor(vm.brushColor)) }.getOrDefault(Morandi.accent)
-        parsed.copy(alpha = 0.55f)
-    }
-    val path = remember { Path() }
     val point = remember { FloatArray(2) }
     fun updateTransform() = transform.update(size.width, size.height, panX.value, panY.value,
         zoom.value, scale, rotation.value, vm.renderW, vm.renderH, vm.docWidth, vm.docHeight,
@@ -119,9 +110,11 @@ internal fun QuickShapeEditor(
                         if (!cancelled && !vm.quickShapeCommitting && change != null &&
                             (change.pressed || change.previousPressed)) {
                             transform.screenToDoc(change.position.x, change.position.y, point)
-                            vm.activeQuickShape = QuickShapeGeometry.drag(original, handle, from, Point2D(point[0], point[1]),
+                            val updated = QuickShapeGeometry.drag(original, handle, from, Point2D(point[0], point[1]),
                                 vm.quickShapeAngleSnapEnabled, reshape, vm.quickShapeBoxHandlesEnabled,
-                                original.contourCurved)
+                                vm.quickShapeCurvedContourEnabled)
+                            vm.activeQuickShape = updated
+                            vm.requestQuickShapePreview(updated)
                         }
                     }
                     event.changes.forEach { it.consume() }
@@ -130,26 +123,6 @@ internal fun QuickShapeEditor(
             }
         }) {
             updateTransform()
-
-            val outlineWidth = (vm.quickShapePreviewWidth * zoom.value * fitScale).coerceAtLeast(1f)
-
-            // 顶层半透明等宽形状框：无论开启逐点压感与否，指示框均严格等宽、无压感、半透明
-            path.reset()
-            outline.forEachIndexed { i, p ->
-                transform.docToScreen(p.x, p.y, point)
-                if (i == 0) path.moveTo(point[0], point[1]) else path.lineTo(point[0], point[1])
-            }
-            drawPath(
-                path = path,
-                color = outlineColor,
-                style = Stroke(
-                    width = outlineWidth,
-                    cap = StrokeCap.Round,
-                    join = StrokeJoin.Round,
-                ),
-            )
-
-            // 控制点手柄
             handles.forEachIndexed { i, p ->
                 transform.docToScreen(p.x, p.y, point)
                 val pos = Offset(point[0], point[1])

@@ -123,6 +123,7 @@ internal fun Modifier.reorderDragGesture(
                             change.consume()
                             endDispatched = true
                             if (totalMoveDist < touchSlop) {
+                                currentOnDragCancel()
                                 currentOnLongPressOnly()
                             } else {
                                 currentOnDragEnd()

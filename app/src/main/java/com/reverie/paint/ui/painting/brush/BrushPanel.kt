@@ -556,6 +556,8 @@ fun BrushPanel(
                                                         }
                                                     },
                                                     onLongPressOnly = {
+                                                        draggingCategory = null
+                                                        categoryAutoScrollSpeed = 0f
                                                         categoryMenuTarget = cat
                                                     },
                                                     onDragStart = { offset ->
@@ -1079,6 +1081,8 @@ fun BrushPanel(
                                                                         else vm.selectBrushPreset(preset.index)
                                                                     },
                                                                     onLongPressOnly = {
+                                                                        draggingPresetGridName = null
+                                                                        presetGridAutoScrollSpeed = 0f
                                                                         reorderPresetName = preset.name
                                                                     },
                                                                     onDragStart = { offset ->
@@ -1219,6 +1223,8 @@ fun BrushPanel(
                                                                         else vm.selectBrushPreset(preset.index)
                                                                     },
                                                                     onLongPressOnly = {
+                                                                        draggingPresetName = null
+                                                                        presetListAutoScrollSpeed = 0f
                                                                         reorderPresetName = preset.name
                                                                     },
                                                                     onDragStart = { offset ->
@@ -1611,7 +1617,11 @@ fun BrushPanel(
             isBuiltIn = isBuiltIn,
             isFavorite = isFav,
             isModified = isModified,
-            onDismiss = { reorderPresetName = null },
+            onDismiss = {
+                reorderPresetName = null
+                draggingPresetName = null
+                draggingPresetGridName = null
+            },
             onToggleFavorite = { vm.toggleFavoriteBrush(rp) },
             onShare = { vm.shareBrushPreset(context, rp) },
             onReset = { vm.resetBrushPresetToDefault(rp) },

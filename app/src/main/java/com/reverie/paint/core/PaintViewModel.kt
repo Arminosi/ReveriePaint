@@ -3797,7 +3797,7 @@ class PaintViewModel : ViewModel() {
                 com.reverie.paint.model.FloatingUiConfig.DEFAULT_PANEL_ORDER
             }
             floatingUiConfig = com.reverie.paint.model.FloatingUiConfig(
-                enabled = isTabletDevice && floatingSavedEnabled,
+                enabled = floatingSavedEnabled,
                 topBarPosition = com.reverie.paint.model.PanelPosition(
                     edge = runCatching { com.reverie.paint.model.PanelEdge.valueOf(topBarEdgeName) }.getOrDefault(com.reverie.paint.model.PanelEdge.TOP),
                     alignment = runCatching { com.reverie.paint.model.PanelAlignment.valueOf(topBarAlignName) }.getOrDefault(com.reverie.paint.model.PanelAlignment.END),

@@ -2123,8 +2123,11 @@
     <string name="theme_layout_docked">Default Docked Layout</string>
     <string name="theme_layout_docked_desc">Classic docked layout with tool rails and sliders anchored to screen edges</string>
     <string name="theme_layout_floating">Floating Mode</string>
-    <string name="theme_layout_floating_desc">Tablet Exclusive: Top bar, tools, and sliders become floating capsules with customizable docking edges</string>
+    <string name="theme_layout_floating_desc">Best suited for large screens; may obstruct canvas on small screens</string>
     <string name="theme_layout_floating_tablet_only">Floating mode is only supported on tablet devices</string>
+    <string name="theme_floating_small_screen_title">Notice</string>
+    <string name="theme_floating_small_screen_msg">The current screen or window size is small. Enabling floating UI may cause panels to overlap or obstruct the canvas. Do you want to continue?</string>
+    <string name="common_confirm_enable">Continue</string>
     <string name="panel_dock_config_title">Floating Panel Docking</string>
     <string name="panel_dock_topbar">Top Bar</string>
     <string name="panel_dock_toolrail">Tool Rail</string>

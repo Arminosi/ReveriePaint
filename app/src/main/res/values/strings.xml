@@ -2123,8 +2123,11 @@
     <string name="theme_layout_docked">默认贴边布局</string>
     <string name="theme_layout_docked_desc">经典停靠布局，工具栏和滑块贴边停靠</string>
     <string name="theme_layout_floating">自由悬浮模式</string>
-    <string name="theme_layout_floating_desc">平板专属：顶栏、工具栏与滑块转为悬浮胶囊，可自由指定停靠边缘</string>
+    <string name="theme_layout_floating_desc">更适合大屏设备，小屏使用可能遮挡画布</string>
     <string name="theme_layout_floating_tablet_only">自由悬浮模式仅在平板设备上支持</string>
+    <string name="theme_floating_small_screen_title">提示</string>
+    <string name="theme_floating_small_screen_msg">当前屏幕或窗口尺寸较小，启用悬浮布局可能会导致工具栏与面板重叠或遮挡画布，是否继续开启？</string>
+    <string name="common_confirm_enable">继续开启</string>
     <string name="panel_dock_config_title">悬浮面板停靠配置</string>
     <string name="panel_dock_topbar">顶部栏 (TopBar)</string>
     <string name="panel_dock_toolrail">工具栏 (Tools)</string>

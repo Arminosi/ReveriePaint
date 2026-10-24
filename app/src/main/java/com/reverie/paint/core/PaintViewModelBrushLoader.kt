@@ -59,6 +59,8 @@ internal fun PaintViewModel.loadBrushPresets(force: Boolean = false) {
                 bootstrapBrushStore(d.first)
                 d
             }
+            // S2.3 一次性记录修复：必须在首次 selectBrushPreset（loadBrushPresetsAfterAssets 内）之前完成
+            com.reverie.paint.core.brushstore.ParityRepair.runOnce(this@loadBrushPresets)
             loadBrushPresetsAfterAssets(dirs.first, dirs.second)
         } catch (t: Throwable) {
             android.util.Log.e("ReveriePaint", "loadBrushPresets IO failed", t)

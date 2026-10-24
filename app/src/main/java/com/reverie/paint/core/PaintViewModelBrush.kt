@@ -840,6 +840,8 @@ import kotlinx.coroutines.withContext
             applyToolParamMemoryOverlay(preset?.name)
             checkBrushSizeLimit()
         }) {
+            // S2.4 非 ABR 延迟修复：pending 命中时用上游未定制基线重建记录（只影响后续选择）
+            com.reverie.paint.core.brushstore.ParityRepair.repairPendingForSelect(this, index, preset)
             if (ReverieCoreBridge.loadBrushPreset(index)) {
                 Breadcrumbs.record("Brush", "Load preset [$index]: ${preset?.name}")
                 // 分组元数据覆盖 C++ 名字启发式; 必须在 loadBrushPreset 之后下发,

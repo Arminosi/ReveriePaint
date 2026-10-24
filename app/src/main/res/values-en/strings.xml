@@ -1597,6 +1597,11 @@
     <string name="brush_dynamics_live_cursor">Live Feedback</string>
     <string name="brush_dynamics_strength">Dynamic Strength</string>
     <string name="brush_studio_revert_changes">Revert Changes</string>
+    <string name="brush_studio_revert_short">Revert</string>
+    <string name="brush_studio_scratchpad_short">Draw</string>
+    <string name="brush_studio_new_short">New</string>
+    <string name="brush_studio_duplicate_short">Copy</string>
+    <string name="brush_studio_import_short">Import</string>
     <string name="brush_studio_revert_confirm">Discard all changes made during this studio session and revert to initial state? This cannot be undone.</string>
     <string name="brush_studio_revert_toast">Reverted to state before entering studio</string>
     <string name="brush_studio_scratchpad_toggle">Scratchpad</string>

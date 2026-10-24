@@ -1597,6 +1597,11 @@
     <string name="brush_dynamics_live_cursor">实时动态响应</string>
     <string name="brush_dynamics_strength">动态影响强度</string>
     <string name="brush_studio_revert_changes">还原修改</string>
+    <string name="brush_studio_revert_short">还原</string>
+    <string name="brush_studio_scratchpad_short">试画</string>
+    <string name="brush_studio_new_short">新建</string>
+    <string name="brush_studio_duplicate_short">复制</string>
+    <string name="brush_studio_import_short">导入</string>
     <string name="brush_studio_revert_confirm">确定要放弃本次进入工作台后的所有修改，还原至初始状态吗？此操作无法撤销</string>
     <string name="brush_studio_revert_toast">已还原至进入工作台前的状态</string>
     <string name="brush_studio_scratchpad_toggle">试画板</string>

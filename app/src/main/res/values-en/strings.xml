@@ -2934,5 +2934,51 @@
     <string name="shading_assist_color_edge_snap_tol">Snap Tolerance</string>
     <string name="shading_assist_morphological_smooth">Cel Smoothing</string>
     <string name="shading_assist_ambient_occlusion">Crevice AO</string>
+
+    <!-- Gesture Controls -->
+    <string name="gesture_settings_title">Gesture Controls</string>
+    <string name="gesture_settings_subtitle">Customize gestures for painting operations with fast Procreate-style blind actions</string>
+    <string name="gesture_category_quick_menu">Quick Menu</string>
+    <string name="gesture_category_undo_redo">Undo &amp; Redo</string>
+    <string name="gesture_category_canvas_view">Canvas &amp; View</string>
+    <string name="gesture_category_tools">Color &amp; Assistants</string>
+    <string name="gesture_screenshot_tip">Tip: If system 3-finger screenshot is enabled, it may intercept 3-finger swipe down. Try using Touch &amp; Slide or 4-finger tap</string>
+    <string name="gesture_conflict_toast">Gesture \"%1$s\" reassigned from \"%2$s\" to \"%3$s\"</string>
+    <string name="gesture_touch_slide_warning">Single-finger touch &amp; slide enabled; single-finger canvas pan disabled</string>
+    <string name="gesture_reset_defaults">Reset Gestures to Default</string>
+    <string name="gesture_reset_defaults_done">Gestures reset to default</string>
+
+    <string name="gesture_action_quick_menu">Quick Menu</string>
+    <string name="gesture_action_quick_menu_desc">Open 6-capsule floating quick edit menu</string>
+    <string name="gesture_action_undo">Undo</string>
+    <string name="gesture_action_undo_desc">Undo last stroke or action</string>
+    <string name="gesture_action_redo">Redo</string>
+    <string name="gesture_action_redo_desc">Redo last undone stroke</string>
+    <string name="gesture_action_fullscreen">Fullscreen Mode</string>
+    <string name="gesture_action_fullscreen_desc">Toggle visibility of all bars and panels</string>
+    <string name="gesture_action_eyedropper">Eyedropper</string>
+    <string name="gesture_action_eyedropper_desc">Pick color from current canvas pixels</string>
+    <string name="gesture_action_fit_canvas">Fit Canvas</string>
+    <string name="gesture_action_fit_canvas_desc">Center and scale canvas view to fit screen</string>
+    <string name="gesture_action_clear_layer">Clear Layer</string>
+    <string name="gesture_action_clear_layer_desc">Quickly clear current layer content</string>
+    <string name="gesture_action_none">Disabled</string>
+
+    <string name="gesture_trigger_single_finger_touch_slide">Touch &amp; Slide</string>
+    <string name="gesture_trigger_single_finger_touch_slide_desc">Touch to summon menu, slide in direction to trigger instantly; tap stays open (disables single-finger canvas pan)</string>
+    <string name="gesture_trigger_two_finger_tap">Two-Finger Tap</string>
+    <string name="gesture_trigger_two_finger_double_tap">Two-Finger Double Tap</string>
+    <string name="gesture_trigger_two_finger_long_press">Two-Finger Long Press</string>
+    <string name="gesture_trigger_three_finger_tap">Three-Finger Tap</string>
+    <string name="gesture_trigger_three_finger_double_tap">Three-Finger Double Tap</string>
+    <string name="gesture_trigger_three_finger_long_press">Three-Finger Long Press</string>
+    <string name="gesture_trigger_three_finger_swipe_down">Three-Finger Swipe Down</string>
+    <string name="gesture_trigger_three_finger_swipe_up">Three-Finger Swipe Up</string>
+    <string name="gesture_trigger_three_finger_swipe_left">Three-Finger Swipe Left</string>
+    <string name="gesture_trigger_three_finger_swipe_right">Three-Finger Swipe Right</string>
+    <string name="gesture_trigger_four_finger_tap">Four-Finger Tap</string>
+    <string name="gesture_trigger_single_finger_long_press">Single-Finger Long Press</string>
+    <string name="gesture_trigger_quick_pinch">Quick Pinch</string>
+    <string name="gesture_trigger_none">None</string>
 </resources>
 

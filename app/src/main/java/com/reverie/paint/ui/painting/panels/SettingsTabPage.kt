@@ -11,10 +11,19 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.ui.draw.shadow
+import com.reverie.paint.model.GestureAction
+import com.reverie.paint.model.GestureTrigger
+import com.reverie.paint.model.labelRes
+import com.reverie.paint.model.descRes
 import com.reverie.paint.ui.theme.glassBorder
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -86,9 +95,19 @@ internal fun SettingsTabPage(
     var recordingShortcut by remember { mutableStateOf<ShortcutDefinition?>(null) }
     var smoothingAdvancedExpanded by remember { mutableStateOf(false) }
     var canvasEditMenuCustomizeOpen by remember { mutableStateOf(false) }
+    var selectingActionForTrigger by remember { mutableStateOf<GestureAction?>(null) }
 
     if (canvasEditMenuCustomizeOpen) {
         CanvasEditMenuCustomizeDialog(vm, onDismiss = { canvasEditMenuCustomizeOpen = false })
+    }
+
+    selectingActionForTrigger?.let { action ->
+        GestureTriggerPickerDialog(
+            action = action,
+            currentTrigger = vm.gestureConfig.getTrigger(action),
+            vm = vm,
+            onDismiss = { selectingActionForTrigger = null },
+        )
     }
 
     AnimatedContent(
@@ -518,86 +537,123 @@ internal fun SettingsTabPage(
                         onBack = { currentSubPage = null },
                     )
 
+                    // 卡片 1: 动作手势映射
+                    SettingsCard {
+                        // 快捷菜单
+                        GestureActionRow(
+                            action = GestureAction.QUICK_MENU,
+                            trigger = vm.gestureConfig.getTrigger(GestureAction.QUICK_MENU),
+                            onClick = { selectingActionForTrigger = GestureAction.QUICK_MENU },
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+                            horizontalArrangement = Arrangement.End,
+                        ) {
+                            TextButton(
+                                onClick = { canvasEditMenuCustomizeOpen = true },
+                                colors = ButtonDefaults.textButtonColors(contentColor = Morandi.accent),
+                            ) {
+                                Text(stringResource(R.string.canvas_edit_customize), fontSize = 12.sp)
+                            }
+                        }
+
+                        SettingsInnerDivider()
+
+                        // 撤销
+                        GestureActionRow(
+                            action = GestureAction.UNDO,
+                            trigger = vm.gestureConfig.getTrigger(GestureAction.UNDO),
+                            onClick = { selectingActionForTrigger = GestureAction.UNDO },
+                        )
+
+                        SettingsInnerDivider()
+
+                        // 重做
+                        GestureActionRow(
+                            action = GestureAction.REDO,
+                            trigger = vm.gestureConfig.getTrigger(GestureAction.REDO),
+                            onClick = { selectingActionForTrigger = GestureAction.REDO },
+                        )
+
+                        SettingsInnerDivider()
+
+                        // 全屏纯净模式
+                        GestureActionRow(
+                            action = GestureAction.FULLSCREEN,
+                            trigger = vm.gestureConfig.getTrigger(GestureAction.FULLSCREEN),
+                            onClick = { selectingActionForTrigger = GestureAction.FULLSCREEN },
+                        )
+
+                        SettingsInnerDivider()
+
+                        // 适应画布
+                        GestureActionRow(
+                            action = GestureAction.FIT_CANVAS,
+                            trigger = vm.gestureConfig.getTrigger(GestureAction.FIT_CANVAS),
+                            onClick = { selectingActionForTrigger = GestureAction.FIT_CANVAS },
+                        )
+
+                        SettingsInnerDivider()
+
+                        // 吸管取色
+                        GestureActionRow(
+                            action = GestureAction.EYEDROPPER,
+                            trigger = vm.gestureConfig.getTrigger(GestureAction.EYEDROPPER),
+                            onClick = { selectingActionForTrigger = GestureAction.EYEDROPPER },
+                        )
+
+                        SettingsInnerDivider()
+
+                        // 清空当前图层
+                        GestureActionRow(
+                            action = GestureAction.CLEAR_LAYER,
+                            trigger = vm.gestureConfig.getTrigger(GestureAction.CLEAR_LAYER),
+                            onClick = { selectingActionForTrigger = GestureAction.CLEAR_LAYER },
+                        )
+
+                        SettingsInnerDivider()
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                            horizontalArrangement = Arrangement.Center,
+                        ) {
+                            TextButton(
+                                onClick = { vm.resetGestureConfigToDefaults() },
+                                colors = ButtonDefaults.textButtonColors(contentColor = Morandi.accent),
+                            ) {
+                                Icon(
+                                    painterResource(R.drawable.ic_refresh),
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(stringResource(R.string.gesture_reset_defaults), fontSize = 12.sp)
+                            }
+                        }
+                    }
+
+                    // 系统截屏提示
+                    if (vm.gestureConfig.getTrigger(GestureAction.QUICK_MENU) == GestureTrigger.THREE_FINGER_SWIPE_DOWN) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(Morandi.panelHi.copy(alpha = 0.5f))
+                                .border(1.dp, Morandi.border.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
+                                .padding(10.dp),
+                        ) {
+                            Text(
+                                stringResource(R.string.gesture_screenshot_tip),
+                                color = Morandi.subText,
+                                fontSize = 11.sp,
+                                lineHeight = 16.sp,
+                            )
+                        }
+                    }
+
+                    // 卡片 2: 辅助与画布控制
                     SettingsCard {
                         QuickShapeSettingRow(vm)
-                        SettingsInnerDivider()
-
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                        ) {
-                            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                                Text(stringResource(R.string.settings_two_finger_undo_title), color = Morandi.text, fontSize = 13.sp)
-                                Text(stringResource(R.string.settings_two_finger_undo_desc), color = Morandi.subText, fontSize = 11.sp)
-                            }
-                            ReSwitch(
-                                checked = vm.gestureTwoFingerUndo,
-                                onChecked = { vm.updateGestureTwoFingerUndo(it) },
-                            )
-                        }
-
-                        SettingsInnerDivider()
-
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                        ) {
-                            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                                Text(stringResource(R.string.settings_three_finger_redo_title), color = Morandi.text, fontSize = 13.sp)
-                                Text(stringResource(R.string.settings_three_finger_redo_desc), color = Morandi.subText, fontSize = 11.sp)
-                            }
-                            ReSwitch(
-                                checked = vm.gestureThreeFingerRedo,
-                                onChecked = { vm.updateGestureThreeFingerRedo(it) },
-                            )
-                        }
-
-                        SettingsInnerDivider()
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                        ) {
-                            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                                Text(stringResource(R.string.settings_three_finger_edit_title), color = Morandi.text, fontSize = 13.sp)
-                                Text(stringResource(R.string.settings_three_finger_edit_desc), color = Morandi.subText, fontSize = 11.sp)
-                            }
-                            ReSwitch(
-                                checked = vm.gestureThreeFingerEditMenu,
-                                onChecked = { vm.updateGestureThreeFingerEditMenu(it) },
-                            )
-                        }
-                        TextButton(
-                            onClick = { canvasEditMenuCustomizeOpen = true },
-                            colors = ButtonDefaults.textButtonColors(contentColor = Morandi.accent),
-                        ) {
-                            Text(stringResource(R.string.canvas_edit_customize))
-                        }
-
-                        SettingsInnerDivider()
-
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                        ) {
-                            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                                Text(stringResource(R.string.settings_quick_pinch_fit_title), color = Morandi.text, fontSize = 13.sp)
-                                Text(stringResource(R.string.settings_quick_pinch_fit_desc), color = Morandi.subText, fontSize = 11.sp)
-                            }
-                            ReSwitch(
-                                checked = vm.gestureQuickPinchFit,
-                                onChecked = { vm.updateGestureQuickPinchFit(it) },
-                            )
-                        }
 
                         SettingsInnerDivider()
 
@@ -1608,5 +1664,153 @@ private fun SubPageHeader(
             )
         }
         action?.invoke()
+    }
+}
+
+@Composable
+private fun GestureTriggerPickerDialog(
+    action: GestureAction,
+    currentTrigger: GestureTrigger,
+    vm: PaintViewModel,
+    onDismiss: () -> Unit,
+) {
+    val supported = com.reverie.paint.model.GestureConfig.SUPPORTED_TRIGGERS[action] ?: emptyList()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                stringResource(action.labelRes()),
+                color = Morandi.text,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    stringResource(action.descRes()),
+                    color = Morandi.subText,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
+                supported.forEach { trigger ->
+                    val isSelected = trigger == currentTrigger
+                    val boundAction = if (trigger != GestureTrigger.NONE) {
+                        vm.gestureConfig.getActionForTrigger(trigger)?.takeIf { it != action }
+                    } else null
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (isSelected) Morandi.accent.copy(alpha = 0.12f) else Color.Transparent)
+                            .clickable {
+                                vm.updateGestureTrigger(action, trigger)
+                                onDismiss()
+                            }
+                            .padding(horizontal = 8.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(
+                            selected = isSelected,
+                            onClick = {
+                                vm.updateGestureTrigger(action, trigger)
+                                onDismiss()
+                            },
+                            colors = RadioButtonDefaults.colors(
+                                selectedColor = Morandi.accent,
+                                unselectedColor = Morandi.subText,
+                            ),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    stringResource(trigger.labelRes()),
+                                    color = if (isSelected) Morandi.accent else Morandi.text,
+                                    fontSize = 13.sp,
+                                    fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
+                                )
+                                if (boundAction != null) {
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        "(${stringResource(boundAction.labelRes())})",
+                                        color = Morandi.subText,
+                                        fontSize = 11.sp,
+                                    )
+                                }
+                            }
+                            if (trigger == GestureTrigger.SINGLE_FINGER_TOUCH_SLIDE) {
+                                Text(
+                                    stringResource(R.string.gesture_trigger_single_finger_touch_slide_desc),
+                                    color = Morandi.subText,
+                                    fontSize = 11.sp,
+                                    lineHeight = 14.sp,
+                                    modifier = Modifier.padding(top = 2.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.close), color = Morandi.accent)
+            }
+        },
+        containerColor = Morandi.panel,
+        shape = RoundedCornerShape(16.dp),
+    )
+}
+
+@Composable
+private fun GestureActionRow(
+    action: GestureAction,
+    trigger: GestureTrigger,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+            Text(stringResource(action.labelRes()), color = Morandi.text, fontSize = 13.sp)
+            Text(stringResource(action.descRes()), color = Morandi.subText, fontSize = 11.sp)
+        }
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = if (trigger == GestureTrigger.NONE) Morandi.panelHi.copy(alpha = 0.5f) else Morandi.accent.copy(alpha = 0.15f),
+            border = BorderStroke(1.dp, if (trigger == GestureTrigger.NONE) Morandi.border.copy(alpha = 0.4f) else Morandi.accent.copy(alpha = 0.35f)),
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    stringResource(trigger.labelRes()),
+                    color = if (trigger == GestureTrigger.NONE) Morandi.subText else Morandi.accent,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+                Icon(
+                    painterResource(R.drawable.ic_chevron),
+                    contentDescription = null,
+                    tint = if (trigger == GestureTrigger.NONE) Morandi.subText else Morandi.accent,
+                    modifier = Modifier.size(14.dp),
+                )
+            }
+        }
     }
 }

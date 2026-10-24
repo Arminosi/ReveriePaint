@@ -2934,5 +2934,51 @@
     <string name="shading_assist_color_edge_snap_tol">吸附容差</string>
     <string name="shading_assist_morphological_smooth">赛璐珞平滑</string>
     <string name="shading_assist_ambient_occlusion">死角接触 AO</string>
+
+    <!-- 手势自定义与控制 (Gesture Controls) -->
+    <string name="gesture_settings_title">手势控制</string>
+    <string name="gesture_settings_subtitle">自定义各个绘画操作的触发手势，提供类 Procreate 的极速盲操体验</string>
+    <string name="gesture_category_quick_menu">快捷菜单</string>
+    <string name="gesture_category_undo_redo">撤销与恢复</string>
+    <string name="gesture_category_canvas_view">画布与视图</string>
+    <string name="gesture_category_tools">取色与辅助</string>
+    <string name="gesture_screenshot_tip">提示：若设备系统开启了「三指下滑截屏」，可能会拦截三指下滑，建议改用「单指点击与滑动」或「四指轻点」</string>
+    <string name="gesture_conflict_toast">手势「%1$s」已从「%2$s」切换至「%3$s」</string>
+    <string name="gesture_touch_slide_warning">已开启单指点击与滑动，单指平移画布已自动禁用</string>
+    <string name="gesture_reset_defaults">恢复默认手势</string>
+    <string name="gesture_reset_defaults_done">已恢复默认手势设置</string>
+
+    <string name="gesture_action_quick_menu">快捷菜单</string>
+    <string name="gesture_action_quick_menu_desc">呼出六键悬浮快捷编辑菜单</string>
+    <string name="gesture_action_undo">撤销</string>
+    <string name="gesture_action_undo_desc">撤销上一笔绘制或操作</string>
+    <string name="gesture_action_redo">重做</string>
+    <string name="gesture_action_redo_desc">恢复上一笔被撤销的操作</string>
+    <string name="gesture_action_fullscreen">全屏纯净模式</string>
+    <string name="gesture_action_fullscreen_desc">隐藏或显示所有顶栏与工具面板</string>
+    <string name="gesture_action_eyedropper">吸管取色</string>
+    <string name="gesture_action_eyedropper_desc">吸取画布当前像素颜色</string>
+    <string name="gesture_action_fit_canvas">快速适应画布</string>
+    <string name="gesture_action_fit_canvas_desc">将画布视图居中并缩放至适合屏幕</string>
+    <string name="gesture_action_clear_layer">清除当前图层</string>
+    <string name="gesture_action_clear_layer_desc">快速清空当前选中图层内容</string>
+    <string name="gesture_action_none">禁用</string>
+
+    <string name="gesture_trigger_single_finger_touch_slide">单指点击与滑动</string>
+    <string name="gesture_trigger_single_finger_touch_slide_desc">手指触屏展开菜单，划向目标方向直接盲操触发；单击仍可常驻展示（将禁用单指平移画布）</string>
+    <string name="gesture_trigger_two_finger_tap">双指轻点</string>
+    <string name="gesture_trigger_two_finger_double_tap">双指双击</string>
+    <string name="gesture_trigger_two_finger_long_press">双指长按</string>
+    <string name="gesture_trigger_three_finger_tap">三指轻点</string>
+    <string name="gesture_trigger_three_finger_double_tap">三指双击</string>
+    <string name="gesture_trigger_three_finger_long_press">三指长按</string>
+    <string name="gesture_trigger_three_finger_swipe_down">三指下滑</string>
+    <string name="gesture_trigger_three_finger_swipe_up">三指上滑</string>
+    <string name="gesture_trigger_three_finger_swipe_left">三指左滑</string>
+    <string name="gesture_trigger_three_finger_swipe_right">三指右滑</string>
+    <string name="gesture_trigger_four_finger_tap">四指轻点</string>
+    <string name="gesture_trigger_single_finger_long_press">单指长按</string>
+    <string name="gesture_trigger_quick_pinch">快速双捏</string>
+    <string name="gesture_trigger_none">无</string>
 </resources>
 

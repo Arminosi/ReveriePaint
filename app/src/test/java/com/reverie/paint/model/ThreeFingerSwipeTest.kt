@@ -36,14 +36,34 @@ class ThreeFingerSwipeTest {
         assertFalse(gesture.isTap(1200L))
     }
 
-    @Test fun `horizontal and upward swipes are rejected`() {
-        for ((x, y) in listOf(60f to 100f, 0f to 40f)) {
-            val gesture = tracker()
-            for (i in 0..2) gesture.update(i, i * 40f + x, y)
-            gesture.evaluate(1200L)
-            assertTrue(gesture.rejected)
-            assertFalse(gesture.swiped)
-        }
+    @Test fun `three fingers moving in all four cardinal directions are recognized`() {
+        // Down
+        val downGesture = tracker()
+        for (i in 0..2) downGesture.update(i, i * 40f, 156f)
+        downGesture.evaluate(1200L)
+        assertTrue(downGesture.swiped)
+        assertEquals(SwipeDirection.DOWN, downGesture.swipeDirection)
+
+        // Up
+        val upGesture = tracker()
+        for (i in 0..2) upGesture.update(i, i * 40f, 44f)
+        upGesture.evaluate(1200L)
+        assertTrue(upGesture.swiped)
+        assertEquals(SwipeDirection.UP, upGesture.swipeDirection)
+
+        // Left
+        val leftGesture = tracker()
+        for (i in 0..2) leftGesture.update(i, i * 40f - 56f, 100f)
+        leftGesture.evaluate(1200L)
+        assertTrue(leftGesture.swiped)
+        assertEquals(SwipeDirection.LEFT, leftGesture.swipeDirection)
+
+        // Right
+        val rightGesture = tracker()
+        for (i in 0..2) rightGesture.update(i, i * 40f + 56f, 100f)
+        rightGesture.evaluate(1200L)
+        assertTrue(rightGesture.swiped)
+        assertEquals(SwipeDirection.RIGHT, rightGesture.swipeDirection)
     }
 
     @Test fun `pinching and unequal finger travel do not open menu`() {
@@ -88,20 +108,6 @@ class ThreeFingerSwipeTest {
         for (i in 0..2) gesture.setStart(i, i * 40f, 100f)
         assertTrue(gesture.isTap(2100L))
         assertFalse(gesture.swiped)
-    }
-    @Test fun `invalid travel on any pointer rejects before an unfinished pointer returns`() {
-        for (pointer in 0..2) {
-            for ((dx, dy) in listOf(60f to 0f, 0f to -20f)) {
-                val gesture = tracker()
-                gesture.update(pointer, pointer * 40f + dx, 100f + dy)
-                gesture.evaluate(1100L)
-                assertTrue("pointer $pointer must reject the gesture", gesture.rejected)
-                for (i in 0..2) gesture.update(i, i * 40f, 160f)
-                gesture.evaluate(1200L)
-                assertFalse(gesture.swiped)
-                assertFalse(gesture.isTap(1200L))
-            }
-        }
     }
 
     @Test fun `valid staggered travel waits for every finger without rejection`() {

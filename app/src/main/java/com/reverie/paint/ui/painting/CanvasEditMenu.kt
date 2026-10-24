@@ -1,6 +1,11 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package com.reverie.paint.ui.painting
 
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -11,6 +16,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
@@ -20,39 +28,102 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.reverie.paint.R
 import com.reverie.paint.core.PaintViewModel
-import com.reverie.paint.core.editCanvasClipboard
 import com.reverie.paint.model.CanvasEditAction
 import com.reverie.paint.ui.theme.Morandi
 
-/** Six floating capsules around the editor entry; the artwork stays visible between them. */
+/** Six floating capsules around the editor entry with smooth burst-in physics animation. */
 @Composable
 internal fun CanvasEditMenu(vm: PaintViewModel, onDismiss: () -> Unit, onCustomize: () -> Unit) {
     val pages = vm.canvasEditMenuActions.chunked(6)
     var requestedPage by rememberSaveable { mutableIntStateOf(0) }
     val page = requestedPage.coerceIn(0, pages.lastIndex)
     val hasClipboard = pages[page].any { it is CanvasEditAction.Clipboard }
-    val windowHeight = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.height.toDp() }
+    val density = LocalDensity.current
+    val windowInfo = LocalWindowInfo.current
+    val windowHeight = with(density) { windowInfo.containerSize.height.toDp() }
     val customizeLabel = stringResource(R.string.canvas_edit_customize)
+
+    var entered by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { entered = true }
+
+    val animScale by animateFloatAsState(
+        targetValue = if (entered) 1.0f else 0.5f,
+        animationSpec = spring(dampingRatio = 0.72f, stiffness = 380f),
+        label = "quickMenuScale",
+    )
+    val animAlpha by animateFloatAsState(
+        targetValue = if (entered) 1.0f else 0.0f,
+        animationSpec = tween(150, easing = FastOutSlowInEasing),
+        label = "quickMenuAlpha",
+    )
+
+    val anchor = vm.quickMenuAnchor
+    val screenWidthPx = windowInfo.containerSize.width
+    val screenHeightPx = windowInfo.containerSize.height
+    val menuWidth = 360.dp
+    val menuWidthPx = with(density) { menuWidth.roundToPx() }
+    val menuHeight = if (hasClipboard) 290.dp else 225.dp
+    val menuHeightPx = with(density) { menuHeight.roundToPx() }
+    val marginPx = with(density) { 16.dp.roundToPx() }
+
+    // Center of the 6-capsule radial wheel (middle of 360dp width and 164dp height)
+    val centerOffsetX = with(density) { (menuWidth / 2).roundToPx() }
+    val centerOffsetY = with(density) { 82.dp.roundToPx() }
+
+    val popupOffset = if (anchor != null) {
+        val targetX = (anchor.x.toInt() - centerOffsetX).coerceIn(
+            marginPx,
+            (screenWidthPx - menuWidthPx - marginPx).coerceAtLeast(marginPx),
+        )
+        val targetY = (anchor.y.toInt() - centerOffsetY).coerceIn(
+            marginPx,
+            (screenHeightPx - menuHeightPx - marginPx).coerceAtLeast(marginPx),
+        )
+        IntOffset(targetX, targetY)
+    } else {
+        IntOffset.Zero
+    }
+
     Popup(
-        alignment = Alignment.Center, onDismissRequest = onDismiss,
+        alignment = if (anchor != null) Alignment.TopStart else Alignment.Center,
+        offset = popupOffset,
+        onDismissRequest = onDismiss,
         properties = PopupProperties(focusable = true),
     ) {
         Column(
-            modifier = Modifier.padding(12.dp).widthIn(max = 600.dp)
-                .heightIn(max = (windowHeight - 64.dp).coerceAtLeast(120.dp))
+            modifier = Modifier
+                .width(menuWidth)
+                .graphicsLayer {
+                    scaleX = animScale
+                    scaleY = animScale
+                    alpha = animAlpha
+                    transformOrigin = if (anchor != null) {
+                        TransformOrigin(
+                            pivotFractionX = (centerOffsetX.toFloat() / menuWidthPx.toFloat()).coerceIn(0f, 1f),
+                            pivotFractionY = (centerOffsetY.toFloat() / menuHeightPx.toFloat()).coerceIn(0f, 1f),
+                        )
+                    } else {
+                        TransformOrigin.Center
+                    }
+                }
+                .heightIn(max = (windowHeight - 32.dp).coerceAtLeast(120.dp))
                 .verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             CanvasEditCapsules(
                 actions = pages[page],
-                actionContent = { action -> CanvasEditActionButton(vm, action, onDismiss) },
+                hoverIndex = vm.quickMenuHoverIndex,
+                actionContent = { action, isHovered ->
+                    CanvasEditActionButton(vm, action, isHovered, onDismiss)
+                },
                 centerContent = {
                     FilledTonalButton(
                         onClick = onCustomize,
@@ -131,12 +202,23 @@ internal fun CanvasEditMenu(vm: PaintViewModel, onDismiss: () -> Unit, onCustomi
 @Composable
 private fun CanvasEditCapsules(
     actions: List<CanvasEditAction>,
-    actionContent: @Composable (CanvasEditAction) -> Unit,
+    hoverIndex: Int = -1,
+    actionContent: @Composable (CanvasEditAction, Boolean) -> Unit,
     centerContent: @Composable () -> Unit,
 ) {
+    val slots = when (actions.size) {
+        1 -> listOf(0)
+        2 -> listOf(5, 1)
+        3 -> listOf(0, 2, 4)
+        4 -> listOf(5, 1, 2, 4)
+        else -> actions.indices.toList()
+    }
     Layout(
         content = {
-            actions.forEach { actionContent(it) }
+            actions.forEachIndexed { index, action ->
+                val slot = slots.getOrElse(index) { index }
+                actionContent(action, hoverIndex == slot)
+            }
             centerContent()
         },
         modifier = Modifier.fillMaxWidth(),
@@ -145,15 +227,7 @@ private fun CanvasEditCapsules(
         val width = ((constraints.maxWidth - 2 * gap) / 3).coerceAtLeast(1)
         val children = measurables.map { it.measure(Constraints.fixedWidth(width)) }
         val height = children.maxOf { it.height }
-        val step = height + 12.dp.roundToPx()
-        // Clockwise from the top; sparse pages spread their actions around the center.
-        val slots = when (actions.size) {
-            1 -> listOf(0)
-            2 -> listOf(5, 1)
-            3 -> listOf(0, 2, 4)
-            4 -> listOf(5, 1, 2, 4)
-            else -> actions.indices.toList()
-        }
+        val step = height + 10.dp.roundToPx()
         val columns = intArrayOf(1, 2, 2, 1, 0, 0)
         val rows = floatArrayOf(0f, 0.5f, 1.5f, 2f, 1.5f, 0.5f)
         layout(constraints.maxWidth, height + 2 * step) {
@@ -170,27 +244,40 @@ private fun CanvasEditCapsules(
 }
 
 @Composable
-private fun CanvasEditActionButton(vm: PaintViewModel, action: CanvasEditAction, onDismiss: () -> Unit) {
+private fun CanvasEditActionButton(
+    vm: PaintViewModel,
+    action: CanvasEditAction,
+    isHovered: Boolean,
+    onDismiss: () -> Unit,
+) {
     val clipboard = action as? CanvasEditAction.Clipboard
+    val hoverScale by animateFloatAsState(
+        targetValue = if (isHovered) 1.08f else 1.0f,
+        animationSpec = spring(dampingRatio = 0.65f, stiffness = 500f),
+        label = "capsuleHoverScale",
+    )
+
     FilledTonalButton(
-        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .graphicsLayer {
+                scaleX = hoverScale
+                scaleY = hoverScale
+            },
         shape = RoundedCornerShape(50),
+        border = if (isHovered) BorderStroke(2.dp, Morandi.accent) else null,
         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 12.dp),
         colors = ButtonDefaults.filledTonalButtonColors(
-            containerColor = Morandi.panelHi.copy(alpha = 0.96f), contentColor = Morandi.text,
+            containerColor = if (isHovered) Morandi.accent else Morandi.panelHi.copy(alpha = 0.96f),
+            contentColor = if (isHovered) Color.White else Morandi.text,
             disabledContainerColor = Morandi.panelHi.copy(alpha = 0.9f),
             disabledContentColor = Morandi.subText.copy(alpha = 0.6f),
         ),
         enabled = clipboard == null ||
             (!vm.canvasEditBusy && vm.canvasEditCapabilities and clipboard.capability != 0),
         onClick = {
-            when (action) {
-                is CanvasEditAction.Clipboard -> vm.editCanvasClipboard(
-                    cut = action == CanvasEditAction.Clipboard.CUT,
-                    paste = action == CanvasEditAction.Clipboard.PASTE,
-                )
-                is CanvasEditAction.Shortcut -> vm.executeQuickAction(action.action)
-            }
+            vm.executeCanvasEditAction(action)
             onDismiss()
         },
     ) {

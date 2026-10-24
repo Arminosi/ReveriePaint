@@ -197,6 +197,7 @@ fun PaintingPage(
 
     var canvasEditMenuOpen by remember { mutableStateOf(false) }
     var canvasEditMenuCustomizeOpen by remember { mutableStateOf(false) }
+    var isZenMode by remember { mutableStateOf(false) }
 
     // Popup panels
     val indicatorState = remember { TransformIndicatorState() }
@@ -314,6 +315,15 @@ fun PaintingPage(
             "open_edit_menu" -> {
                 vm.refreshCanvasEditCapabilities()
                 canvasEditMenuOpen = true
+            }
+            "close_edit_menu" -> {
+                canvasEditMenuOpen = false
+            }
+            "toggle_fullscreen" -> {
+                isZenMode = !isZenMode
+                vm.showActionToast(
+                    if (isZenMode) context.getString(R.string.gesture_action_fullscreen) else ""
+                )
             }
             "open_color" -> colorPanelOpen = true
             else -> {
@@ -908,7 +918,7 @@ fun PaintingPage(
         androidx.compose.runtime.CompositionLocalProvider(
             androidx.compose.ui.platform.LocalDensity provides scaledDensity
         ) {
-            if (filterController == null && !vm.isCanvasAdjustActive) {
+            if (!isZenMode && filterController == null && !vm.isCanvasAdjustActive) {
                 val floatingUi = vm.floatingUiConfig.enabled
                 if (floatingUi) {
                     val config = vm.floatingUiConfig

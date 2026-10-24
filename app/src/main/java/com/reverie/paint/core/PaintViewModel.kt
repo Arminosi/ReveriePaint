@@ -2408,12 +2408,116 @@ class PaintViewModel : ViewModel() {
         }
     }
 
-    fun updateGestureThreeFingerEditMenu(enable: Boolean) {
-        gestureThreeFingerEditMenu = enable
+    var gestureConfig by mutableStateOf(com.reverie.paint.model.GestureConfig())
+
+    var quickMenuAnchor by mutableStateOf<androidx.compose.ui.geometry.Offset?>(null)
+    var quickMenuHoverIndex by mutableIntStateOf(-1)
+
+    fun updateGestureTrigger(
+        action: com.reverie.paint.model.GestureAction,
+        trigger: com.reverie.paint.model.GestureTrigger,
+    ) {
+        val (newConfig, conflictAction) = gestureConfig.withMapping(action, trigger)
+        gestureConfig = newConfig
+
+        if (action == com.reverie.paint.model.GestureAction.QUICK_MENU &&
+            trigger == com.reverie.paint.model.GestureTrigger.SINGLE_FINGER_TOUCH_SLIDE
+        ) {
+            if (penModeSingleFingerPanEnabled) {
+                updatePenModeSingleFingerPan(false)
+                if (::appContext.isInitialized) {
+                    showActionToast(appContext.getString(R.string.gesture_touch_slide_warning))
+                }
+            }
+        }
+
+        gestureTwoFingerUndo = newConfig.getTrigger(com.reverie.paint.model.GestureAction.UNDO) != com.reverie.paint.model.GestureTrigger.NONE
+        gestureThreeFingerRedo = newConfig.getTrigger(com.reverie.paint.model.GestureAction.REDO) != com.reverie.paint.model.GestureTrigger.NONE
+        gestureThreeFingerEditMenu = newConfig.getTrigger(com.reverie.paint.model.GestureAction.QUICK_MENU) != com.reverie.paint.model.GestureTrigger.NONE
+        gestureQuickPinchFit = newConfig.getTrigger(com.reverie.paint.model.GestureAction.FIT_CANVAS) != com.reverie.paint.model.GestureTrigger.NONE
+
+        if (conflictAction != null && ::appContext.isInitialized) {
+            val triggerName = appContext.getString(trigger.labelRes())
+            val conflictName = appContext.getString(conflictAction.labelRes())
+            val actionName = appContext.getString(action.labelRes())
+            showActionToast(appContext.getString(R.string.gesture_conflict_toast, triggerName, conflictName, actionName))
+        }
+
+        persistGestureConfig()
+    }
+
+    fun resetGestureConfigToDefaults() {
+        gestureConfig = com.reverie.paint.model.GestureConfig()
+        gestureTwoFingerUndo = true
+        gestureThreeFingerRedo = true
+        gestureThreeFingerEditMenu = true
+        gestureQuickPinchFit = true
+        persistGestureConfig()
+        if (::appContext.isInitialized) {
+            showActionToast(appContext.getString(R.string.gesture_reset_defaults_done))
+        }
+    }
+
+    private fun persistGestureConfig() {
         if (::appContext.isInitialized) {
             appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
-                .edit().putBoolean("gestureThreeFingerEditMenu", enable).apply()
+                .edit()
+                .putString("gestureConfig", gestureConfig.serialize())
+                .putBoolean("gestureTwoFingerUndo", gestureTwoFingerUndo)
+                .putBoolean("gestureThreeFingerRedo", gestureThreeFingerRedo)
+                .putBoolean("gestureThreeFingerEditMenu", gestureThreeFingerEditMenu)
+                .putBoolean("gestureQuickPinchFit", gestureQuickPinchFit)
+                .apply()
         }
+    }
+
+    fun dispatchGestureAction(action: com.reverie.paint.model.GestureAction, anchor: androidx.compose.ui.geometry.Offset? = null) {
+        when (action) {
+            com.reverie.paint.model.GestureAction.QUICK_MENU -> {
+                quickMenuAnchor = anchor
+                refreshCanvasEditCapabilities()
+                requestUiCommand("open_edit_menu")
+            }
+            com.reverie.paint.model.GestureAction.UNDO -> undo()
+            com.reverie.paint.model.GestureAction.REDO -> redo()
+            com.reverie.paint.model.GestureAction.FULLSCREEN -> requestUiCommand("toggle_fullscreen")
+            com.reverie.paint.model.GestureAction.FIT_CANVAS -> requestUiCommand("reset_view")
+            com.reverie.paint.model.GestureAction.CLEAR_LAYER -> clearLayer(currentLayerIndex)
+            com.reverie.paint.model.GestureAction.EYEDROPPER -> requestUiCommand("open_color")
+            com.reverie.paint.model.GestureAction.NONE -> Unit
+        }
+    }
+
+    fun executeCanvasEditAction(action: com.reverie.paint.model.CanvasEditAction) {
+        when (action) {
+            is com.reverie.paint.model.CanvasEditAction.Clipboard -> editCanvasClipboard(
+                cut = action == com.reverie.paint.model.CanvasEditAction.Clipboard.CUT,
+                paste = action == com.reverie.paint.model.CanvasEditAction.Clipboard.PASTE,
+            )
+            is com.reverie.paint.model.CanvasEditAction.Shortcut -> executeQuickAction(action.action)
+        }
+    }
+
+    fun executeCanvasEditActionByIndex(slot: Int) {
+        val actions = canvasEditMenuActions.take(6)
+        val slots = when (actions.size) {
+            1 -> listOf(0)
+            2 -> listOf(5, 1)
+            3 -> listOf(0, 2, 4)
+            4 -> listOf(5, 1, 2, 4)
+            else -> actions.indices.toList()
+        }
+        val actionIndex = slots.indexOf(slot)
+        if (actionIndex in actions.indices) {
+            executeCanvasEditAction(actions[actionIndex])
+        }
+    }
+
+    fun updateGestureThreeFingerEditMenu(enable: Boolean) {
+        gestureThreeFingerEditMenu = enable
+        val newTrigger = if (enable) com.reverie.paint.model.GestureTrigger.THREE_FINGER_SWIPE_DOWN else com.reverie.paint.model.GestureTrigger.NONE
+        gestureConfig = gestureConfig.withMapping(com.reverie.paint.model.GestureAction.QUICK_MENU, newTrigger).first
+        persistGestureConfig()
     }
     var gesturePinchTransform by mutableStateOf(true)
     var gestureQuickPinchFit by mutableStateOf(true)
@@ -3887,10 +3991,20 @@ class PaintViewModel : ViewModel() {
             genericStylusEnabled = prefs.getBoolean("genericStylusEnabled", false)
             genericPrimaryButtonAction = prefs.getString("genericPrimaryButtonAction", "toggle_eraser") ?: "toggle_eraser"
             genericSecondaryButtonAction = prefs.getString("genericSecondaryButtonAction", "undo") ?: "undo"
-            genericSideButtonErase = prefs.getBoolean("genericSideButtonErase", true)
             gestureTwoFingerUndo = prefs.getBoolean("gestureTwoFingerUndo", true)
             gestureThreeFingerRedo = prefs.getBoolean("gestureThreeFingerRedo", true)
             gestureThreeFingerEditMenu = prefs.getBoolean("gestureThreeFingerEditMenu", true)
+            val savedGestureConfig = prefs.getString("gestureConfig", null)
+            gestureConfig = if (!savedGestureConfig.isNullOrBlank()) {
+                com.reverie.paint.model.GestureConfig.deserialize(savedGestureConfig)
+            } else {
+                var config = com.reverie.paint.model.GestureConfig()
+                if (!gestureTwoFingerUndo) config = config.withMapping(com.reverie.paint.model.GestureAction.UNDO, com.reverie.paint.model.GestureTrigger.NONE).first
+                if (!gestureThreeFingerRedo) config = config.withMapping(com.reverie.paint.model.GestureAction.REDO, com.reverie.paint.model.GestureTrigger.NONE).first
+                if (!gestureThreeFingerEditMenu) config = config.withMapping(com.reverie.paint.model.GestureAction.QUICK_MENU, com.reverie.paint.model.GestureTrigger.NONE).first
+                if (!gestureQuickPinchFit) config = config.withMapping(com.reverie.paint.model.GestureAction.FIT_CANVAS, com.reverie.paint.model.GestureTrigger.NONE).first
+                config
+            }
             canvasEditMenuActions = com.reverie.paint.model.CanvasEditAction.decode(
                 prefs.getString(com.reverie.paint.model.CanvasEditAction.PREFERENCE_KEY, null),
             )

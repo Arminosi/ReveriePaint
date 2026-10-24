@@ -248,9 +248,10 @@ internal object FbGeomLog {
             hPackets = 0; hHitPackets = 0; hRects = 0; hHitRects = 0; hHitArea = 0
             hTestNs = 0; hTestMax = 0; hWindowN = 0; hWindowNs = 0; hWindowMax = 0
             hFrontN = 0; hFrontNs = 0; hFrontMax = 0; hHandback = 0; hRedrawReq = 0; hIdBad = 0; hIdLines = 0
+            cPackets = 0; cFootRects = 0; cBakePx = 0; cBakeNs = 0; cBakeMax = 0; cSlotPx = 0
         }
-        val m = when (mode) { 1 -> "hmin"; 2 -> "e"; else -> "off" }
-        val a = when (arm) { 0 -> "NO_HOLES"; 1 -> "WITH_MASK"; else -> "NORMAL" }
+        val m = when (mode) { 1 -> "hmin"; 2 -> "e"; 3 -> "compose"; else -> "off" }
+        val a = when (arm) { 0 -> "NO_HOLES"; 1 -> "WITH_MASK"; 3 -> "COMPOSE"; else -> "NORMAL" }
         Log.i(TAG, "ev=hole_arm seq=$strokeSeq mode=$m arm=$a cov=${fmt3(coverage)}")
     }
 
@@ -267,6 +268,31 @@ internal object FbGeomLog {
             hTestNs += testNs
             if (testNs > hTestMax) hTestMax = testNs
             if (decision == 2) hHandback++
+        }
+    }
+
+    // compose 统计 (holeLock 保护)
+    private var cPackets = 0L
+    private var cFootRects = 0L
+    private var cBakePx = 0L
+    private var cBakeNs = 0L
+    private var cBakeMax = 0L
+    private var cSlotPx = 0L
+
+    /**
+     * 渲染线程, compose 每包一次: 足迹块数、烘焙面积 (墨 + 足迹, 屏幕像素)、槽位图面积 (HWUI 上传
+     * 的是整张槽位图) 与烘焙耗时 (含打包, 不含 GPU)。
+     */
+    fun composePacket(strokeSeq: Long, footRects: Int, bakePx: Long, slotPx: Long, bakeNs: Long) {
+        if (!PerfTrace.enabled) return
+        synchronized(holeLock) {
+            if (strokeSeq != hSeq) return
+            cPackets++
+            cFootRects += footRects
+            cBakePx += bakePx
+            cSlotPx += slotPx
+            cBakeNs += bakeNs
+            if (bakeNs > cBakeMax) cBakeMax = bakeNs
         }
     }
 
@@ -305,7 +331,13 @@ internal object FbGeomLog {
                 "test=${us(avg(hTestNs, hPackets))}/${us(hTestMax)}us " +
                 "window=$hWindowN ${us(avg(hWindowNs, hWindowN))}/${us(hWindowMax)}us " +
                 "front=$hFrontN ${us(avg(hFrontNs, hFrontN))}/${us(hFrontMax)}us " +
-                "redrawReq=$hRedrawReq handback=$hHandback idViolations=$hIdBad"
+                "redrawReq=$hRedrawReq handback=$hHandback idViolations=$hIdBad" +
+                (if (cPackets > 0) {
+                    " compose=$cPackets foot=$cFootRects bakePx=${avg(cBakePx, cPackets)} " +
+                        "slotPx=${avg(cSlotPx, cPackets)} bake=${us(avg(cBakeNs, cPackets))}/${us(cBakeMax)}us"
+                } else {
+                    ""
+                })
         }
         Log.i(TAG, line)
     }
@@ -340,6 +372,41 @@ internal object FbGeomLog {
                     hIdLines++ < 8
                 }
                 if (log) Log.w(TAG, "ev=identity_mismatch seq=$hSeq rect=$l,$t-$r,$b bad=$bad")
+            }
+        }
+    }
+
+    /**
+     * GL 线程, 仅 [identityCheckEnabled]: compose 包贴上屏的每块里, 文档完整覆盖的像素 ([docInner])
+     * 必须不透明 —— 否则前缓冲在这里透出窗口的旧帧 (旧帧没有新墨), 与关低延迟时不同图。
+     * [slot] 是这一包的槽位图, 第 i 块在其中的左上角是 `packXY[2i], packXY[2i+1]`。
+     */
+    fun composeIdentityCheck(slot: Bitmap, packXY: IntArray, rects: IntArray, count: Int, docInner: IntArray) {
+        if (!identityCheckEnabled) return
+        if (slot.isRecycled) return
+        for (i in 0 until count) {
+            val d = i * 4
+            val l = maxOf(rects[d], docInner[0])
+            val t = maxOf(rects[d + 1], docInner[1])
+            val r = minOf(rects[d + 2], docInner[2])
+            val b = minOf(rects[d + 3], docInner[3])
+            if (r <= l || b <= t) continue
+            val sx = packXY[i * 2] + (l - rects[d])
+            val sy = packXY[i * 2 + 1] + (t - rects[d + 1])
+            val w = r - l
+            if (sx < 0 || sy < 0 || sx + w > slot.width || sy + (b - t) > slot.height) continue
+            if (idRow.size < w) idRow = IntArray(w)
+            var bad = 0
+            for (y in 0 until b - t) {
+                slot.getPixels(idRow, 0, w, sx, sy + y, w, 1)
+                for (x in 0 until w) if (idRow[x] ushr 24 != 0xFF) bad++
+            }
+            if (bad > 0) {
+                val log = synchronized(holeLock) {
+                    hIdBad += bad
+                    hIdLines++ < 8
+                }
+                if (log) Log.w(TAG, "ev=identity_mismatch mode=compose seq=$hSeq rect=$l,$t-$r,$b bad=$bad")
             }
         }
     }

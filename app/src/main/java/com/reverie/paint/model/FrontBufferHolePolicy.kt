@@ -25,6 +25,7 @@ object FrontBufferHolePolicy {
     const val ARM_NO_HOLES = 0 // 当前没有任何覆盖层: 零代价
     const val ARM_WITH_MASK = 1 // 有孔洞, 掩码就绪
     const val ARM_NORMAL = 2 // 这一笔不按住, 走常规路径 (掩码未就绪/过期/覆盖过大/其他工具覆盖层)
+    const val ARM_COMPOSE = 3 // compose 笔画: 覆盖层画进前缓冲, 不挖孔 (只用于日志; 不经 decideArm)
 
     /** 每包判定结果。 */
     const val PACKET_PLAIN = 0 // 未命中: 与无孔洞时完全相同, 零额外工作

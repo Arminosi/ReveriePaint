@@ -95,4 +95,10 @@ internal object FbGeomLog {
 
     fun identityCheck(layer: Bitmap, grid: HoleMaskGrid, rects: IntArray, count: Int) {
     }
+
+    fun composePacket(strokeSeq: Long, footRects: Int, bakePx: Long, slotPx: Long, bakeNs: Long) {
+    }
+
+    fun composeIdentityCheck(slot: Bitmap, packXY: IntArray, rects: IntArray, count: Int, docInner: IntArray) {
+    }
 }

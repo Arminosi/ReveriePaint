@@ -1821,7 +1821,7 @@
     <string name="stylus_prediction_algo_hardware">Hardware SDK Algorithm</string>
     <string name="stylus_prediction_algo_hardware_desc">Leverages system and OEM SDK prediction (supports OPPO, vivo, HUAWEI, Xiaomi, etc.)</string>
     <string name="stylus_prediction_algo_software">App Software Algorithm</string>
-    <string name="stylus_prediction_algo_software_desc">Predicts your stroke in-app so ink keeps up with the pen tip, works with any stylus (recommended)</string>
+    <string name="stylus_prediction_algo_software_desc">Built-in stroke prediction, no SDK needed, keeps ink closer to the pen tip</string>
     <string name="stylus_front_buffer_prediction_title">Front-Buffer Prediction</string>
     <string name="stylus_front_buffer_prediction_desc">Direct tip preview to screen, ink stays closer to the pen tip</string>
     <string name="auto_hide_panels_on_stroke_title">Translucent panel evasion while drawing</string>

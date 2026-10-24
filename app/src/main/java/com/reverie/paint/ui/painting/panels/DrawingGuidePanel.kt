@@ -47,11 +47,12 @@ import com.reverie.paint.model.DrawingGuideConfig
 import com.reverie.paint.model.GuideMode
 import com.reverie.paint.model.Point2D
 import com.reverie.paint.model.SymmetryType
-import com.reverie.paint.ui.theme.Glass
-import com.reverie.paint.ui.theme.glassBorder
+import com.reverie.paint.ui.components.reportUiSlot
+import com.reverie.paint.ui.components.evadablePanelSurface
+import com.reverie.paint.ui.components.evadablePanelContent
+import com.reverie.paint.model.UiPanelSlot
 import com.reverie.paint.ui.theme.Morandi
 import dev.chrisbanes.haze.HazeState
-import dev.chrisbanes.haze.hazeChild
 import kotlin.math.roundToInt
 
 /**
@@ -70,16 +71,18 @@ fun DrawingGuidePanel(
     Box(
         modifier = modifier
             .width(320.dp)
+            // 前缓冲 setZOrderOnTop: 必须登记槽位, 贴墨时 clipOutUi 挖孔露出本面板, 否则按住会盖住辅助设置窗。
+            .reportUiSlot(vm, UiPanelSlot.DRAWING_GUIDE_PANEL)
             .shadow(16.dp, panelShape, spotColor = Color.Black.copy(alpha = 0.45f))
             .clip(panelShape)
-            .then(
-                if (vm.blurBackground && hazeState != null) {
-                    Modifier.hazeChild(state = hazeState, style = Glass.popupStyle(vm.popupPanelOpacity))
-                } else {
-                    Modifier.background(Morandi.panel.copy(alpha = vm.popupPanelOpacity))
-                }
+            .evadablePanelSurface(
+                vm = vm,
+                slot = UiPanelSlot.DRAWING_GUIDE_PANEL,
+                shape = panelShape,
+                baseOpacity = vm.popupPanelOpacity,
+                hazeState = hazeState,
             )
-            .glassBorder(panelShape)
+            .evadablePanelContent(vm, UiPanelSlot.DRAWING_GUIDE_PANEL)
             .padding(14.dp),
     ) {
         Column(

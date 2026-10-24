@@ -739,10 +739,14 @@ fun PaintingPage(
                 liquifyHardness = liquifyHardness,
                 liquifyMode = liquifyMode,
                 liquifyBrushSize = liquifyBrushSize,
-                overlayPanelsOpen = (brushPanelOpen && !(vm.panelPinningEnabled && vm.isBrushPanelPinned)) ||
-                    (layerPanelOpen && !(vm.panelPinningEnabled && vm.isLayerPanelPinned)) ||
-                    (colorPanelOpen && !vm.isColorPanelPinned) || settingsPanelOpen || moreToolsOpen ||
-                    drawingGuidePanelOpen,
+                overlayPanelsOpen = com.reverie.paint.model.RealInkHoldPolicy.overlayPanelsBlockHold(
+                    brushPanelBlocking = brushPanelOpen && !(vm.panelPinningEnabled && vm.isBrushPanelPinned),
+                    layerPanelBlocking = layerPanelOpen && !(vm.panelPinningEnabled && vm.isLayerPanelPinned),
+                    colorPanelBlocking = colorPanelOpen && !vm.isColorPanelPinned,
+                    settingsPanelOpen = settingsPanelOpen,
+                    moreToolsOpen = moreToolsOpen,
+                    drawingGuidePanelOpen = drawingGuidePanelOpen,
+                ),
                 drawingGuidePanelOpen = drawingGuidePanelOpen,
                 filterSessionActive = (filterController != null),
                 onFilterSlideDelta = filterController?.let { c -> { delta -> c.onSlideDelta(delta) } },

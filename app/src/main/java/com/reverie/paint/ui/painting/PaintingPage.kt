@@ -410,6 +410,9 @@ fun PaintingPage(
                         )
                     } else {
                         vm.cancelTransformPreview()
+                        if (vm.hasSelection) {
+                            vm.stashAndClearSelection()
+                        }
                     }
                 }
             }
@@ -610,6 +613,9 @@ fun PaintingPage(
                             )
                         } else {
                             vm.cancelTransformPreview()
+                            if (vm.hasSelection && tool.group != ToolGroup.SELECTION) {
+                                vm.stashAndClearSelection()
+                            }
                         }
                     }
                 }
@@ -1568,6 +1574,7 @@ fun PaintingPage(
                                 SelectionMenuItem(stringResource(R.string.selection_invert)) { vm.invertSelectionAction() }
                                 SelectionMenuItem(stringResource(R.string.selection_history_title)) {
                                     selectionMenuOpen = false
+                                    vm.discardTransientTransformSelection()
                                     vm.savedSelectionsPopupOpen = true
                                 }
                                 SelectionMenuItem(stringResource(R.string.selection_clear), danger = true) { vm.clearSelectionAction() }

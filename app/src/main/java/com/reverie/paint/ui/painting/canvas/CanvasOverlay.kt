@@ -1221,7 +1221,7 @@ internal fun CanvasOverlay(
                 // 1. Procreate 风格：仅在选区工具内显示未选区 45 度动态流动斑马纹；切到非选区工具（画笔、橡皮擦等）时自动隐藏遮罩，保持画布视野干净
                 val isTransform = (tool == Tool.TRANSFORM)
                 val isSelectionTool = tool.group == ToolGroup.SELECTION
-                val shouldShowZebra = isSelectionTool && !isTransform && (vm.hasSelection || isSelecting)
+                val shouldShowZebra = isSelectionTool && !isTransform && !vm.transientTransformSelectionPending && (vm.hasSelection || isSelecting)
                 val selBmp = if (vm.hasSelection) vm.selectionOverlayBitmap else null
                 if (shouldShowZebra) {
                     val nativeCanvas = drawContext.canvas.nativeCanvas
@@ -1368,7 +1368,7 @@ internal fun CanvasOverlay(
                 }
 
                 // 2. 选区边界动态黑白交替流动蚂蚁线：无论在选区工具内还是切到其他工具（画笔、橡皮擦等），只要存在活动选区，选区边缘均显示动态流动的黑白相间蚂蚁线
-                val shouldShowOutline = !isTransform && vm.hasSelection && (!isSelecting || vm.selectionMode != 0)
+                val shouldShowOutline = !isTransform && vm.hasSelection && !vm.transientTransformSelectionPending && (!isSelecting || vm.selectionMode != 0)
                 if (shouldShowOutline) {
                     vm.selectionOutlinePath?.let { outlinePath ->
                         val currentScale = (zoom.value * fitScale).coerceAtLeast(0.001f)

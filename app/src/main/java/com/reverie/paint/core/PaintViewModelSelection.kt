@@ -180,6 +180,9 @@ internal fun PaintViewModel.clearSelectionOverlayLocal() {
 }
 
 internal fun PaintViewModel.clearSelectionAction() {
+    if (transientTransformSelectionPending) {
+        discardTransientTransformSelection()
+    }
     if (recorder.recording) {
         recorder.toolOp(T_CLEAR_SELECTION)
     }
@@ -201,6 +204,7 @@ internal fun PaintViewModel.clearSelectionAction() {
 }
 
 internal fun PaintViewModel.selectAllAction() {
+    discardTransientTransformSelection()
     val layerIdx = currentLayerIndex
     if (recorder.recording) {
         recorder.toolOp(T_SELECT_ALL) { it.u16(layerIdx.coerceIn(0, 65535)) }
@@ -218,6 +222,7 @@ internal fun PaintViewModel.selectAllAction() {
 
 /** 全选整个画布矩形 (区别于 [selectAllAction] 的按图层 alpha 选区)。 */
 internal fun PaintViewModel.selectAllCanvasAction() {
+    discardTransientTransformSelection()
     if (recorder.recording) {
         recorder.toolOp(T_SELECT_ALL_CANVAS)
     }
@@ -233,6 +238,7 @@ internal fun PaintViewModel.selectAllCanvasAction() {
 }
 
 internal fun PaintViewModel.invertSelectionAction() {
+    discardTransientTransformSelection()
     if (recorder.recording) {
         recorder.toolOp(T_INVERT_SELECTION)
     }
@@ -303,6 +309,7 @@ internal fun PaintViewModel.previewLassoSync(points: List<Pair<Int, Int>>) {
 
 internal fun PaintViewModel.lassoSelect(points: List<Pair<Int, Int>>) {
     if (points.size < 3) return
+    discardTransientTransformSelection()
     if (recorder.recording) {
         recorder.pointsOp(T_LASSO, points)
     }
@@ -559,6 +566,7 @@ internal fun PaintViewModel.selectContiguous(
     feather: Int = selectionFeatherRadius,
     closeGap: Int = selectionCloseGap,
 ) {
+    discardTransientTransformSelection()
     if (recorder.recording) {
         recorder.toolOp(T_CONTIGUOUS_V2) {
             it.f32(x.toFloat())
@@ -587,6 +595,7 @@ internal fun PaintViewModel.selectSimilar(
     x: Int,
     y: Int,
 ) {
+    discardTransientTransformSelection()
     val tol = selectionTolerance
     val sampleMerged = selectionSampleLayers == 1
     if (recorder.recording) {
@@ -1003,8 +1012,9 @@ internal fun PaintViewModel.refreshSavedSelections() {
         val count = ReverieCoreBridge.storedSelectionCount()
         val list = ArrayList<SavedSelectionUiItem>(count)
         for (i in 0 until count) {
-            val id = ReverieCoreBridge.storedSelectionId(i)
             val name = ReverieCoreBridge.storedSelectionName(i)
+            if (name.startsWith("__transient_transform_stash_")) continue
+            val id = ReverieCoreBridge.storedSelectionId(i)
             val px = ReverieCoreBridge.storedSelectionThumbnail(i, 64, 64)
             var bmp: android.graphics.Bitmap? = null
             if (px != null && px.isNotEmpty()) {
@@ -1092,5 +1102,98 @@ internal fun PaintViewModel.renameStoredSelectionAction(index: Int, newName: Str
         }
     }
 }
+
+internal const val TRANSIENT_TRANSFORM_SELECTION_PRE_TAG = "__transient_transform_stash_pre__"
+internal const val TRANSIENT_TRANSFORM_SELECTION_POST_TAG = "__transient_transform_stash_post__"
+
+internal fun PaintViewModel.cleanupTransientSelectionStashCore() {
+    val count = ReverieCoreBridge.storedSelectionCount()
+    for (i in count - 1 downTo 0) {
+        val name = ReverieCoreBridge.storedSelectionName(i)
+        if (name.startsWith("__transient_transform_stash_")) {
+            ReverieCoreBridge.deleteStoredSelection(i)
+        }
+    }
+}
+
+internal fun PaintViewModel.stashPreTransformSelectionCore() {
+    cleanupTransientSelectionStashCore()
+    if (ReverieCoreBridge.hasSelection()) {
+        ReverieCoreBridge.saveCurrentSelection(TRANSIENT_TRANSFORM_SELECTION_PRE_TAG)
+    }
+}
+
+internal fun PaintViewModel.stashPostTransformAndClearSelectionCore() {
+    if (ReverieCoreBridge.hasSelection()) {
+        val idx = ReverieCoreBridge.saveCurrentSelection(TRANSIENT_TRANSFORM_SELECTION_POST_TAG)
+        if (idx >= 0) {
+            ReverieCoreBridge.setUndoCaptureEnabled(false)
+            try {
+                ReverieCoreBridge.clearSelection()
+            } finally {
+                ReverieCoreBridge.setUndoCaptureEnabled(true)
+            }
+        }
+    }
+}
+
+internal fun PaintViewModel.stashAndClearSelection() {
+    if (!hasSelection) return
+    transientTransformSelectionPending = true
+    clearSelectionOverlayLocal()
+    runCore(render = false, after = {
+        refreshDisplay()
+    }) {
+        stashPostTransformAndClearSelectionCore()
+    }
+}
+
+internal fun PaintViewModel.restoreTransientTransformSelection() {
+    if (!transientTransformSelectionPending) return
+    transientTransformSelectionPending = false
+    var ov: android.graphics.Bitmap? = null
+    var outline: androidx.compose.ui.graphics.Path? = null
+    runCore(render = false, after = {
+        if (ov != null) {
+            selectionOverlayBitmap = ov
+            selectionOutlinePath = outline
+            hasSelection = true
+        } else {
+            refreshSelection()
+        }
+        refreshDisplay()
+    }) {
+        val count = ReverieCoreBridge.storedSelectionCount()
+        var foundIndex = -1
+        for (i in count - 1 downTo 0) {
+            if (ReverieCoreBridge.storedSelectionName(i) == TRANSIENT_TRANSFORM_SELECTION_POST_TAG) {
+                foundIndex = i
+                break
+            }
+        }
+        if (foundIndex >= 0) {
+            ReverieCoreBridge.setUndoCaptureEnabled(false)
+            try {
+                ReverieCoreBridge.loadStoredSelection(foundIndex, 0)
+                ReverieCoreBridge.deleteStoredSelection(foundIndex)
+                ov = buildSelectionOverlayLocked()
+                outline = pendingSelectionOutlinePath
+            } finally {
+                ReverieCoreBridge.setUndoCaptureEnabled(true)
+            }
+        }
+    }
+}
+
+internal fun PaintViewModel.discardTransientTransformSelection() {
+    if (!transientTransformSelectionPending && !canUndoTransformSelection && !canRedoTransformSelection) return
+    transientTransformSelectionPending = false
+    canUndoTransformSelection = false
+    canRedoTransformSelection = false
+    runCore(render = false) {
+        cleanupTransientSelectionStashCore()
+    }
+}
+
 
 

@@ -122,6 +122,10 @@ internal fun PaintViewModel.touchStart(
     val mirrorSeq = ++mirrorStrokeSeqCounter
     mirrorGate.begin(mirrorSeq, false)
 
+    if (transientTransformSelectionPending || canUndoTransformSelection || canRedoTransformSelection) {
+        discardTransientTransformSelection()
+    }
+
     onPaintingActivity()
     smoothedStrokeX = x
     smoothedStrokeY = y
@@ -967,6 +971,13 @@ internal fun PaintViewModel.applyTool(toolId: String) {
     if (t.group == com.reverie.paint.model.ToolGroup.SELECTION) {
         val sm = selectionMode
         runCore(render = false) { ReverieCoreBridge.setSelectionMode(sm) }
+        if (transientTransformSelectionPending) {
+            restoreTransientTransformSelection()
+        }
+    } else if (t != com.reverie.paint.model.Tool.BRUSH) {
+        if (transientTransformSelectionPending || canUndoTransformSelection || canRedoTransformSelection) {
+            discardTransientTransformSelection()
+        }
     }
     if (t == com.reverie.paint.model.Tool.BRUSH || t == com.reverie.paint.model.Tool.ERASER ||
         t == com.reverie.paint.model.Tool.SMUDGE
@@ -1176,6 +1187,7 @@ internal fun PaintViewModel.selectShape(
     x2: Int,
     y2: Int,
 ) {
+    discardTransientTransformSelection()
     var ov: android.graphics.Bitmap? = null
     if (recorder.recording) {
         recorder.toolOp(T_SELECT_SHAPE) {
@@ -1217,6 +1229,7 @@ internal fun PaintViewModel.selectShape(
 
 internal fun PaintViewModel.selectPolygon(points: List<Pair<Int, Int>>) {
     if (points.size < 3) return
+    discardTransientTransformSelection()
     if (recorder.recording) {
         recorder.pointsOp(T_SELECT_POLYGON, points)
     }
@@ -1434,16 +1447,34 @@ internal fun PaintViewModel.applyTransform(
     }
     val copyOnly = transformCopyOnly
     val wasSelectionPending = isSelectionTransformPending
+    val hadSelection = hasSelection
+    val targetTool = com.reverie.paint.model.Tool.fromId(currentToolId)
+    val isTargetSelectionTool = targetTool.group == com.reverie.paint.model.ToolGroup.SELECTION
+    val shouldStashSelection = hadSelection && !isTargetSelectionTool
+
+    if (shouldStashSelection) {
+        transientTransformSelectionPending = true
+        canUndoTransformSelection = true
+        canRedoTransformSelection = false
+        clearSelectionOverlayLocal()
+    }
+
     runCore(render = true, after = {
         notifyLayerChanged(pixelChanged = true)
-        refreshSelection()
         transformPreviewBitmap = null
         transformCopyOnly = false
         isSelectionTransformPending = false
         if (wasSelectionPending) {
             clearSelection()
+        } else if (shouldStashSelection) {
+            clearSelectionOverlayLocal()
+        } else {
+            refreshSelection()
         }
     }) {
+        if (shouldStashSelection && !wasSelectionPending) {
+            stashPreTransformSelectionCore()
+        }
         val targets = layers.toIntArray()
         ReverieCoreBridge.applyTransformLayersEx(
             targets,
@@ -1458,6 +1489,9 @@ internal fun PaintViewModel.applyTransform(
             originY,
             copyOnly,
         )
+        if (shouldStashSelection && !wasSelectionPending) {
+            stashPostTransformAndClearSelectionCore()
+        }
     }
 }
 
@@ -1492,15 +1526,33 @@ internal fun PaintViewModel.applyPerspectiveTransform(
         }
     }
     val wasSelectionPending = isSelectionTransformPending
+    val hadSelection = hasSelection
+    val targetTool = com.reverie.paint.model.Tool.fromId(currentToolId)
+    val isTargetSelectionTool = targetTool.group == com.reverie.paint.model.ToolGroup.SELECTION
+    val shouldStashSelection = hadSelection && !isTargetSelectionTool
+
+    if (shouldStashSelection) {
+        transientTransformSelectionPending = true
+        canUndoTransformSelection = true
+        canRedoTransformSelection = false
+        clearSelectionOverlayLocal()
+    }
+
     runCore(render = true, after = {
         notifyLayerChanged(pixelChanged = true)
-        refreshSelection()
         transformPreviewBitmap = null
         isSelectionTransformPending = false
         if (wasSelectionPending) {
             clearSelection()
+        } else if (shouldStashSelection) {
+            clearSelectionOverlayLocal()
+        } else {
+            refreshSelection()
         }
     }) {
+        if (shouldStashSelection && !wasSelectionPending) {
+            stashPreTransformSelectionCore()
+        }
         ReverieCoreBridge.applyPerspectiveTransform(
             x0,
             y0,
@@ -1515,6 +1567,9 @@ internal fun PaintViewModel.applyPerspectiveTransform(
             origW,
             origH,
         )
+        if (shouldStashSelection && !wasSelectionPending) {
+            stashPostTransformAndClearSelectionCore()
+        }
     }
 }
 
@@ -1550,15 +1605,33 @@ internal fun PaintViewModel.applyWarpMeshTransform(
     val ty = DoubleArray(count) { transfPoints[it].y.toDouble() }
 
     val wasSelectionPending = isSelectionTransformPending
+    val hadSelection = hasSelection
+    val targetTool = com.reverie.paint.model.Tool.fromId(currentToolId)
+    val isTargetSelectionTool = targetTool.group == com.reverie.paint.model.ToolGroup.SELECTION
+    val shouldStashSelection = hadSelection && !isTargetSelectionTool
+
+    if (shouldStashSelection) {
+        transientTransformSelectionPending = true
+        canUndoTransformSelection = true
+        canRedoTransformSelection = false
+        clearSelectionOverlayLocal()
+    }
+
     runCore(render = true, after = {
         notifyLayerChanged(pixelChanged = true)
-        refreshSelection()
         transformPreviewBitmap = null
         isSelectionTransformPending = false
         if (wasSelectionPending) {
             clearSelection()
+        } else if (shouldStashSelection) {
+            clearSelectionOverlayLocal()
+        } else {
+            refreshSelection()
         }
     }) {
+        if (shouldStashSelection && !wasSelectionPending) {
+            stashPreTransformSelectionCore()
+        }
         ReverieCoreBridge.applyWarpMeshTransform(
             ox,
             oy,
@@ -1570,10 +1643,14 @@ internal fun PaintViewModel.applyWarpMeshTransform(
             origW,
             origH,
         )
+        if (shouldStashSelection && !wasSelectionPending) {
+            stashPostTransformAndClearSelectionCore()
+        }
     }
 }
 
 internal fun PaintViewModel.undo() {
+    val restoreTransformSel = transientTransformSelectionPending || canUndoTransformSelection
     if (isQuickShapeEditing) { cancelQuickShape(); return }
     if (customUndoHook?.invoke() == true) {
         return
@@ -1597,6 +1674,10 @@ internal fun PaintViewModel.undo() {
     if (undoToastEnabled) {
         showActionToast(R.string.toast_undo, R.drawable.ic_undo)
     }
+    canUndoTransformSelection = false
+    transientTransformSelectionPending = false
+    var restoredOverlay: android.graphics.Bitmap? = null
+    var restoredOutline: androidx.compose.ui.graphics.Path? = null
     runCore(render = false, after = {
         pendingHistoryOps.decrementAndGet()
         val nw = ReverieCoreBridge.docWidth()
@@ -1611,7 +1692,13 @@ internal fun PaintViewModel.undo() {
             checkBrushSizeLimit()
         }
         notifyLayerChanged(forceThumbs = false, immediateRender = true, pixelChanged = true)
-        refreshSelection()
+        if (restoredOverlay != null) {
+            selectionOverlayBitmap = restoredOverlay
+            selectionOutlinePath = restoredOutline
+            hasSelection = true
+        } else {
+            refreshSelection()
+        }
         if (anim.enabled) {
             syncAnimationFromNativeAfter()
         }
@@ -1622,11 +1709,41 @@ internal fun PaintViewModel.undo() {
                 recorder.toolOp(T_UNDO) { }
             }
             ReverieCoreBridge.undo()
+            if (restoreTransformSel) {
+                val count = ReverieCoreBridge.storedSelectionCount()
+                var preIdx = -1
+                for (i in count - 1 downTo 0) {
+                    if (ReverieCoreBridge.storedSelectionName(i) == TRANSIENT_TRANSFORM_SELECTION_PRE_TAG) {
+                        preIdx = i
+                        break
+                    }
+                }
+                if (preIdx >= 0) {
+                    ReverieCoreBridge.setUndoCaptureEnabled(false)
+                    try {
+                        ReverieCoreBridge.loadStoredSelection(preIdx, 0)
+                        restoredOverlay = buildSelectionOverlayLocked()
+                        restoredOutline = pendingSelectionOutlinePath
+                    } finally {
+                        ReverieCoreBridge.setUndoCaptureEnabled(true)
+                    }
+                    canRedoTransformSelection = true
+                } else {
+                    cleanupTransientSelectionStashCore()
+                }
+            } else {
+                cleanupTransientSelectionStashCore()
+            }
+        } else {
+            if (restoreTransformSel) {
+                cleanupTransientSelectionStashCore()
+            }
         }
     }
 }
 
 internal fun PaintViewModel.redo() {
+    val restoreRedoSel = canRedoTransformSelection
     if (isQuickShapeEditing) return
     if (pendingHistoryOps.get() >= 1) return
     // s13-C5: 同 undo(): 笔画进行中点重做先取消当前笔画
@@ -1638,6 +1755,7 @@ internal fun PaintViewModel.redo() {
     if (undoToastEnabled) {
         showActionToast(R.string.toast_redo, R.drawable.ic_redo)
     }
+    canRedoTransformSelection = false
     runCore(render = false, after = {
         pendingHistoryOps.decrementAndGet()
         val nw = ReverieCoreBridge.docWidth()
@@ -1652,7 +1770,11 @@ internal fun PaintViewModel.redo() {
             checkBrushSizeLimit()
         }
         notifyLayerChanged(forceThumbs = false, immediateRender = true, pixelChanged = true)
-        refreshSelection()
+        if (restoreRedoSel) {
+            clearSelectionOverlayLocal()
+        } else {
+            refreshSelection()
+        }
         if (anim.enabled) {
             syncAnimationFromNativeAfter()
         }
@@ -1663,6 +1785,20 @@ internal fun PaintViewModel.redo() {
                 recorder.toolOp(T_REDO) { }
             }
             ReverieCoreBridge.redo()
+            if (restoreRedoSel) {
+                ReverieCoreBridge.setUndoCaptureEnabled(false)
+                try {
+                    ReverieCoreBridge.clearSelection()
+                } finally {
+                    ReverieCoreBridge.setUndoCaptureEnabled(true)
+                }
+                transientTransformSelectionPending = true
+                canUndoTransformSelection = true
+            } else {
+                cleanupTransientSelectionStashCore()
+            }
+        } else {
+            cleanupTransientSelectionStashCore()
         }
     }
 }

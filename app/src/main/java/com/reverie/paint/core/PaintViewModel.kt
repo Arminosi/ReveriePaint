@@ -6118,6 +6118,9 @@ class PaintViewModel : ViewModel() {
     var transformCopyOnly: Boolean by mutableStateOf(false)
     var isImportTransformPending: Boolean by mutableStateOf(false)
     var isSelectionTransformPending: Boolean by mutableStateOf(false)
+    var transientTransformSelectionPending: Boolean by mutableStateOf(false)
+    var canUndoTransformSelection: Boolean by mutableStateOf(false)
+    var canRedoTransformSelection: Boolean by mutableStateOf(false)
     internal val layerThumbStates = mutableStateMapOf<Int, Bitmap>()
 
     // Name-keyed mirror: layer indices change on every move/group op, so the

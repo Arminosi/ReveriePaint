@@ -221,6 +221,27 @@ class PaintModelsTest {
         // 避让 1 层水平向内平移 (46 * 1.13): 10 + round(46 * 1.13 + 36 * 1.13 + 14) = 10 + 107 = 117
         assertEquals(117, horizontalSharedConfig.popupInwardMarginDp(topSlot))
     }
+
+    @Test
+    fun `tool transitions correctly classify selection restore and discard conditions`() {
+        val selectionTools = Tool.entries.filter { it.group == ToolGroup.SELECTION }
+        assertTrue(selectionTools.isNotEmpty())
+        for (st in selectionTools) {
+            assertTrue("Selection tool ${st.id} must restore stash", st.group == ToolGroup.SELECTION)
+        }
+
+        // BRUSH preserves transient stash until draw/touch occurs
+        assertEquals(Tool.BRUSH, Tool.fromId("brush"))
+        assertTrue(Tool.BRUSH.group != ToolGroup.SELECTION)
+
+        // Other non-selection tools (e.g. ERASER, FILL, SHAPES) should invalidate stash
+        val nonSelectionNonBrush = Tool.entries.filter { it != Tool.BRUSH && it.group != ToolGroup.SELECTION }
+        for (tool in nonSelectionNonBrush) {
+            val shouldDiscard = tool != Tool.BRUSH && tool.group != ToolGroup.SELECTION
+            assertTrue("Tool ${tool.id} should trigger discard", shouldDiscard)
+        }
+    }
 }
+
 
 

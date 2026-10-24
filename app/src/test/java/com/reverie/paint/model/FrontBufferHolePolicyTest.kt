@@ -22,9 +22,11 @@ class FrontBufferHolePolicyTest {
     @Test
     fun parseMode() {
         assertEquals(MODE_OFF, FrontBufferHolePolicy.parseMode(0, "e"))
-        assertEquals(MODE_HMIN, FrontBufferHolePolicy.parseMode(1, null))
+        assertEquals(FrontBufferHolePolicy.MODE_COMPOSE, FrontBufferHolePolicy.parseMode(1, null))
         assertEquals(MODE_HMIN, FrontBufferHolePolicy.parseMode(1, "hmin"))
-        assertEquals(MODE_HMIN, FrontBufferHolePolicy.parseMode(1, ""))
+        assertEquals(MODE_HMIN, FrontBufferHolePolicy.parseMode(1, " HMIN "))
+        assertEquals(FrontBufferHolePolicy.MODE_COMPOSE, FrontBufferHolePolicy.parseMode(1, ""))
+        assertEquals(FrontBufferHolePolicy.MODE_COMPOSE, FrontBufferHolePolicy.parseMode(1, "compose"))
         assertEquals(MODE_E, FrontBufferHolePolicy.parseMode(1, " E "))
         assertEquals(MODE_OFF, FrontBufferHolePolicy.parseMode(1, "off"))
     }
@@ -127,5 +129,36 @@ class FrontBufferHolePolicyTest {
         assertFalse(FrontBufferHolePolicy.guideClearedNeedsRedraw(false, false, false))
         assertFalse(FrontBufferHolePolicy.guideClearedNeedsRedraw(true, true, false))
         assertFalse(FrontBufferHolePolicy.guideClearedNeedsRedraw(false, true, false))
+    }
+
+    @Test
+    fun composeEligibilityAndFallbackMode() {
+        val c = FrontBufferHolePolicy.MODE_COMPOSE
+        assertTrue(FrontBufferHolePolicy.composeEligible(c, antsVisible = false, axisAligned = true, otherOverlayActive = false))
+        assertFalse(FrontBufferHolePolicy.composeEligible(c, true, true, false))
+        assertFalse(FrontBufferHolePolicy.composeEligible(c, false, false, false))
+        assertFalse(FrontBufferHolePolicy.composeEligible(c, false, true, true))
+        for (m in intArrayOf(MODE_OFF, MODE_HMIN, MODE_E)) {
+            assertFalse(FrontBufferHolePolicy.composeEligible(m, false, true, false))
+            assertEquals(m, FrontBufferHolePolicy.holeModeFor(m))
+        }
+        assertEquals(MODE_HMIN, FrontBufferHolePolicy.holeModeFor(c))
+    }
+
+    /** compose 笔画: 导引线同一时刻只由一个表面画 (与 fb_snap_hold 开关无关)。 */
+    @Test
+    fun composeGuideNeverDrawnByBothSurfaces() {
+        for (snap in listOf(false, true)) {
+            assertTrue(FrontBufferHolePolicy.frontDrawsGuide(snap, composeStroke = true))
+            assertEquals(snap, FrontBufferHolePolicy.frontDrawsGuide(snap, composeStroke = false))
+            for (held in listOf(false, true)) {
+                for (front in listOf(false, true)) {
+                    val holesOnly = FrontBufferHolePolicy.windowGuideHolesOnly(snap, true, held, front)
+                    assertEquals(held || front, holesOnly)
+                    assertEquals(FrontBufferHolePolicy.windowGuideHolesOnly(snap, held, front),
+                        FrontBufferHolePolicy.windowGuideHolesOnly(snap, false, held, front))
+                }
+            }
+        }
     }
 }

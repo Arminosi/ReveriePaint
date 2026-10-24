@@ -14,7 +14,7 @@ import com.reverie.paint.model.HoleMaskGrid
  * ```
  * adb shell setprop debug.reverie.fb_ready_gate 0      # 关闭 L-02 就绪门控 (退回 3.2s 静默窗)
  * adb shell setprop debug.reverie.fb_holes 0           # 关闭孔洞 (前缓冲盖住画布装饰, 旧行为)
- * adb shell setprop debug.reverie.fb_hole_mode e       # hmin (默认) | e: 命中孔洞即整笔交还主画布
+ * adb shell setprop debug.reverie.fb_hole_mode hmin    # compose (默认: 覆盖层画进前缓冲) | hmin: 挖孔+窗口重画 (A/B) | e: 命中孔洞即整笔交还主画布
  * adb shell setprop debug.reverie.fb_hole_margin 2     # 掩码膨胀像素
  * adb shell setprop debug.reverie.fb_hole_max_cov 35   # 掩码占屏 > 35% 时这一笔不按住
  * adb shell setprop debug.reverie.fb_snap_hold 1       # 1a: 吸附线笔画也按住 (默认 0 = 走常规路径, 严格同图)
@@ -26,11 +26,11 @@ internal object FrontBufferFeatureFlags {
     /** L-02: 事件驱动的就绪门控 (每笔落笔评估一次), 关闭时退回原 3.2s 静默窗。 */
     val readyGate: Boolean by lazy { PerfTrace.debugPropInt("debug.reverie.fb_ready_gate", 1) != 0 }
 
-    /** H-1/H-2: 孔洞模式 ([FrontBufferHolePolicy.MODE_OFF] / HMIN / E)。 */
+    /** H-1/H-2: 孔洞模式 ([FrontBufferHolePolicy.MODE_OFF] / HMIN / E / COMPOSE)。 */
     val holeMode: Int by lazy {
         FrontBufferHolePolicy.parseMode(
             PerfTrace.debugPropInt("debug.reverie.fb_holes", 1),
-            PerfTrace.debugPropString("debug.reverie.fb_hole_mode", "hmin"),
+            PerfTrace.debugPropString("debug.reverie.fb_hole_mode", "compose"),
         )
     }
 

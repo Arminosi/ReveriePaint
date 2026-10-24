@@ -285,17 +285,14 @@ internal object BrushStoreVm {
 
     // ------------------------------------------------------------ 重置 / 已修改（W-06）
 
-    /**
-     * 重置 = 清空覆盖（有效文件回到快照：内置为出厂、导入为导入时）+ 删掉旧记录里的调参（元数据保留）
-     * + 清掉各工具对该预设的尺寸记忆。返回 false 表示不归 v2 管。调用方负责持久化与重新选中。
-     */
+    /** v2 重置：只复位存储（清覆盖、物化回快照、取消待提交、清 uiBaseline）；记录处理走上游旧逻辑 */
     fun reset(vm: PaintViewModel, name: String): Boolean {
         val e = BrushStoreBootstrap.managedEntry(name) ?: return false
         val dir = presetDir() ?: return false
         pendingKppReloadJob?.cancel()
+        persistJob?.cancel()
         BrushEditSession.reset(e.id, dir) ?: return false
-        val keep = PresetReadback.metadataOnly(vm.brushParams[name], PresetReadback.baseline(e.id))
-        if (keep != null) vm.brushParams[name] = keep else vm.brushParams.remove(name)
+        uiBaseline.remove(e.id)
         return true
     }
 

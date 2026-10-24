@@ -390,13 +390,16 @@ private fun PaintViewModel.replayPresetSelectLocked(
         }
         currentReplayPreset = target
         if (v2 != null) {
-            // W-12：新录制只加载有效字节（+ 橡皮擦标志），不叠加 brushParams 的 setter
-            val p = brushPresets.firstOrNull { it.index == target }
-            val isEraser = p != null &&
-                (p.group == "橡皮擦" || p.name.startsWith("a)_Eraser", ignoreCase = true) || p.name.contains("Eraser", ignoreCase = true))
-            com.reverie.paint.core.brushstore.PlaybackPresetCache.replay(
-                com.reverie.paint.core.brushstore.BrushEngineApplier.NativeEngine, target, v2, isEraser,
-            )
+            // W-12：只核对 md5（不匹配记诊断；resolve 顺带回温 playback_cache 的 LRU 时间戳）；
+            // 回放 setup 与 V1 同路径——加载的是当前物化的预设字节，不加载缓存字节
+            val res = com.reverie.paint.core.brushstore.PlaybackPresetCache.resolve(v2)
+            if (res != com.reverie.paint.core.brushstore.PlaybackPresetCache.Resolution.EXACT) {
+                com.reverie.paint.core.brushstore.BrushDiagnostics.log(
+                    "playback_md5_mismatch",
+                    "name" to v2.name, "id" to v2.presetId, "md5" to v2.md5, "resolution" to res.name,
+                )
+            }
+            applyReplayPresetSetupLocked(target)
         } else {
             applyReplayPresetSetupLocked(target)
         }

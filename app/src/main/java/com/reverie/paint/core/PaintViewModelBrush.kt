@@ -644,8 +644,8 @@ import kotlinx.coroutines.withContext
         brushPresetIndex = index
         updateCurrentToolBrushState { it.copy(presetIndex = index) }
 
-        // v2：UI 与引擎都只来自有效 kpp（快照 + 覆盖），不再按 brushParams 逐个 setter 回放
-        if (BrushStoreVm.select(this, index, preset)) return
+        // v2：只做落盘准备（上一支笔的待提交编辑），引擎与 UI 走下面的上游链
+        BrushStoreVm.prepareSelect(this, preset)
 
         val saved = if (preset != null) brushParams[preset.name] else null
         val isCustomized = saved?.isCustomized == true
@@ -839,6 +839,7 @@ import kotlinx.coroutines.withContext
             // overlay 内部的引擎 setter 经 runCore 追加在预设 setter 之后, 写序确定。
             applyToolParamMemoryOverlay(preset?.name)
             checkBrushSizeLimit()
+            BrushStoreVm.captureUiBaseline(this, preset?.name)
         }) {
             // S2.4 非 ABR 延迟修复：pending 命中时用上游未定制基线重建记录（只影响后续选择）
             com.reverie.paint.core.brushstore.ParityRepair.repairPendingForSelect(this, index, preset)
@@ -1016,11 +1017,7 @@ import kotlinx.coroutines.withContext
 
         if (reloadPreset && origPreset >= 0) {
             val preset = brushPresets.firstOrNull { it.index == origPreset }
-            if (BrushStoreVm.restoreOnRenderThread(this, preset, origPreset, origIsEraser, origSize, origOpacity, origFlow)) {
-                ReverieCoreBridge.setToolMode(origMode)
-                fetchBrushOutlinePolygons()
-                return
-            }
+            BrushStoreVm.prepareRestore(this, preset)
             val isEraserPreset = preset?.group == "橡皮擦" ||
                     preset?.name?.startsWith("a)_Eraser", ignoreCase = true) == true ||
                     preset?.name?.contains("Eraser", ignoreCase = true) == true

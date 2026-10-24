@@ -94,6 +94,43 @@ internal object BrushStoreVm {
         return true
     }
 
+    /** v2 选笔前的落盘准备：不碰引擎、不写 UI（引擎与 UI 由上游链负责） */
+    fun prepareSelect(vm: PaintViewModel, preset: BrushPresetInfo?) {
+        if (preset == null) return
+        if (BrushStoreBootstrap.managedEntry(preset.name) == null) return
+        val dir = presetDir() ?: return
+        // 上一支笔的待提交编辑必须先落盘，且必须先于 loadBrushPreset（同步执行）
+        BrushEditSession.flushAll(dir)
+        BrushDiagnostics.log("v2_prepare_select", "name" to preset.name)
+    }
+
+    /** v2 橡皮恢复前的落盘准备：仅同步 flush 当前预设的待提交编辑，无引擎调用 */
+    fun prepareRestore(vm: PaintViewModel, preset: BrushPresetInfo?) {
+        val e = preset?.let { BrushStoreBootstrap.managedEntry(it.name) } ?: return
+        val dir = presetDir() ?: return
+        BrushEditSession.flush(e.id, dir)
+        BrushDiagnostics.log("v2_prepare_restore", "name" to preset.name)
+    }
+
+    /** 每次选笔 after 完成时捕获的 UI 基线（id → 上游 after 值），供 mergeEdit 判定"用户真正改了什么" */
+    private val uiBaseline = HashMap<String, BrushParams>()
+
+    fun captureUiBaseline(vm: PaintViewModel, name: String?) {
+        if (name.isNullOrBlank()) return
+        val e = BrushStoreBootstrap.managedEntry(name) ?: return
+        val existing = vm.brushParams[name]
+        val preset = vm.brushPresets.firstOrNull { it.name == name }
+        uiBaseline[e.id] = vm.currentBrushParamsFromVm(
+            name,
+            existing?.dynamicsCustomized == true,
+            existing?.smudgeCustomized == true,
+            existing?.spacingCustomized == true,
+            existing,
+            isEraserPreset(preset),
+        )
+        BrushDiagnostics.log("v2_capture_ui_baseline", "name" to name)
+    }
+
     /** 回读值原样赋给 UI（不做旧路径那些 coerce/兜底，否则下一次编辑会把兜底值写成覆盖） */
     fun applyToUi(vm: PaintViewModel, s: BrushParams, parsed: KppHelper.KppParsedAttributes, isBuiltIn: Boolean, compOp: String) {
         vm.brushSize = s.size

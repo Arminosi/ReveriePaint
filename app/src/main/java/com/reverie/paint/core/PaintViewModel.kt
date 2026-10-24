@@ -4638,6 +4638,11 @@ class PaintViewModel : ViewModel() {
         )
     }
 
+    internal fun reloadPalettesFromPrefs() {
+        userPalettes = loadUserPalettes()
+        recentColors = loadRecentColors()
+    }
+
     fun updateColorPickerMode(mode: String) {
         colorPickerMode = mode
         if (::appContext.isInitialized) {
@@ -4714,6 +4719,8 @@ class PaintViewModel : ViewModel() {
     internal val anim = AnimationState()
 
     internal val syncState = SyncState()
+
+    internal val localBackupState = LocalBackupState()
 
     /** 动画音频播放器 (导入的音频资源, 播放动画时循环同步播放; 见 PaintViewModelAnimation.kt) */
     internal val animAudioPlayers = mutableListOf<android.media.MediaPlayer>()

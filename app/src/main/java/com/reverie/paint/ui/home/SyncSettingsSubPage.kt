@@ -56,6 +56,12 @@ import com.reverie.paint.core.sync.SyncException
 import com.reverie.paint.core.sync.SyncTimeFormat
 import com.reverie.paint.ui.components.pressScale
 import com.reverie.paint.ui.theme.Theme
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -79,6 +85,22 @@ internal fun SyncSettingsSubPage(
             draftServer = state.serverUrl
             draftUser = state.username
             draftPass = ""
+        }
+    }
+
+    val createBackupLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/octet-stream"),
+    ) { uri: Uri? ->
+        if (uri != null) {
+            vm.executeExportBackup(uri)
+        }
+    }
+
+    val restoreBackupLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri: Uri? ->
+        if (uri != null) {
+            vm.startInspectBackup(uri)
         }
     }
 
@@ -297,6 +319,25 @@ internal fun SyncSettingsSubPage(
             SyncResultLine(vm)
 
             Spacer(Modifier.height(16.dp))
+            SettingCategoryTitle(stringResource(R.string.sync_category_local_backup))
+            SettingGroup {
+                SettingNavGroupItem(
+                    icon = R.drawable.ic_save_as,
+                    title = stringResource(R.string.backup_export_title),
+                    summary = stringResource(R.string.backup_export_summary),
+                    shape = settingGroupShape(0, 2),
+                    onClick = { vm.openExportBackupDialog() },
+                )
+                SettingNavGroupItem(
+                    icon = R.drawable.ic_import,
+                    title = stringResource(R.string.backup_restore_title),
+                    summary = stringResource(R.string.backup_restore_summary),
+                    shape = settingGroupShape(1, 2),
+                    onClick = { restoreBackupLauncher.launch(arrayOf("*/*")) },
+                )
+            }
+
+            Spacer(Modifier.height(16.dp))
             SettingInfoCard(
                 title = stringResource(R.string.sync_backup_info_title),
                 text = stringResource(R.string.sync_backup_info_text),
@@ -311,6 +352,27 @@ internal fun SyncSettingsSubPage(
             Spacer(Modifier.height(60.dp))
         }
     }
+
+    if (vm.localBackupState.showExportDialog) {
+        LocalBackupExportDialog(
+            vm = vm,
+            onConfirmExport = {
+                val timestamp = SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(Date())
+                createBackupLauncher.launch("ReveriePaint_Backup_$timestamp.revpbak")
+            },
+            onDismiss = { vm.closeExportBackupDialog() },
+        )
+    }
+
+    if (vm.localBackupState.showRestoreDialog) {
+        LocalBackupRestoreDialog(
+            vm = vm,
+            onConfirmRestore = { vm.executeRestoreBackup() },
+            onDismiss = { vm.closeRestoreBackupDialog() },
+        )
+    }
+
+    LocalBackupProgressDialog(vm = vm)
 }
 
 @Composable

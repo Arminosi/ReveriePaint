@@ -391,10 +391,18 @@ internal fun PaintViewModel.backupToCloud() {
                             remoteEntries,
                             conflictSuffix,
                             protectedPaths,
-                        ) { done, total ->
-                            syncState.backupDone = done
-                            syncState.backupTotal = total
-                        }
+                            onProgress = { done, total ->
+                                syncState.backupDone = done
+                                syncState.backupTotal = total
+                            },
+                            onManifestUpdated = { updated ->
+                                try {
+                                    SyncEngine.writeTextAtomically(manifestFile, SyncEngine.encodeManifest(updated))
+                                } catch (e: Exception) {
+                                    android.util.Log.e("ReverieSync", "写入增量同步清单失败", e)
+                                }
+                            },
+                        )
                     try {
                         SyncEngine.writeTextAtomically(manifestFile, SyncEngine.encodeManifest(result.manifest))
                     } catch (e: Exception) {
@@ -482,10 +490,18 @@ internal fun PaintViewModel.syncAll() {
                             SyncEngine.listRemoteAll(client, sources),
                             conflictSuffix,
                             protectedPaths,
-                        ) { done, total ->
-                            syncState.backupDone = done
-                            syncState.backupTotal = total
-                        }
+                            onManifestUpdated = { updated ->
+                                try {
+                                    SyncEngine.writeTextAtomically(manifestFile, SyncEngine.encodeManifest(updated))
+                                } catch (e: Exception) {
+                                    android.util.Log.e("ReverieSync", "写入增量同步清单失败", e)
+                                }
+                            },
+                            onProgress = { done, total ->
+                                syncState.backupDone = done
+                                syncState.backupTotal = total
+                            },
+                        )
                     SyncEngine.writeTextAtomically(manifestFile, SyncEngine.encodeManifest(backup.manifest))
 
                     var manifestNow = backup.manifest

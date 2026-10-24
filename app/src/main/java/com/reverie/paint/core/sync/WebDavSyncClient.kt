@@ -76,14 +76,49 @@ internal class WebDavSyncClient(
         }
     }
 
+    private fun <T> executeWithRetry(
+        actionName: String,
+        maxAttempts: Int = 3,
+        initialDelayMs: Long = 1000L,
+        block: () -> T,
+    ): T {
+        var delayMs = initialDelayMs
+        var lastException: Exception? = null
+        for (attempt in 1..maxAttempts) {
+            try {
+                return block()
+            } catch (e: Exception) {
+                lastException = e
+                val isRetryable = when (e) {
+                    is SyncException -> e.kind == SyncException.Kind.NETWORK || (e.message?.contains(" 50") == true)
+                    is IOException -> true
+                    else -> false
+                }
+                if (!isRetryable || attempt == maxAttempts) {
+                    throw e
+                }
+                try {
+                    Thread.sleep(delayMs)
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    throw e
+                }
+                delayMs *= 2
+            }
+        }
+        throw lastException ?: SyncException(SyncException.Kind.NETWORK, "$actionName 重试耗尽")
+    }
+
     override fun putFile(
         remotePath: String,
         file: File,
     ) {
-        val request =
-            auth(Request.Builder().url(urlFor(remotePath)).put(file.asRequestBody(OCTET_STREAM))).build()
-        executeFollowingRedirects(request).use { response ->
-            if (response.code !in 200..299) throw mapError(response.code, "PUT $remotePath")
+        executeWithRetry("PUT $remotePath") {
+            val request =
+                auth(Request.Builder().url(urlFor(remotePath)).put(file.asRequestBody(OCTET_STREAM))).build()
+            executeFollowingRedirects(request).use { response ->
+                if (response.code !in 200..299) throw mapError(response.code, "PUT $remotePath")
+            }
         }
     }
 
@@ -91,38 +126,52 @@ internal class WebDavSyncClient(
         remotePath: String,
         target: File,
     ) {
-        val request = auth(Request.Builder().url(urlFor(remotePath)).get()).build()
-        try {
-            executeFollowingRedirects(request).use { response ->
-                if (response.code == 404) throw SyncException(SyncException.Kind.NOT_FOUND, "GET $remotePath")
-                if (response.code !in 200..299) throw mapError(response.code, "GET $remotePath")
-                val body = response.body ?: throw SyncException(SyncException.Kind.PROTOCOL, "GET $remotePath 空响应")
-                target.parentFile?.mkdirs()
-                FileOutputStream(target).use { output ->
-                    body.byteStream().use { input -> input.copyTo(output, 64 * 1024) }
-                    output.flush()
-                    output.fd.sync()
-                }
+        target.parentFile?.mkdirs()
+        executeWithRetry("GET $remotePath") {
+            val existingBytes = if (target.exists()) target.length() else 0L
+            val requestBuilder = Request.Builder().url(urlFor(remotePath))
+            if (existingBytes > 0L) {
+                requestBuilder.header("Range", "bytes=$existingBytes-")
             }
-        } catch (e: SyncException) {
-            throw e
-        } catch (e: IOException) {
-            throw SyncException(SyncException.Kind.NETWORK, "GET $remotePath 失败", e)
+            val request = auth(requestBuilder.get()).build()
+            try {
+                executeFollowingRedirects(request).use { response ->
+                    if (response.code == 404) throw SyncException(SyncException.Kind.NOT_FOUND, "GET $remotePath")
+                    if (response.code == 416) {
+                        target.delete()
+                        throw SyncException(SyncException.Kind.NETWORK, "GET $remotePath Range 范围异常，重置重试")
+                    }
+                    if (response.code !in 200..299) throw mapError(response.code, "GET $remotePath")
+                    val body = response.body ?: throw SyncException(SyncException.Kind.PROTOCOL, "GET $remotePath 空响应")
+                    val append = response.code == 206
+                    FileOutputStream(target, append).use { output ->
+                        body.byteStream().use { input -> input.copyTo(output, 64 * 1024) }
+                        output.flush()
+                        output.fd.sync()
+                    }
+                }
+            } catch (e: SyncException) {
+                throw e
+            } catch (e: IOException) {
+                throw SyncException(SyncException.Kind.NETWORK, "GET $remotePath 失败", e)
+            }
         }
     }
 
     override fun getText(remotePath: String): String {
-        val request = auth(Request.Builder().url(urlFor(remotePath)).get()).build()
-        return try {
-            executeFollowingRedirects(request).use { response ->
-                if (response.code == 404) throw SyncException(SyncException.Kind.NOT_FOUND, "GET $remotePath")
-                if (response.code !in 200..299) throw mapError(response.code, "GET $remotePath")
-                response.body?.string().orEmpty()
+        return executeWithRetry("GET $remotePath") {
+            val request = auth(Request.Builder().url(urlFor(remotePath)).get()).build()
+            try {
+                executeFollowingRedirects(request).use { response ->
+                    if (response.code == 404) throw SyncException(SyncException.Kind.NOT_FOUND, "GET $remotePath")
+                    if (response.code !in 200..299) throw mapError(response.code, "GET $remotePath")
+                    response.body?.string().orEmpty()
+                }
+            } catch (e: SyncException) {
+                throw e
+            } catch (e: IOException) {
+                throw SyncException(SyncException.Kind.NETWORK, "GET $remotePath 失败", e)
             }
-        } catch (e: SyncException) {
-            throw e
-        } catch (e: IOException) {
-            throw SyncException(SyncException.Kind.NETWORK, "GET $remotePath 失败", e)
         }
     }
 
@@ -130,9 +179,11 @@ internal class WebDavSyncClient(
         remotePath: String,
         text: String,
     ) {
-        val request = auth(Request.Builder().url(urlFor(remotePath)).put(text.toRequestBody(TEXT))).build()
-        executeFollowingRedirects(request).use { response ->
-            if (response.code !in 200..299) throw mapError(response.code, "PUT $remotePath")
+        executeWithRetry("PUT $remotePath") {
+            val request = auth(Request.Builder().url(urlFor(remotePath)).put(text.toRequestBody(TEXT))).build()
+            executeFollowingRedirects(request).use { response ->
+                if (response.code !in 200..299) throw mapError(response.code, "PUT $remotePath")
+            }
         }
     }
 

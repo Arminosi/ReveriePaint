@@ -296,7 +296,10 @@ object BrushImportPipeline {
         PresetSnapshotStore.putImported(
             id, src.ext, snap,
             JSONObject().put("provenance", "duplicate").put("from", srcId).put("pack", src.pack).put("md5", BrushDiagnostics.md5(snap))
-                .also { j -> PresetSnapshotStore.source(srcId)?.optJSONObject("appBaseline")?.let { j.put("appBaseline", it) } },
+                .also { j ->
+                    PresetSnapshotStore.source(srcId)?.optJSONObject("appBaseline")?.let { j.put("appBaseline", it) }
+                    PresetSnapshotStore.source(srcId)?.optJSONObject("officialBp")?.let { j.put("officialBp", it) }
+                },
         )
         BrushIdentity.register(BrushIdentity.Entry(id, newName, src.ext, BrushIdentity.Kind.IMPORTED, src.pack))
         BrushOverrideStore.copy(srcId, id)

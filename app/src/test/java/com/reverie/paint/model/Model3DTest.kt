@@ -242,4 +242,71 @@ class Model3DTest {
         assertTrue(tunedCat.vertexCount >= 80)
         assertEquals(tunedCat.triangleCount * 9, tunedCat.flatPositions.size)
     }
+
+    @Test
+    fun `GlbParser parses binary GLB models with skeleton and skinning weights`() {
+        val files = listOf(
+            java.io.File("src/main/assets/3d_models/anime_boy.glb"),
+            java.io.File("src/main/assets/3d_models/anime_girl.glb"),
+        )
+        for (f in files) {
+            if (!f.exists()) continue
+            val skinned = GlbParser.parse(f.inputStream())
+            assertTrue(skinned.baseMesh.vertexCount in 1000..6000)
+            assertTrue(skinned.baseMesh.triangleCount > 500)
+            assertNotNull(skinned.skeleton)
+            assertTrue(skinned.skeleton!!.count >= 15)
+            assertNotNull(skinned.jointIndices)
+            assertNotNull(skinned.jointWeights)
+
+            // Test deformed mesh generation with world joints
+            val worldJoints = FloatArray(skinned.skeleton!!.count * 3)
+            val restDeformed = skinned.createDeformedMesh(emptyMap(), outWorldJointPositions = worldJoints)
+            var maxDev = 0f
+            for (v in 0 until skinned.baseMesh.vertexCount) {
+                val dx = restDeformed.positions[v*3] - skinned.baseMesh.positions[v*3]
+                val dy = restDeformed.positions[v*3+1] - skinned.baseMesh.positions[v*3+1]
+                val dz = restDeformed.positions[v*3+2] - skinned.baseMesh.positions[v*3+2]
+                val d = kotlin.math.hypot(kotlin.math.hypot(dx, dy), dz)
+                if (d > maxDev) maxDev = d
+            }
+            // Verify rest pose skinning produces near-zero deformation (< 1e-3)
+            assertTrue("Rest pose deviation should be near zero, was: $maxDev", maxDev < 1e-3f)
+
+            val deformed = skinned.createDeformedMesh(
+                mapOf(
+                    "upperarm.l" to floatArrayOf(5f, 0f, -65f),
+                    "lowerarm.l" to floatArrayOf(0f, 0f, -10f),
+                    "thigh.l" to floatArrayOf(0f, 0f, -80f),
+                    "calf.l" to floatArrayOf(0f, 0f, 80f),
+                ),
+                outWorldJointPositions = worldJoints,
+            )
+            assertEquals(skinned.baseMesh.vertexCount, deformed.vertexCount)
+            assertEquals(skinned.baseMesh.triangleCount, deformed.triangleCount)
+
+            // Verify no NaN or infinite positions
+            for (p in deformed.positions) {
+                assertFalse("Position should be finite", p.isNaN() || p.isInfinite())
+            }
+            for (j in worldJoints) {
+                assertFalse("Joint pos should be finite", j.isNaN() || j.isInfinite())
+            }
+        }
+
+        val catFile = java.io.File("src/main/assets/3d_models/anime_cat.glb")
+        if (catFile.exists()) {
+            val skinnedCat = GlbParser.parse(catFile.inputStream())
+            assertTrue(skinnedCat.baseMesh.vertexCount > 50)
+            assertNotNull(skinnedCat.skeleton)
+            assertTrue(skinnedCat.skeleton!!.count >= 8)
+            val deformedCat = skinnedCat.createDeformedMesh(
+                mapOf("tail1" to floatArrayOf(30f, 10f, 0f), "Head" to floatArrayOf(-10f, 15f, 0f))
+            )
+            assertEquals(skinnedCat.baseMesh.vertexCount, deformedCat.vertexCount)
+            for (p in deformedCat.positions) {
+                assertFalse("Cat deformed position should be finite", p.isNaN() || p.isInfinite())
+            }
+        }
+    }
 }

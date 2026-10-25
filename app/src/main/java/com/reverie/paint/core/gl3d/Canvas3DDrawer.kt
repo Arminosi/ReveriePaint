@@ -316,4 +316,129 @@ class Canvas3DDrawer {
             triangleDepths[j + 1] = keyDepth
         }
     }
+
+    data class ProjectedJoint(
+        val index: Int,
+        val name: String,
+        val x: Float,
+        val y: Float,
+        val depth: Float,
+    )
+
+    val projectedJoints = ArrayList<ProjectedJoint>()
+
+    private val boneLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 3.5f
+        color = 0xCC5B9BD5.toInt() // Morandi cyan
+        strokeCap = Paint.Cap.ROUND
+    }
+    private val jointFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+    }
+    private val jointStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 2.0f
+        color = 0xFF2A2B2D.toInt()
+    }
+    private val gizmoRingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 2.5f
+        color = 0xFFE07A5F.toInt() // Morandi terracotta accent
+    }
+
+    fun hitTestJoint(docX: Float, docY: Float, maxDist: Float = 36f): String? {
+        var closestDist = maxDist
+        var hitJoint: String? = null
+        for (pj in projectedJoints) {
+            val d = hypot(docX - pj.x, docY - pj.y)
+            if (d < closestDist) {
+                closestDist = d
+                hitJoint = pj.name
+            }
+        }
+        return hitJoint
+    }
+
+    /**
+     * 在视口模型上方绘制半透明 3D 骨架手柄与旋转环
+     */
+    fun drawBones(
+        canvas: Canvas,
+        skeleton: Skeleton3D?,
+        worldJoints: FloatArray?,
+        selectedJointName: String?,
+        docW: Float,
+        docH: Float,
+        state: Model3DState,
+    ) {
+        projectedJoints.clear()
+        if (skeleton == null || worldJoints == null || skeleton.count == 0) return
+
+        val aspect = (docW / docH.coerceAtLeast(1f)).coerceAtLeast(0.01f)
+        val proj = Math3D.perspective(45f, aspect, 0.1f, 100f)
+        val dist = 3.5f / state.zoom.coerceIn(0.1f, 10f)
+        val view = Math3D.lookAt(0f, 0f, dist, 0f, 0f, 0f, 0f, 1f, 0f)
+
+        var model = Math3D.identity()
+        model = Math3D.translate(model, state.panX * 2f, state.panY * 2f, 0f)
+        model = Math3D.rotate(model, state.rotY, 0f, 1f, 0f)
+        model = Math3D.rotate(model, state.rotX, 1f, 0f, 0f)
+        model = Math3D.rotate(model, state.rotZ, 0f, 0f, 1f)
+
+        val mvp = Math3D.multiplyMM(proj, Math3D.multiplyMM(view, model))
+        val halfW = docW * 0.5f
+        val halfH = docH * 0.5f
+
+        val jointCount = skeleton.count
+        val pX = FloatArray(jointCount)
+        val pY = FloatArray(jointCount)
+        val valid = BooleanArray(jointCount)
+
+        for (j in 0 until jointCount) {
+            val wx = worldJoints[j * 3]
+            val wy = worldJoints[j * 3 + 1]
+            val wz = worldJoints[j * 3 + 2]
+
+            val cx = mvp[0] * wx + mvp[4] * wy + mvp[8] * wz + mvp[12]
+            val cy = mvp[1] * wx + mvp[5] * wy + mvp[9] * wz + mvp[13]
+            val cz = mvp[2] * wx + mvp[6] * wy + mvp[10] * wz + mvp[14]
+            val cw = mvp[3] * wx + mvp[7] * wy + mvp[11] * wz + mvp[15]
+
+            if (cw > 0.05f) {
+                val sx = (cx / cw) * halfW
+                val sy = (-cy / cw) * halfH
+                pX[j] = sx
+                pY[j] = sy
+                valid[j] = true
+                projectedJoints.add(ProjectedJoint(j, skeleton.joints[j].name, sx, sy, cz / cw))
+            }
+        }
+
+        // 1. 绘制骨架连接线
+        for (j in 0 until jointCount) {
+            val joint = skeleton.joints[j]
+            val pIdx = joint.parentIndex
+            if (pIdx >= 0 && pIdx < jointCount && valid[j] && valid[pIdx]) {
+                canvas.drawLine(pX[pIdx], pY[pIdx], pX[j], pY[j], boneLinePaint)
+            }
+        }
+
+        // 2. 绘制关节点交互圆圈
+        for (pj in projectedJoints) {
+            val isSelected = selectedJointName != null && pj.name.equals(selectedJointName, ignoreCase = true)
+            val radius = if (isSelected) 10.0f else 7.0f
+
+            if (isSelected) {
+                // 绘制选中高亮 3D 旋转控制环 (Gizmo Ring)
+                canvas.drawCircle(pj.x, pj.y, 26.0f, gizmoRingPaint)
+                jointFillPaint.color = 0xFFE07A5F.toInt() // Accent
+            } else {
+                jointFillPaint.color = 0xFFF4F1DE.toInt() // Morandi warm white
+            }
+
+            canvas.drawCircle(pj.x, pj.y, radius, jointFillPaint)
+            canvas.drawCircle(pj.x, pj.y, radius, jointStrokePaint)
+        }
+    }
 }

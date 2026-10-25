@@ -23,12 +23,12 @@ enum class RenderMode3D(val id: String) {
  * 内置基础 3D 参考几何与人体素模
  */
 enum class BuiltinModel3D(val id: String, val displayNameRes: String) {
-    ANIME_BOY("boy", "二次元男主"),
-    ANIME_GIRL("girl", "二次元女主"),
+    ANIME_BOY("boy", "人体标准素模 (男)"),
+    ANIME_GIRL("girl", "人体标准素模 (女)"),
     CAT("cat", "3D 猫猫"),
     BODY_MANNEQUIN("body", "全身人偶 (站姿)"),
     BODY_SIT("body_sit", "全身人偶 (坐姿)"),
-    HEAD_MANNEQUIN("head", "头部比例素模"),
+    HEAD_MANNEQUIN("head", "Asaro 头部切面素模"),
     CUBE("cube", "透视方块"),
     SPHERE("sphere", "球体"),
     CYLINDER("cylinder", "圆柱体"),
@@ -47,6 +47,7 @@ enum class Interaction3DMode {
     ROTATE, // 旋转模型视角
     PAN,    // 平移模型位置
     LIGHT,  // 调整光照朝向
+    BONE,   // 画布可视化骨骼触控调节
 }
 
 /**
@@ -77,7 +78,10 @@ data class Model3DState(
      * 判断当前模型是否具备骨骼与姿态调节能力
      */
     fun isRigged(): Boolean {
-        return modelType in setOf("boy", "girl", "cat", "body", "body_sit")
+        return modelType in setOf("boy", "girl", "cat", "body", "body_sit") ||
+                modelType.endsWith(".glb", ignoreCase = true) ||
+                modelType.endsWith(".vrm", ignoreCase = true) ||
+                modelType.endsWith(".pmx", ignoreCase = true)
     }
 
     /**

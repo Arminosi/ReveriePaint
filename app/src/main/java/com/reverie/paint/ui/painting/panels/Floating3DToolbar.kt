@@ -124,6 +124,20 @@ fun Floating3DToolbar(
                     active = vm.active3DInteractionMode == Interaction3DMode.LIGHT,
                     onClick = { vm.active3DInteractionMode = Interaction3DMode.LIGHT },
                 )
+                if (state.isRigged()) {
+                    CompactModeIconButton(
+                        icon = R.drawable.ic_author,
+                        tooltip = stringResource(R.string.layer_3d_mode_bone),
+                        active = vm.active3DInteractionMode == Interaction3DMode.BONE,
+                        onClick = {
+                            vm.active3DInteractionMode = if (vm.active3DInteractionMode == Interaction3DMode.BONE) {
+                                Interaction3DMode.ROTATE
+                            } else {
+                                Interaction3DMode.BONE
+                            }
+                        },
+                    )
+                }
 
                 // 竖向细微分割线
                 Box(
@@ -220,10 +234,10 @@ fun Floating3DToolbar(
                     }
                 }
 
-                // 4. 骨骼与姿态调节 (仅支持骨骼的人体与动物模型显示)
+                // 4. 骨骼与姿态微调面板 (仅支持骨骼的人体与动物模型显示)
                 if (state.isRigged()) {
                     CompactModeIconButton(
-                        icon = R.drawable.ic_author,
+                        icon = R.drawable.ic_sliders,
                         tooltip = stringResource(R.string.layer_3d_pose_rigging),
                         active = showPosePanel,
                         onClick = { showPosePanel = true },

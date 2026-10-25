@@ -37,7 +37,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.reverie.paint.R
 import com.reverie.paint.core.PaintViewModel
 import com.reverie.paint.core.create3DLayer
-import com.reverie.paint.core.create3DLayerFromObj
+import com.reverie.paint.core.create3DLayerFromFile
 import com.reverie.paint.model.BuiltinModel3D
 import com.reverie.paint.ui.theme.Morandi
 
@@ -57,14 +57,14 @@ fun Model3DPickerSheet(
         contract = ActivityResultContracts.OpenDocument(),
     ) { uri: Uri? ->
         if (uri != null) {
-            var fileName = "mesh.obj"
+            var fileName = "model.glb"
             context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
                 val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
                 if (cursor.moveToFirst() && nameIndex >= 0) {
-                    fileName = cursor.getString(nameIndex) ?: "mesh.obj"
+                    fileName = cursor.getString(nameIndex) ?: "model.glb"
                 }
             }
-            vm.create3DLayerFromObj(uri, fileName)
+            vm.create3DLayerFromFile(uri, fileName)
             onDismiss()
         }
     }
@@ -283,6 +283,17 @@ fun Model3DPickerSheet(
                         )
                     }
                 }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // 内置模型 CC0 开源来源标注
+                Text(
+                    text = stringResource(R.string.layer_3d_credits_tip),
+                    color = Morandi.subText.copy(alpha = 0.7f),
+                    fontSize = 10.sp,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                )
             }
         }
     }

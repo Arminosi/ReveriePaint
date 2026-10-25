@@ -2921,6 +2921,17 @@ class CanvasTouchView(context: Context) : View(context) {
                         imgH.toFloat(),
                         cur3DLayer.opacity.toFloat(),
                     )
+                    if (v.active3DInteractionMode == Interaction3DMode.BONE) {
+                        canvas3DDrawer.drawBones(
+                            canvas,
+                            v.active3DSkeleton,
+                            v.active3DWorldJoints,
+                            v.active3DSelectedJointName,
+                            imgW.toFloat(),
+                            imgH.toFloat(),
+                            state,
+                        )
+                    }
                 }
             }
 
@@ -4352,8 +4363,19 @@ class CanvasTouchView(context: Context) : View(context) {
                         } else {
                             touch3DIsPinch = false
                             val pIdx = if (isStylusTouch) stylusPointerIndex else (if (fingerCount > 0) fingerIndices[0] else 0)
-                            touch3DStartX = event.getX(pIdx)
-                            touch3DStartY = event.getY(pIdx)
+                            val sx = event.getX(pIdx)
+                            val sy = event.getY(pIdx)
+                            touch3DStartX = sx
+                            touch3DStartY = sy
+                            if (v.active3DInteractionMode == Interaction3DMode.BONE) {
+                                val docPos = screenToDoc(Offset(sx, sy))
+                                val relDocX = docPos.x - v.docWidth.toFloat() * 0.5f
+                                val relDocY = docPos.y - v.docHeight.toFloat() * 0.5f
+                                ensureViewTransform()
+                                val hit = canvas3DDrawer.hitTestJoint(relDocX, relDocY, maxDist = 36f / viewTransform.currentScale.coerceAtLeast(0.1f))
+                                v.active3DSelectedJointName = hit
+                                invalidate()
+                            }
                         }
                     }
                     MotionEvent.ACTION_MOVE -> {

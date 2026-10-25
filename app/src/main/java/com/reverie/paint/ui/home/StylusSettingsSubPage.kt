@@ -112,7 +112,7 @@ internal fun StylusSettingsSubPage(
             SettingCategoryTitle(stringResource(R.string.stylus_category_touch_prediction))
             SettingGroup {
                 val isPredictionOn = vm.stylusPredictionMasterEnabled
-                val touchTotal = if (isPredictionOn) 5 else 3
+                val touchTotal = 3
                 SettingSwitchGroupItem(
                     icon = Icons.Rounded.Edit,
                     title = stringResource(R.string.settings_pen_mode),
@@ -137,22 +137,6 @@ internal fun StylusSettingsSubPage(
                     shape = settingGroupShape(2, touchTotal),
                     onCheckedChange = { vm.updateStylusPredictionMaster(it) },
                 )
-                if (isPredictionOn) {
-                    SettingRadioGroupItem(
-                        title = stringResource(R.string.stylus_prediction_algo_hardware),
-                        summary = stringResource(R.string.stylus_prediction_algo_hardware_desc),
-                        selected = vm.stylusPredictionAlgorithmType == "HARDWARE",
-                        shape = settingGroupShape(3, touchTotal),
-                        onClick = { vm.updateStylusPredictionAlgorithm("HARDWARE") },
-                    )
-                    SettingRadioGroupItem(
-                        title = stringResource(R.string.stylus_prediction_algo_software),
-                        summary = stringResource(R.string.stylus_prediction_algo_software_desc),
-                        selected = vm.stylusPredictionAlgorithmType == "SOFTWARE",
-                        shape = settingGroupShape(4, touchTotal),
-                        onClick = { vm.updateStylusPredictionAlgorithm("SOFTWARE") },
-                    )
-                }
             }
 
             // 2. 光标与准星指示

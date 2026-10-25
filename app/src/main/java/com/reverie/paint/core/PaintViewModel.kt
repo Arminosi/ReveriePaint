@@ -1958,16 +1958,10 @@ class PaintViewModel : ViewModel() {
     var frontBufferQuietUntilMs: Long = 0L
 
     /**
-     * 笔迹预测总开关: 任一预测开启即视为开启
+     * 笔迹预测总开关 (APP 超低延迟前向预测)
      */
     val stylusPredictionMasterEnabled: Boolean
-        get() = stylusStrokePredictionEnabled || frontBufferPredictionEnabled
-
-    /**
-     * 笔迹预测算法模式: "HARDWARE" (硬件SDK算法) 或 "SOFTWARE" (APP软件算法)
-     */
-    val stylusPredictionAlgorithmType: String
-        get() = if (frontBufferPredictionEnabled) "SOFTWARE" else "HARDWARE"
+        get() = frontBufferPredictionEnabled
     // Samsung Notes 标准语义: 按住侧键落笔 = 临时橡皮 (默认开, 可在三星 S Pen 专属设置中关闭)
     var samsungSideButtonErase by mutableStateOf(true)
     var samsungSingleClickAction by mutableStateOf("toggle_eraser")
@@ -3108,33 +3102,9 @@ class PaintViewModel : ViewModel() {
     }
 
     fun updateStylusPredictionMaster(enabled: Boolean) {
+        updateFrontBufferPredictionEnabled(enabled)
         if (!enabled) {
             updateStylusStrokePredictionEnabled(false)
-            updateFrontBufferPredictionEnabled(false)
-        } else {
-            // 重新开启时默认优先选择当前记忆的算法，没记忆过则默认 APP 软件算法
-            val prefAlgo = if (::appContext.isInitialized) {
-                appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
-                    .getString("stylusPredictionLastAlgorithm", "SOFTWARE") ?: "SOFTWARE"
-            } else "SOFTWARE"
-
-            if (prefAlgo == "SOFTWARE") {
-                updateFrontBufferPredictionEnabled(true)
-            } else {
-                updateStylusStrokePredictionEnabled(true)
-            }
-        }
-    }
-
-    fun updateStylusPredictionAlgorithm(algoType: String) {
-        if (::appContext.isInitialized) {
-            appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
-                .edit().putString("stylusPredictionLastAlgorithm", algoType).apply()
-        }
-        if (algoType == "SOFTWARE") {
-            updateFrontBufferPredictionEnabled(true)
-        } else {
-            updateStylusStrokePredictionEnabled(true)
         }
     }
 

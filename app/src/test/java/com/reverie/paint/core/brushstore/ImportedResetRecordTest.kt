@@ -159,15 +159,97 @@ class ImportedResetRecordTest {
     }
 
     @Test
-    fun nonWhitelistedProvenancesAreNotApplicable() {
-        // 迁移/下线/复制/新建都不属于"导入态"，本次一律保持上游旧逻辑
-        for (prov in listOf("migrated", "migrated_possibly_modified", "retired", "duplicate", "create")) {
-            val id = putImported("Other $prov", prov)
+    fun migratedStaysNotApplicable() {
+        // 迁移来源没有 baseline 可回：重置会把 APP_ONLY（streamline/taper/压力曲线/size 上下限）
+        // 不可逆地落回默认，而 source.json 写后只读、无法事后补 baseline。本次明确不做，
+        // 用这条用例锁住，防止将来顺手把它加进白名单。
+        for (prov in listOf("migrated", "migrated_possibly_modified")) {
+            val id = putImported("Migrated $prov", prov)
             assertEquals(prov, ImportedResetRecord.provenance(id))
             assertNotApplicable(ImportedResetRecord.actionFor(id, BrushParams(isCustomized = true)))
         }
         // provenance 缺失也不能当成 import
         val bare = putImported("No Provenance", null)
         assertNotApplicable(ImportedResetRecord.actionFor(bare, BrushParams(isCustomized = true)))
+    }
+
+    @Test
+    fun retiredWithoutMetadataDropsRecord() {
+        // 下线出厂笔：快照是旧出厂 asset，元数据全默认 → 删记录（等价于出厂预设的重置效果）
+        val id = putImported("Retired Brush", BuiltinSnapshotMigrator.PROVENANCE_RETIRED)
+        assertEquals("retired", ImportedResetRecord.provenance(id))
+        assertTrue(
+            "元数据全默认时应删记录",
+            ImportedResetRecord.actionFor(id, BrushParams(isCustomized = true, size = 42.0)) is
+                ImportedResetRecord.Action.Delete,
+        )
+    }
+
+    @Test
+    fun createKeepsAuthorAndDropsEdits() {
+        // 新建笔刷：快照即出生态，没有 baseline；唯一要保住的是「原创创作者」这个 APP_ONLY 元数据
+        val name = "Created Brush"
+        File(presetDir, "$name.kpp").writeBytes(KppFixtures.bytes(stem))
+        val id = BrushImportPipeline.adoptFile(name, presetDir, "create") ?: error("adoptFile 失败")
+        assertEquals("create", ImportedResetRecord.provenance(id))
+
+        val created = BrushParams(author = "原创创作者", size = 20.0, isCustomized = false)
+        val restored = restoreOf(ImportedResetRecord.actionFor(id, created.copy(size = 999.0)))
+        assertEquals("原创创作者", restored.author)
+        assertNotEquals(999.0, restored.size, 1e-9)
+        assertFalse("不得凭空打开定制态", restored.isCustomized)
+        assertEquals("重复决策结果不变", restored, restoreOf(ImportedResetRecord.actionFor(id, restored)))
+    }
+
+    @Test
+    fun duplicateOfAbrRestoresOfficialBp() {
+        // 复制时快照=源快照、officialBp/appBaseline 一并拷贝 → 副本的出生态就是源的出生态
+        val preset = AbrParser.AbrPresetInfo(name = "Src Abr", pressureSize = true, pressureOpacity = true)
+        val converted = AbrPresetConverter.convert(preset, "Src Abr", null, "", emptyMap(), "Src")
+        val srcId = BrushImportPipeline.importAbr(
+            "Src Abr", converted.kppBytes, AbrPresetConverter.abrParamsJson(preset),
+            AbrPresetConverter.CONVERTER_VERSION, "Src.abr", presetDir,
+            PresetReadback.baselineJson(converted.bp), OfficialBpJson.toJson(converted.bp),
+        )
+        val dupId = BrushImportPipeline.duplicate(srcId, "Src Abr Copy", presetDir) ?: error("duplicate 失败")
+        assertEquals("duplicate", ImportedResetRecord.provenance(dupId))
+
+        val edited = converted.bp.copy(size = 777.0, dynamicOptions = mapOf("opacity" to "<curve/>"))
+        val restored = restoreOf(ImportedResetRecord.actionFor(dupId, edited))
+        assertNotEquals(777.0, restored.size, 1e-9)
+        // spacing 例外同 abrRestoresImportedOfficialBpNotEditedRecord：未定制时解码归一成 0.1
+        assertEquals(
+            "ABR 副本重置必须回到源的官方 bp",
+            converted.bp.copy(spacing = 0.0),
+            restored.copy(spacing = 0.0),
+        )
+    }
+
+    @Test
+    fun duplicateOfKppWithoutMetadataDropsRecord() {
+        // 源是 bundle 导入（无 officialBp、无基线）：副本重置 = 无记录
+        val srcId = putImported("Src Kpp", BrushImportPipeline.PROVENANCE_IMPORT)
+        val dupId = BrushImportPipeline.duplicate(srcId, "Src Kpp Copy", presetDir) ?: error("duplicate 失败")
+        assertEquals("duplicate", ImportedResetRecord.provenance(dupId))
+        assertTrue(
+            ImportedResetRecord.actionFor(dupId, BrushParams(isCustomized = true, size = 999.0)) is
+                ImportedResetRecord.Action.Delete,
+        )
+    }
+
+    @Test
+    fun duplicateOfKppWithAuthorKeepsMetadata() {
+        // 副本被用户改过作者时，重置只留元数据（作者属于预设本身，不是调参）
+        val srcId = putImported("Src Kpp 2", BrushImportPipeline.PROVENANCE_IMPORT)
+        val dupId = BrushImportPipeline.duplicate(srcId, "Src Kpp Copy 2", presetDir) ?: error("duplicate 失败")
+        val restored = restoreOf(
+            ImportedResetRecord.actionFor(
+                dupId,
+                BrushParams(author = "某位画师", description = "副本备注", isCustomized = true),
+            ),
+        )
+        assertEquals("某位画师", restored.author)
+        assertEquals("副本备注", restored.description)
+        assertFalse(restored.isCustomized)
     }
 }

@@ -1492,7 +1492,7 @@ class PaintViewModel : ViewModel() {
             }
             com.reverie.paint.model.QuickAction.TOGGLE_ERASER -> {
                 if (currentToolId == "eraser") {
-                    applyTool(lastToolId.ifEmpty { "brush" })
+                    applyTool("brush")
                 } else {
                     applyTool("eraser")
                 }
@@ -4583,6 +4583,8 @@ class PaintViewModel : ViewModel() {
             brushPanelOffset = androidx.compose.ui.geometry.Offset.Zero
             isLayerPanelPinned = false
             layerPanelOffset = androidx.compose.ui.geometry.Offset.Zero
+            isColorPanelPinned = false
+            colorPanelOffset = androidx.compose.ui.geometry.Offset.Zero
         }
         if (::appContext.isInitialized) {
             appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)

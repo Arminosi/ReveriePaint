@@ -558,7 +558,7 @@
     <string name="shortcut_def_save_document">Save</string>
     <string name="shortcut_def_undo">Undo</string>
     <string name="shortcut_def_redo">Redo</string>
-    <string name="shortcut_def_toggle_eraser">Toggle Eraser</string>
+    <string name="shortcut_def_toggle_eraser">Toggle Brush / Eraser</string>
     <string name="shortcut_def_toggle_last_tool">Toggle Last Tool</string>
     <string name="shortcut_def_deselect">Deselect</string>
     <string name="shortcut_def_select_rect">Rectangular Selection</string>

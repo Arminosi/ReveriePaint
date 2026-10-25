@@ -271,13 +271,23 @@ fun LayerPanel(
         ) {
             // Header Bar: Drag Handle Pill in center, Pin Button & Close Button on right (only when enabled)
             if (vm.panelPinningEnabled) {
+                val config = androidx.compose.ui.platform.LocalConfiguration.current
+                val screenWidthPx = with(density) { config.screenWidthDp.dp.toPx() }
+                val screenHeightPx = with(density) { config.screenHeightDp.dp.toPx() }
+                val maxDragX = screenWidthPx * 0.85f
+                val maxDragY = screenHeightPx * 0.85f
+
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 2.dp),
                 ) {
                     DragPillHandle(
-                        onDrag = { dragAmount -> vm.layerPanelOffset += dragAmount },
+                        onDrag = { dragAmount ->
+                            val newX = (vm.layerPanelOffset.x + dragAmount.x).coerceIn(-maxDragX, maxDragX)
+                            val newY = (vm.layerPanelOffset.y + dragAmount.y).coerceIn(-maxDragY, maxDragY)
+                            vm.layerPanelOffset = androidx.compose.ui.geometry.Offset(newX, newY)
+                        },
                         modifier = Modifier.align(Alignment.Center)
                     )
                     Row(
@@ -431,81 +441,72 @@ fun LayerPanel(
         }
     }
 
-    if (vm.panelPinningEnabled && vm.isLayerPanelPinned) {
-        cardContent(modifier.reportUiSlot(vm, UiPanelSlot.PINNED_LAYER_PANEL))
-    } else {
-        Box(
-            modifier =
-                if (isFilterAdjust) {
-                    modifier.fillMaxSize().background(Color.Transparent)
-                } else {
-                    modifier
-                        .fillMaxSize()
-                        .background(Color.Transparent)
-                        .noRippleClickable(onClose)
-                        .systemHoverIcon(context)
-                },
-        ) {
-            val offsetX = if (vm.panelPinningEnabled) vm.layerPanelOffset.x else 0f
-            val offsetY = if (vm.panelPinningEnabled) vm.layerPanelOffset.y else 0f
+    val isPinned = vm.panelPinningEnabled && vm.isLayerPanelPinned
+    val offsetX = if (vm.panelPinningEnabled) vm.layerPanelOffset.x else 0f
+    val offsetY = if (vm.panelPinningEnabled) vm.layerPanelOffset.y else 0f
 
-            val (baseAlign, basePaddingModifier) = if (vm.floatingUiConfig.enabled) {
-                val hostPos = vm.floatingUiConfig.topBarPosition
-                val mDp = vm.floatingUiConfig.popupInwardMarginDp(hostPos).dp
-                when (hostPos.edge) {
-                    com.reverie.paint.model.PanelEdge.TOP -> {
-                        when (hostPos.alignment) {
-                            com.reverie.paint.model.PanelAlignment.START -> Alignment.TopStart to Modifier.padding(start = 16.dp, top = mDp)
-                            com.reverie.paint.model.PanelAlignment.CENTER -> Alignment.TopCenter to Modifier.padding(top = mDp)
-                            com.reverie.paint.model.PanelAlignment.END -> Alignment.TopEnd to Modifier.padding(end = 16.dp, top = mDp)
-                        }
-                    }
-                    com.reverie.paint.model.PanelEdge.BOTTOM -> {
-                        when (hostPos.alignment) {
-                            com.reverie.paint.model.PanelAlignment.START -> Alignment.BottomStart to Modifier.padding(start = 16.dp, bottom = mDp)
-                            com.reverie.paint.model.PanelAlignment.CENTER -> Alignment.BottomCenter to Modifier.padding(bottom = mDp)
-                            com.reverie.paint.model.PanelAlignment.END -> Alignment.BottomEnd to Modifier.padding(end = 16.dp, bottom = mDp)
-                        }
-                    }
-                    com.reverie.paint.model.PanelEdge.LEFT -> {
-                        when (hostPos.alignment) {
-                            com.reverie.paint.model.PanelAlignment.START -> Alignment.TopStart to Modifier.padding(start = mDp, top = 16.dp)
-                            com.reverie.paint.model.PanelAlignment.CENTER -> Alignment.CenterStart to Modifier.padding(start = mDp)
-                            com.reverie.paint.model.PanelAlignment.END -> Alignment.BottomStart to Modifier.padding(start = mDp, bottom = 16.dp)
-                        }
-                    }
-                    com.reverie.paint.model.PanelEdge.RIGHT -> {
-                        when (hostPos.alignment) {
-                            com.reverie.paint.model.PanelAlignment.START -> Alignment.TopEnd to Modifier.padding(end = mDp, top = 16.dp)
-                            com.reverie.paint.model.PanelAlignment.CENTER -> Alignment.CenterEnd to Modifier.padding(end = mDp)
-                            com.reverie.paint.model.PanelAlignment.END -> Alignment.BottomEnd to Modifier.padding(end = mDp, bottom = 16.dp)
-                        }
-                    }
-                }
-            } else {
-                (if (vm.leftHandMode) Alignment.TopStart else Alignment.TopEnd) to Modifier.offset {
-                    IntOffset(
-                        ((if (vm.leftHandMode) -baseEndOffsetPx else baseEndOffsetPx) + offsetX).roundToInt(),
-                        (baseTopOffsetPx + offsetY).roundToInt(),
-                    )
+    val (baseAlign, basePaddingModifier) = if (vm.floatingUiConfig.enabled) {
+        val hostPos = vm.floatingUiConfig.topBarPosition
+        val mDp = vm.floatingUiConfig.popupInwardMarginDp(hostPos).dp
+        when (hostPos.edge) {
+            com.reverie.paint.model.PanelEdge.TOP -> {
+                when (hostPos.alignment) {
+                    com.reverie.paint.model.PanelAlignment.START -> Alignment.TopStart to Modifier.padding(start = 16.dp, top = mDp)
+                    com.reverie.paint.model.PanelAlignment.CENTER -> Alignment.TopCenter to Modifier.padding(top = mDp)
+                    com.reverie.paint.model.PanelAlignment.END -> Alignment.TopEnd to Modifier.padding(end = 16.dp, top = mDp)
                 }
             }
+            com.reverie.paint.model.PanelEdge.BOTTOM -> {
+                when (hostPos.alignment) {
+                    com.reverie.paint.model.PanelAlignment.START -> Alignment.BottomStart to Modifier.padding(start = 16.dp, bottom = mDp)
+                    com.reverie.paint.model.PanelAlignment.CENTER -> Alignment.BottomCenter to Modifier.padding(bottom = mDp)
+                    com.reverie.paint.model.PanelAlignment.END -> Alignment.BottomEnd to Modifier.padding(end = 16.dp, bottom = mDp)
+                }
+            }
+            com.reverie.paint.model.PanelEdge.LEFT -> {
+                when (hostPos.alignment) {
+                    com.reverie.paint.model.PanelAlignment.START -> Alignment.TopStart to Modifier.padding(start = mDp, top = 16.dp)
+                    com.reverie.paint.model.PanelAlignment.CENTER -> Alignment.CenterStart to Modifier.padding(start = mDp)
+                    com.reverie.paint.model.PanelAlignment.END -> Alignment.BottomStart to Modifier.padding(start = mDp, bottom = 16.dp)
+                }
+            }
+            com.reverie.paint.model.PanelEdge.RIGHT -> {
+                when (hostPos.alignment) {
+                    com.reverie.paint.model.PanelAlignment.START -> Alignment.TopEnd to Modifier.padding(end = mDp, top = 16.dp)
+                    com.reverie.paint.model.PanelAlignment.CENTER -> Alignment.CenterEnd to Modifier.padding(end = mDp)
+                    com.reverie.paint.model.PanelAlignment.END -> Alignment.BottomEnd to Modifier.padding(end = mDp, bottom = 16.dp)
+                }
+            }
+        }
+    } else {
+        (if (vm.leftHandMode) Alignment.TopStart else Alignment.TopEnd) to
+            (if (vm.leftHandMode) Modifier.padding(start = 8.dp, top = 44.dp) else Modifier.padding(end = 8.dp, top = 44.dp))
+    }
 
-            cardContent(
-                Modifier
-                    .align(baseAlign)
-                    .then(basePaddingModifier)
-                    .then(
-                        if (vm.floatingUiConfig.enabled) {
-                            Modifier.offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
-                        } else Modifier
-                    )
-                    // 滤镜调节页无全屏遮罩, 画布可落笔: 卡片登记孔径, 前缓冲不盖它 (挂在 shadow/clip 之前)。
-                    .then(
-                        if (isFilterAdjust) Modifier.reportUiSlot(vm, UiPanelSlot.LAYER_FILTER_ADJUST_CARD) else Modifier
-                    )
+    Box(
+        modifier = modifier.fillMaxSize(),
+    ) {
+        if (!isPinned && !isFilterAdjust) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Transparent)
+                    .noRippleClickable(onClose)
+                    .systemHoverIcon(context),
             )
         }
+
+        cardContent(
+            Modifier
+                .align(baseAlign)
+                .then(basePaddingModifier)
+                .offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
+                .then(
+                    if (isPinned) Modifier.reportUiSlot(vm, UiPanelSlot.PINNED_LAYER_PANEL)
+                    else if (isFilterAdjust) Modifier.reportUiSlot(vm, UiPanelSlot.LAYER_FILTER_ADJUST_CARD)
+                    else Modifier
+                )
+        )
     }
 
     renameTarget?.let { target ->

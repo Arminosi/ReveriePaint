@@ -126,7 +126,7 @@ fun ColorPanel(
                     shape = panelShape,
                     baseOpacity = opacity,
                     hazeState = hazeState,
-                    drawBorder = vm.isColorPanelPinned,
+                    drawBorder = vm.panelPinningEnabled && vm.isColorPanelPinned,
                 )
                 .evadablePanelContent(vm, UiPanelSlot.PINNED_COLOR_PANEL)
                 .clickable(
@@ -136,14 +136,24 @@ fun ColorPanel(
                 )
                 .padding(12.dp)
         ) {
+            val config = androidx.compose.ui.platform.LocalConfiguration.current
+            val screenWidthPx = with(density) { config.screenWidthDp.dp.toPx() }
+            val screenHeightPx = with(density) { config.screenHeightDp.dp.toPx() }
+            val maxDragX = screenWidthPx * 0.85f
+            val maxDragY = screenHeightPx * 0.85f
+
             // 1. Header: Drag handle pill + Title + Pin button + Color Preview Swatches
             ColorPanelHeader(
                 activeTab = vm.colorPanelTab,
                 brushColor = vm.brushColor,
                 secondaryColor = vm.brushSecondaryColor,
-                isPinned = vm.isColorPanelPinned,
+                pinningEnabled = vm.panelPinningEnabled,
+                isPinned = vm.panelPinningEnabled && vm.isColorPanelPinned,
                 onTogglePin = {
                     vm.isColorPanelPinned = !vm.isColorPanelPinned
+                    if (!vm.isColorPanelPinned) {
+                        vm.colorPanelOffset = androidx.compose.ui.geometry.Offset.Zero
+                    }
                     Toast.makeText(
                         context,
                         if (vm.isColorPanelPinned) context.getString(R.string.color_pin_hint) else context.getString(R.string.color_unpin_hint),
@@ -162,7 +172,11 @@ fun ColorPanel(
                     lastSelfUpdatedHex = ""
                     vm.swapColors()
                 },
-                onDragHandle = { dragAmount -> vm.colorPanelOffset += dragAmount },
+                onDragHandle = { dragAmount ->
+                    val newX = (vm.colorPanelOffset.x + dragAmount.x).coerceIn(-maxDragX, maxDragX)
+                    val newY = (vm.colorPanelOffset.y + dragAmount.y).coerceIn(-maxDragY, maxDragY)
+                    vm.colorPanelOffset = androidx.compose.ui.geometry.Offset(newX, newY)
+                },
                 onColorDropStart = onColorDropStart,
                 onColorDropMove = onColorDropMove,
                 onColorDropEnd = onColorDropEnd,
@@ -253,69 +267,70 @@ fun ColorPanel(
         }
     }
 
-    if (vm.isColorPanelPinned) {
-        cardContent(modifier.reportUiSlot(vm, UiPanelSlot.PINNED_COLOR_PANEL))
-    } else {
-        Box(
-            modifier = modifier
-                .fillMaxSize()
-                .background(Color.Transparent)
-                .noRippleClickable(onClose)
-                .systemHoverIcon(context)
-        ) {
-            val (baseAlign, basePaddingModifier) = if (vm.floatingUiConfig.enabled) {
-                val hostPos = vm.floatingUiConfig.sliderRailPosition
-                val mDp = vm.floatingUiConfig.popupInwardMarginDp(hostPos).dp
-                when (hostPos.edge) {
-                    com.reverie.paint.model.PanelEdge.LEFT -> {
-                        when (hostPos.alignment) {
-                            com.reverie.paint.model.PanelAlignment.START -> Alignment.TopStart to Modifier.padding(start = mDp, top = 16.dp)
-                            com.reverie.paint.model.PanelAlignment.CENTER -> Alignment.CenterStart to Modifier.padding(start = mDp)
-                            com.reverie.paint.model.PanelAlignment.END -> Alignment.BottomStart to Modifier.padding(start = mDp, bottom = 16.dp)
-                        }
-                    }
-                    com.reverie.paint.model.PanelEdge.RIGHT -> {
-                        when (hostPos.alignment) {
-                            com.reverie.paint.model.PanelAlignment.START -> Alignment.TopEnd to Modifier.padding(end = mDp, top = 16.dp)
-                            com.reverie.paint.model.PanelAlignment.CENTER -> Alignment.CenterEnd to Modifier.padding(end = mDp)
-                            com.reverie.paint.model.PanelAlignment.END -> Alignment.BottomEnd to Modifier.padding(end = mDp, bottom = 16.dp)
-                        }
-                    }
-                    com.reverie.paint.model.PanelEdge.TOP -> {
-                        when (hostPos.alignment) {
-                            com.reverie.paint.model.PanelAlignment.START -> Alignment.TopStart to Modifier.padding(start = 16.dp, top = mDp)
-                            com.reverie.paint.model.PanelAlignment.CENTER -> Alignment.TopCenter to Modifier.padding(top = mDp)
-                            com.reverie.paint.model.PanelAlignment.END -> Alignment.TopEnd to Modifier.padding(end = 16.dp, top = mDp)
-                        }
-                    }
-                    com.reverie.paint.model.PanelEdge.BOTTOM -> {
-                        when (hostPos.alignment) {
-                            com.reverie.paint.model.PanelAlignment.START -> Alignment.BottomStart to Modifier.padding(start = 16.dp, bottom = mDp)
-                            com.reverie.paint.model.PanelAlignment.CENTER -> Alignment.BottomCenter to Modifier.padding(bottom = mDp)
-                            com.reverie.paint.model.PanelAlignment.END -> Alignment.BottomEnd to Modifier.padding(end = mDp, bottom = mDp)
-                        }
-                    }
-                }
-            } else {
-                (if (vm.leftHandMode) Alignment.BottomEnd else Alignment.BottomStart) to Modifier.offset {
-                    IntOffset(
-                        ((if (vm.leftHandMode) -baseStartOffsetPx else baseStartOffsetPx) + vm.colorPanelOffset.x).roundToInt(),
-                        (baseBottomOffsetPx + vm.colorPanelOffset.y).roundToInt(),
-                    )
+    val isPinned = vm.panelPinningEnabled && vm.isColorPanelPinned
+    val offsetX = if (vm.panelPinningEnabled) vm.colorPanelOffset.x else 0f
+    val offsetY = if (vm.panelPinningEnabled) vm.colorPanelOffset.y else 0f
+
+    val (baseAlign, basePaddingModifier) = if (vm.floatingUiConfig.enabled) {
+        val hostPos = vm.floatingUiConfig.sliderRailPosition
+        val mDp = vm.floatingUiConfig.popupInwardMarginDp(hostPos).dp
+        when (hostPos.edge) {
+            com.reverie.paint.model.PanelEdge.LEFT -> {
+                when (hostPos.alignment) {
+                    com.reverie.paint.model.PanelAlignment.START -> Alignment.TopStart to Modifier.padding(start = mDp, top = 16.dp)
+                    com.reverie.paint.model.PanelAlignment.CENTER -> Alignment.CenterStart to Modifier.padding(start = mDp)
+                    com.reverie.paint.model.PanelAlignment.END -> Alignment.BottomStart to Modifier.padding(start = mDp, bottom = 16.dp)
                 }
             }
+            com.reverie.paint.model.PanelEdge.RIGHT -> {
+                when (hostPos.alignment) {
+                    com.reverie.paint.model.PanelAlignment.START -> Alignment.TopEnd to Modifier.padding(end = mDp, top = 16.dp)
+                    com.reverie.paint.model.PanelAlignment.CENTER -> Alignment.CenterEnd to Modifier.padding(end = mDp)
+                    com.reverie.paint.model.PanelAlignment.END -> Alignment.BottomEnd to Modifier.padding(end = mDp, bottom = 16.dp)
+                }
+            }
+            com.reverie.paint.model.PanelEdge.TOP -> {
+                when (hostPos.alignment) {
+                    com.reverie.paint.model.PanelAlignment.START -> Alignment.TopStart to Modifier.padding(start = 16.dp, top = mDp)
+                    com.reverie.paint.model.PanelAlignment.CENTER -> Alignment.TopCenter to Modifier.padding(top = mDp)
+                    com.reverie.paint.model.PanelAlignment.END -> Alignment.TopEnd to Modifier.padding(end = 16.dp, top = mDp)
+                }
+            }
+            com.reverie.paint.model.PanelEdge.BOTTOM -> {
+                when (hostPos.alignment) {
+                    com.reverie.paint.model.PanelAlignment.START -> Alignment.BottomStart to Modifier.padding(start = 16.dp, bottom = mDp)
+                    com.reverie.paint.model.PanelAlignment.CENTER -> Alignment.BottomCenter to Modifier.padding(bottom = mDp)
+                    com.reverie.paint.model.PanelAlignment.END -> Alignment.BottomEnd to Modifier.padding(end = 16.dp, bottom = mDp)
+                }
+            }
+        }
+    } else {
+        (if (vm.leftHandMode) Alignment.BottomEnd else Alignment.BottomStart) to
+            (if (vm.leftHandMode) Modifier.padding(end = 44.dp, bottom = 16.dp) else Modifier.padding(start = 44.dp, bottom = 16.dp))
+    }
 
-            cardContent(
-                Modifier
-                    .align(baseAlign)
-                    .then(basePaddingModifier)
-                    .then(
-                        if (vm.floatingUiConfig.enabled) {
-                            Modifier.offset { IntOffset(vm.colorPanelOffset.x.roundToInt(), vm.colorPanelOffset.y.roundToInt()) }
-                        } else Modifier
-                    )
+    Box(
+        modifier = modifier.fillMaxSize(),
+    ) {
+        if (!isPinned) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Transparent)
+                    .noRippleClickable(onClose)
+                    .systemHoverIcon(context),
             )
         }
+
+        cardContent(
+            Modifier
+                .align(baseAlign)
+                .then(basePaddingModifier)
+                .offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
+                .then(
+                    if (isPinned) Modifier.reportUiSlot(vm, UiPanelSlot.PINNED_COLOR_PANEL) else Modifier
+                )
+        )
     }
 }
 
@@ -324,6 +339,7 @@ private fun ColorPanelHeader(
     activeTab: Int,
     brushColor: String,
     secondaryColor: String,
+    pinningEnabled: Boolean = false,
     isPinned: Boolean,
     onTogglePin: () -> Unit,
     onClose: () -> Unit,
@@ -338,11 +354,13 @@ private fun ColorPanelHeader(
         modifier = Modifier.fillMaxWidth(),
         contentAlignment = Alignment.Center
     ) {
-        // Drag Handle Pill (supports dragging to move panel freely)
-        DragPillHandle(
-            onDrag = onDragHandle,
-            modifier = Modifier.align(Alignment.TopCenter)
-        )
+        if (pinningEnabled) {
+            // Drag Handle Pill (supports dragging to move panel freely)
+            DragPillHandle(
+                onDrag = onDragHandle,
+                modifier = Modifier.align(Alignment.TopCenter)
+            )
+        }
 
         Row(
             modifier = Modifier
@@ -369,11 +387,13 @@ private fun ColorPanelHeader(
                     fontWeight = FontWeight.Bold
                 )
 
-                // Pin toggle icon button
-                PinButton(
-                    isPinned = isPinned,
-                    onClick = onTogglePin,
-                )
+                if (pinningEnabled) {
+                    // Pin toggle icon button
+                    PinButton(
+                        isPinned = isPinned,
+                        onClick = onTogglePin,
+                    )
+                }
             }
 
             // Right controls: Foreground / Background Colors Swap Box & Optional Close Button when Pinned

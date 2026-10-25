@@ -2159,26 +2159,11 @@ fun PaintingPage(
         )
 
         // ---- Popup panels (topmost, must stay above timeline panel zIndex 20f) ----
-        val brushPanelDensity = LocalDensity.current
-        val brushPanelBaseStartPx = remember(brushPanelDensity) { with(brushPanelDensity) { 48.dp.roundToPx() } }
-
         AnimatedVisibility(
             visible = brushPanelOpen,
             enter = fadeIn(Motion.enterSpring()) + slideInHorizontally(Motion.enterSpring()) { if (vm.leftHandMode) 40 else -40 },
             exit = fadeOut(Motion.exitTween(200)) + slideOutHorizontally(Motion.exitTween(200)) { if (vm.leftHandMode) 40 else -40 },
-            modifier = if (vm.panelPinningEnabled && vm.isBrushPanelPinned) {
-                Modifier
-                    .align(if (vm.leftHandMode) Alignment.CenterEnd else Alignment.CenterStart)
-                    .offset {
-                        IntOffset(
-                            ((if (vm.leftHandMode) -brushPanelBaseStartPx else brushPanelBaseStartPx) + vm.brushPanelOffset.x).roundToInt(),
-                            vm.brushPanelOffset.y.roundToInt(),
-                        )
-                    }
-                    .zIndex(100f)
-            } else {
-                Modifier.fillMaxSize().zIndex(100f)
-            },
+            modifier = Modifier.fillMaxSize().zIndex(100f),
         ) {
             BrushPanel(
                 vm = vm,
@@ -2192,27 +2177,11 @@ fun PaintingPage(
             )
         }
 
-        val layerPanelDensity = LocalDensity.current
-        val layerPanelBaseEndPx = remember(layerPanelDensity) { with(layerPanelDensity) { (-8).dp.roundToPx() } }
-        val layerPanelBaseTopPx = remember(layerPanelDensity) { with(layerPanelDensity) { 44.dp.roundToPx() } }
-
         AnimatedVisibility(
             visible = layerPanelOpen,
             enter = fadeIn(Motion.enterSpring()) + slideInHorizontally(Motion.enterSpring()) { if (vm.leftHandMode) -40 else 40 },
             exit = fadeOut(Motion.exitTween(200)) + slideOutHorizontally(Motion.exitTween(200)) { if (vm.leftHandMode) -40 else 40 },
-            modifier = if (vm.panelPinningEnabled && vm.isLayerPanelPinned) {
-                Modifier
-                    .align(if (vm.leftHandMode) Alignment.TopStart else Alignment.TopEnd)
-                    .offset {
-                        IntOffset(
-                            ((if (vm.leftHandMode) -layerPanelBaseEndPx else layerPanelBaseEndPx) + vm.layerPanelOffset.x).roundToInt(),
-                            (layerPanelBaseTopPx + vm.layerPanelOffset.y).roundToInt(),
-                        )
-                    }
-                    .zIndex(100f)
-            } else {
-                Modifier.fillMaxSize().zIndex(100f)
-            },
+            modifier = Modifier.fillMaxSize().zIndex(100f),
         ) {
             LayerPanel(
                 vm = vm,
@@ -2259,31 +2228,20 @@ fun PaintingPage(
                 },
             )
         }
-        val colorPanelDensity = LocalDensity.current
-        val colorPanelBaseStartPx = remember(colorPanelDensity) { with(colorPanelDensity) { 44.dp.roundToPx() } }
-        val colorPanelBaseBottomPx = remember(colorPanelDensity) { with(colorPanelDensity) { (-16).dp.roundToPx() } }
 
         AnimatedVisibility(
             visible = colorPanelOpen,
             enter = fadeIn(Motion.enterSpring()) + slideInHorizontally(Motion.enterSpring()) { if (vm.leftHandMode) 40 else -40 },
             exit = fadeOut(Motion.exitTween(200)) + slideOutHorizontally(Motion.exitTween(200)) { if (vm.leftHandMode) 40 else -40 },
-            modifier = if (vm.isColorPanelPinned) {
-                Modifier
-                    .align(if (vm.leftHandMode) Alignment.BottomEnd else Alignment.BottomStart)
-                    .offset {
-                        IntOffset(
-                            ((if (vm.leftHandMode) -colorPanelBaseStartPx else colorPanelBaseStartPx) + vm.colorPanelOffset.x).roundToInt(),
-                            (colorPanelBaseBottomPx + vm.colorPanelOffset.y).roundToInt(),
-                        )
-                    }
-                    .zIndex(100f)
-            } else {
-                Modifier.fillMaxSize().zIndex(100f)
-            },
+            modifier = Modifier.fillMaxSize().zIndex(100f),
         ) {
             ColorPanel(
                 vm = vm,
-                onClose = { colorPanelOpen = false },
+                onClose = {
+                    colorPanelOpen = false
+                    vm.isColorPanelPinned = false
+                    vm.colorPanelOffset = androidx.compose.ui.geometry.Offset.Zero
+                },
                 opacity = vm.popupPanelOpacity,
                 hazeState = hazeState,
                 onColorDropStart = { pos ->

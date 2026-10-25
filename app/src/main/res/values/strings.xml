@@ -558,7 +558,7 @@
     <string name="shortcut_def_save_document">保存</string>
     <string name="shortcut_def_undo">撤销</string>
     <string name="shortcut_def_redo">重做</string>
-    <string name="shortcut_def_toggle_eraser">当前工具与橡皮切换</string>
+    <string name="shortcut_def_toggle_eraser">画笔与橡皮切换</string>
     <string name="shortcut_def_toggle_last_tool">当前工具与上次使用工具切换</string>
     <string name="shortcut_def_deselect">取消选区</string>
     <string name="shortcut_def_select_rect">矩形选区</string>

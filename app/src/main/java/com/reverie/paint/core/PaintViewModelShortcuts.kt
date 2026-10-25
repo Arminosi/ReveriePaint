@@ -55,7 +55,7 @@ val ALL_SHORTCUT_DEFINITIONS = listOf(
     ShortcutDefinition("save_document", ShortcutCategory.PAINTING, "保存", "LeftCtrl + S", R.string.shortcut_def_save_document),
     ShortcutDefinition("undo", ShortcutCategory.PAINTING, "撤销", "LeftCtrl + Z", R.string.shortcut_def_undo),
     ShortcutDefinition("redo", ShortcutCategory.PAINTING, "重做", "LeftCtrl + LeftShift + Z", R.string.shortcut_def_redo),
-    ShortcutDefinition("toggle_eraser", ShortcutCategory.PAINTING, "当前工具与橡皮切换", "PageDown", R.string.shortcut_def_toggle_eraser),
+    ShortcutDefinition("toggle_eraser", ShortcutCategory.PAINTING, "画笔与橡皮切换", "PageDown", R.string.shortcut_def_toggle_eraser),
     ShortcutDefinition("toggle_last_tool", ShortcutCategory.PAINTING, "当前工具与上次使用工具切换", "无", R.string.shortcut_def_toggle_last_tool),
     ShortcutDefinition("deselect", ShortcutCategory.PAINTING, "取消选区", "LeftCtrl + D", R.string.shortcut_def_deselect),
     ShortcutDefinition("disable_touch", ShortcutCategory.PAINTING, "禁用画布触控", "无", R.string.shortcut_def_disable_touch),

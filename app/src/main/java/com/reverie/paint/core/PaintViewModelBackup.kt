@@ -198,7 +198,8 @@ internal fun PaintViewModel.executeRestoreBackup() {
                 localBackupState.showRestoreDialog = false
 
                 // 热刷新系统状态
-                if (outcome.restoredPreferences) {
+                // 数位笔模块也有 VM 镜像、压感曲线及驱动状态，不能只刷新键盘绑定。
+                if (outcome.restoredPreferences || outcome.restoredShortcuts) {
                     syncSettingsFromPrefs()
                 }
                 if (outcome.restoredShortcuts) {

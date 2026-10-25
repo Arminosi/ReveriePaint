@@ -18,6 +18,7 @@ import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 import org.json.JSONArray
 import org.json.JSONObject
+import com.reverie.paint.model.BackupPreferenceKeys
 
 object LocalBackupEngine {
     const val PREFS_NAME = "paint_prefs"
@@ -73,7 +74,8 @@ object LocalBackupEngine {
             }
             BackupCategory.SHORTCUTS_STYLUS -> {
                 val shortcuts = (prefsMap["shortcut_bindings"] as? String) ?: "{}"
-                val count = runCatching { JSONObject(shortcuts).length() }.getOrDefault(0)
+                val count = runCatching { JSONObject(shortcuts).length() }.getOrDefault(0) +
+                    prefsMap.keys.count(BackupPreferenceKeys::isStylus)
                 CategoryEstimate(count, 0L, "$count 组快捷键与按键绑定")
             }
             BackupCategory.REFERENCES_FONTS -> {
@@ -159,7 +161,8 @@ object LocalBackupEngine {
             } else 0,
             shortcutsCount = if (selectedCategories.contains(BackupCategory.SHORTCUTS_STYLUS)) {
                 val shortcuts = (prefsMap["shortcut_bindings"] as? String) ?: "{}"
-                runCatching { JSONObject(shortcuts).length() }.getOrDefault(0)
+                runCatching { JSONObject(shortcuts).length() }.getOrDefault(0) +
+                    prefsMap.keys.count(BackupPreferenceKeys::isStylus)
             } else 0,
         )
 
@@ -178,7 +181,7 @@ object LocalBackupEngine {
                 for ((k, v) in prefsMap) {
                     if (k in EXCLUDED_PREF_KEYS) continue
                     if (k == "userPalettes" || k == "recentColors") continue
-                    if (k == "shortcut_bindings" || k.startsWith("stylus_")) continue
+                    if (BackupPreferenceKeys.isShortcutOrStylus(k)) continue
                     val item = JSONObject()
                     when (v) {
                         is Boolean -> { item.put("t", "bool"); item.put("v", v) }
@@ -213,7 +216,7 @@ object LocalBackupEngine {
                 val scObj = JSONObject()
                 scObj.put("shortcut_bindings", (prefsMap["shortcut_bindings"] as? String) ?: "{}")
                 for ((k, v) in prefsMap) {
-                    if (k.startsWith("stylus_") || k == "pressure_curve") {
+                    if (BackupPreferenceKeys.isStylus(k)) {
                         val item = JSONObject()
                         when (v) {
                             is Boolean -> { item.put("t", "bool"); item.put("v", v) }

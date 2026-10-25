@@ -4071,6 +4071,7 @@ class PaintViewModel : ViewModel() {
             genericStylusEnabled = prefs.getBoolean("genericStylusEnabled", false)
             genericPrimaryButtonAction = prefs.getString("genericPrimaryButtonAction", "toggle_eraser") ?: "toggle_eraser"
             genericSecondaryButtonAction = prefs.getString("genericSecondaryButtonAction", "undo") ?: "undo"
+            genericSideButtonErase = prefs.getBoolean("genericSideButtonErase", true)
             gestureTwoFingerUndo = prefs.getBoolean("gestureTwoFingerUndo", true)
             gestureThreeFingerRedo = prefs.getBoolean("gestureThreeFingerRedo", true)
             gestureThreeFingerEditMenu = prefs.getBoolean("gestureThreeFingerEditMenu", true)

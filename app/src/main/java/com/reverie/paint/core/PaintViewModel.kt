@@ -5223,8 +5223,7 @@ class PaintViewModel : ViewModel() {
     // the hot path (架构铁律 §4).
     companion object {
         /** 见 [frontBufferQuietUntilMs]。取实测窗口的上沿，避免卡在 3 秒边界上仍裂开。 */
-        // 实机测试确认不再需要，已去掉新建画布后的前缓冲静默窗 (原值 3_200L)。
-        const val NEW_CANVAS_FRONT_BUFFER_QUIET_MS = 0L
+        const val NEW_CANVAS_FRONT_BUFFER_QUIET_MS = 3_200L
 
         @Volatile var currentInstance: PaintViewModel? = null
         const val SMOOTHING_OFF = 0

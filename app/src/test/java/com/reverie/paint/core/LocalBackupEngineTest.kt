@@ -8,10 +8,18 @@ import com.reverie.paint.core.backup.BackupCategory
 import com.reverie.paint.core.backup.ConflictResolution
 import com.reverie.paint.core.backup.LocalBackupEngine
 import com.reverie.paint.core.backup.RestoreOptions
+import com.reverie.paint.core.backup.RestoreOutcome
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.IOException
+import java.io.InputStream
 import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.util.zip.CRC32
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -20,6 +28,108 @@ import org.junit.Assert.fail
 import org.junit.Test
 
 class LocalBackupEngineTest {
+
+    private fun restoreBackup(
+        filesDir: File,
+        prefApplier: ((String?, String?, String?) -> Unit)?,
+        inputStream: InputStream,
+        options: RestoreOptions,
+    ): RestoreOutcome = LocalBackupEngine.restoreBackup(
+        filesDir, prefApplier, inputStream, options,
+        // JVM 没有 Android Os.rename；仍用真实文件系统原子替换验证整条恢复路径。
+        replaceFile = { source, target ->
+            Files.move(source.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        },
+    )
+
+    @Test
+    fun `replacement failure keeps original content and removes staging file`() {
+        val root = Files.createTempDirectory("backup-commit-failure").toFile()
+        try {
+            val dir = File(root, "projects").apply { mkdirs() }
+            val target = File(dir, "painting.revp").apply { writeText("original") }
+            try {
+                LocalBackupEngine.restoreBackup(
+                    root, null, ByteArrayInputStream(storedProjectZip("replacement".toByteArray())),
+                    RestoreOptions(
+                        selectedCategories = setOf(BackupCategory.PROJECTS),
+                        projectConflictResolution = ConflictResolution.OVERWRITE,
+                    ),
+                    replaceFile = { staged, destination ->
+                        assertEquals("replacement", staged.readText())
+                        assertEquals("original", destination.readText())
+                        throw IOException("Simulated atomic rename failure")
+                    },
+                )
+                fail("Expected replacement failure")
+            } catch (_: IOException) {
+                assertEquals("original", target.readText())
+                assertEquals(listOf("painting.revp"), dir.list()!!.toList())
+            }
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `bad CRC does not destroy an existing project or leave a partial new project`() {
+        val payload = ByteArray(8192) { (it % 251).toByte() }
+        val bytes = storedProjectZip(payload)
+        // STORED entries put data immediately after the local header and UTF-8 filename.
+        val start = 30 + "data/projects/painting.revp".toByteArray().size
+        bytes[start + 4000] = (bytes[start + 4000].toInt() xor 1).toByte()
+        assertFailedRestorePreservesFiles(bytes)
+    }
+
+    @Test
+    fun `truncated backup does not destroy an existing project or leave a partial new project`() {
+        val bytes = storedProjectZip(ByteArray(8192) { (it % 251).toByte() })
+        assertFailedRestorePreservesFiles(bytes.copyOf(4096))
+    }
+
+    private fun assertFailedRestorePreservesFiles(bytes: ByteArray) {
+        for (existing in listOf(true, false)) {
+            val root = Files.createTempDirectory("backup-failure").toFile()
+            try {
+                val dir = File(root, "projects").apply { mkdirs() }
+                val target = File(dir, "painting.revp")
+                if (existing) target.writeText("irreplaceable local drawing")
+                try {
+                    restoreBackup(
+                        root, null, ByteArrayInputStream(bytes),
+                        RestoreOptions(
+                            selectedCategories = setOf(BackupCategory.PROJECTS),
+                            projectConflictResolution = ConflictResolution.OVERWRITE,
+                        ),
+                    )
+                    fail("Corrupt backup must fail")
+                } catch (_: IOException) {
+                    // The restore error must not cost the user their existing document.
+                }
+                if (existing) assertEquals("irreplaceable local drawing", target.readText())
+                else assertFalse("Failed new entry must not become a project", target.exists())
+                assertEquals("No staging files left behind", if (existing) 1 else 0, dir.listFiles()!!.size)
+            } finally {
+                root.deleteRecursively()
+            }
+        }
+    }
+
+    private fun storedProjectZip(payload: ByteArray): ByteArray {
+        val out = ByteArrayOutputStream()
+        ZipOutputStream(out).use { zip ->
+            val entry = ZipEntry("data/projects/painting.revp").apply {
+                method = ZipEntry.STORED
+                size = payload.size.toLong()
+                compressedSize = size
+                crc = CRC32().apply { update(payload) }.value
+            }
+            zip.putNextEntry(entry)
+            zip.write(payload)
+            zip.closeEntry()
+        }
+        return out.toByteArray()
+    }
 
     @Test
     fun `estimateCategory correctly calculates counts and sizes`() {
@@ -114,7 +224,7 @@ class LocalBackupEngineTest {
             val existing = File(destProj, "painting.revp").apply { writeText("local-modified") }
 
             var appliedPrefs: String? = null
-            val outcome = LocalBackupEngine.restoreBackup(
+            val outcome = restoreBackup(
                 filesDir = destRoot,
                 prefApplier = { prefs, _, _ -> appliedPrefs = prefs },
                 inputStream = ByteArrayInputStream(out.toByteArray()),
@@ -155,7 +265,7 @@ class LocalBackupEngineTest {
             val destProj = File(destRoot, "projects").apply { mkdirs() }
             val target = File(destProj, "painting.revp").apply { writeText("old-content") }
 
-            val outcome = LocalBackupEngine.restoreBackup(
+            val outcome = restoreBackup(
                 filesDir = destRoot,
                 prefApplier = null,
                 inputStream = ByteArrayInputStream(out.toByteArray()),
@@ -212,7 +322,7 @@ class LocalBackupEngineTest {
             )
 
             var restoredPrefsJson: String? = null
-            LocalBackupEngine.restoreBackup(
+            restoreBackup(
                 filesDir = root,
                 prefApplier = { prefsJson, _, _ -> restoredPrefsJson = prefsJson },
                 inputStream = ByteArrayInputStream(out.toByteArray()),

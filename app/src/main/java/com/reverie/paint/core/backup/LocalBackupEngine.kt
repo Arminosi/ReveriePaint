@@ -6,11 +6,13 @@ package com.reverie.paint.core.backup
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.system.Os
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.InputStream
+import java.io.IOException
 import java.io.OutputStream
 import java.security.MessageDigest
 import java.util.zip.ZipEntry
@@ -359,6 +361,9 @@ object LocalBackupEngine {
         inputStream: InputStream,
         options: RestoreOptions,
         onProgress: (done: Int, total: Int, label: String) -> Unit = { _, _, _ -> },
+        // Android 使用同目录 POSIX rename 原子替换。注入点让 JVM 测试使用宿主文件系统的原子移动，
+        // 并能验证替换失败；应用调用方沿用默认实现，不允许退回「删旧文件再拷贝」。
+        replaceFile: (File, File) -> Unit = { source, target -> Os.rename(source.path, target.path) },
     ): RestoreOutcome {
         var restoredProjects = 0
         var restoredAutosaves = 0
@@ -412,7 +417,7 @@ object LocalBackupEngine {
                             safeValidatePath(filesDir, target)
                             val dest = resolveTarget(target, options.projectConflictResolution)
                             if (dest != null) {
-                                writeEntryToFile(zip, dest)
+                                writeEntryToFile(zip, dest, replaceFile)
                                 restoredProjects++
                             }
                         }
@@ -424,7 +429,7 @@ object LocalBackupEngine {
                             onProgress(index, 0, rel)
                             val target = File(File(filesDir, "autosave"), rel)
                             safeValidatePath(filesDir, target)
-                            writeEntryToFile(zip, target)
+                            writeEntryToFile(zip, target, replaceFile)
                             restoredAutosaves++
                         }
                     }
@@ -437,7 +442,7 @@ object LocalBackupEngine {
                             safeValidatePath(filesDir, target)
                             val dest = resolveTarget(target, options.brushConflictResolution)
                             if (dest != null) {
-                                writeEntryToFile(zip, dest)
+                                writeEntryToFile(zip, dest, replaceFile)
                                 restoredBrushes++
                             }
                         }
@@ -448,7 +453,7 @@ object LocalBackupEngine {
                         if (fileName.isNotEmpty()) {
                             val target = File(File(filesDir, "brushes"), fileName)
                             safeValidatePath(filesDir, target)
-                            writeEntryToFile(zip, target)
+                            writeEntryToFile(zip, target, replaceFile)
                         }
                     }
 
@@ -457,7 +462,7 @@ object LocalBackupEngine {
                         if (fileName.isNotEmpty()) {
                             val target = File(File(filesDir, "patterns"), fileName)
                             safeValidatePath(filesDir, target)
-                            writeEntryToFile(zip, target)
+                            writeEntryToFile(zip, target, replaceFile)
                         }
                     }
 
@@ -466,7 +471,7 @@ object LocalBackupEngine {
                         if (rel.isNotEmpty()) {
                             val target = File(File(filesDir, "project_references"), rel)
                             safeValidatePath(filesDir, target)
-                            writeEntryToFile(zip, target)
+                            writeEntryToFile(zip, target, replaceFile)
                             restoredReferences++
                         }
                     }
@@ -476,7 +481,7 @@ object LocalBackupEngine {
                         if (rel.isNotEmpty()) {
                             val target = File(File(filesDir, "ref_images"), rel)
                             safeValidatePath(filesDir, target)
-                            writeEntryToFile(zip, target)
+                            writeEntryToFile(zip, target, replaceFile)
                             restoredReferences++
                         }
                     }
@@ -486,7 +491,7 @@ object LocalBackupEngine {
                         if (fileName.isNotEmpty()) {
                             val target = File(File(filesDir, "fonts"), fileName)
                             safeValidatePath(filesDir, target)
-                            writeEntryToFile(zip, target)
+                            writeEntryToFile(zip, target, replaceFile)
                         }
                     }
                 }
@@ -550,12 +555,22 @@ object LocalBackupEngine {
         zip.closeEntry()
     }
 
-    private fun writeEntryToFile(zip: ZipInputStream, target: File) {
-        target.parentFile?.mkdirs()
-        FileOutputStream(target).use { output ->
-            zip.copyTo(output, 32 * 1024)
-            output.flush()
-            output.fd.sync()
+    private fun writeEntryToFile(zip: ZipInputStream, target: File, replaceFile: (File, File) -> Unit) {
+        val parent = target.absoluteFile.parentFile ?: throw IOException("备份目标没有父目录")
+        if (!parent.isDirectory && !parent.mkdirs()) throw IOException("无法创建备份恢复目录: $parent")
+        if (target.isDirectory) throw IOException("备份目标是目录: $target")
+        val staged = File.createTempFile(".restore-", ".tmp", parent)
+        try {
+            FileOutputStream(staged).use { output ->
+                zip.copyTo(output, 32 * 1024)
+                // 必须读完并完成 ZIP CRC 校验后才提交；中途损坏/空间不足不得截断原文件。
+                zip.closeEntry()
+                output.flush()
+                output.fd.sync()
+            }
+            replaceFile(staged, target)
+        } finally {
+            staged.delete()
         }
     }
 

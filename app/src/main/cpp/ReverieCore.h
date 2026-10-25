@@ -864,6 +864,12 @@ public:
     bool loadSingleBrushResource(const QString &baseName);
     void ensureBrushForPreset(const QString &kppPath);
     bool loadBrushPreset(int index);
+    // #116: 临时橡皮覆盖的活状态快照。begin 保存当前 preset 对象 (共享指针, 其 settings
+    // 已含全部现场 setter 写入) 与引擎镜像变量; 覆盖期间引擎持有橡皮预设, 不会触碰该对象;
+    // end 原样换回, 恢复的就是覆盖前正在作画的引擎状态, 与磁盘/v2 持久化时序无关。
+    // 无可快照的预设时 begin 返回 false; 无快照时 end 返回 false (调用方退回旧恢复链)。
+    bool beginPresetOverrideSnapshot();
+    bool endPresetOverrideSnapshot();
     int brushPresetCount() const;
     QVector<double> brushPresetDefaults(int index);
     QString brushPresetName(int index) const;
@@ -1208,6 +1214,22 @@ private:
     // loadBrushPreset 每次都重新解析预设文件, 出厂笔尖天然在场,
     // 覆盖未发生时 setBrushTipAsset("") 无需再解析原文件。
     bool m_tipOverridden = false;
+    // #116 临时橡皮覆盖的活状态快照 (引擎串行线程上 begin/end 配对使用)
+    KisPaintOpPresetSP m_overrideSnapshotPreset;
+    int m_overrideSnapshotIndex = -1;
+    qreal m_overrideSnapshotSize = 0.0;
+    qreal m_overrideSnapshotOpacity = 0.0;
+    qreal m_overrideSnapshotFlow = 0.0;
+    qreal m_overrideSnapshotSpacing = 0.0;
+    qreal m_overrideSnapshotAngle = 0.0;
+    qreal m_overrideSnapshotRotation = 0.0;
+    qreal m_overrideSnapshotSmudgeRate = 0.0;
+    qreal m_overrideSnapshotSmudgeLength = 0.0;
+    bool m_overrideSnapshotAirbrush = false;
+    int m_overrideSnapshotEraserFlag = -1;
+    ToolMode m_overrideSnapshotToolMode = ToolBrush;
+    bool m_overrideSnapshotTipOverridden = false;
+    QString m_overrideSnapshotTipAsset;
     // Size 压感曲线缓存（预设切换时失效；光标环每帧查询用）
     mutable QMutex m_sizeCurveMutex;
     const void *m_sizeCurveOwner = nullptr;   // settings 指针，变更即重解析

@@ -975,6 +975,82 @@ bool ReverieCore::loadBrushPreset(int index)
     return true;
 }
 
+bool ReverieCore::beginPresetOverrideSnapshot()
+{
+    if (!m_brushPreset || m_brushPresetIndex < 0) {
+        return false;
+    }
+    m_overrideSnapshotPreset = m_brushPreset;
+    m_overrideSnapshotIndex = m_brushPresetIndex;
+    m_overrideSnapshotSize = m_brushSize;
+    m_overrideSnapshotOpacity = m_brushOpacity;
+    m_overrideSnapshotFlow = m_brushFlow;
+    m_overrideSnapshotSpacing = m_brushSpacing;
+    m_overrideSnapshotAngle = m_brushAngle;
+    m_overrideSnapshotRotation = m_brushRotation;
+    m_overrideSnapshotSmudgeRate = m_smudgeRate;
+    m_overrideSnapshotSmudgeLength = m_smudgeLength;
+    m_overrideSnapshotAirbrush = m_airbrushEnabled;
+    m_overrideSnapshotEraserFlag = m_presetIsEraserOverride;
+    m_overrideSnapshotToolMode = m_toolMode;
+    m_overrideSnapshotTipOverridden = m_tipOverridden;
+    m_overrideSnapshotTipAsset = m_brushTipAsset;
+    RPC_LOG("RPC overrideSnapshot begin idx=%d", m_brushPresetIndex);
+    return true;
+}
+
+bool ReverieCore::endPresetOverrideSnapshot()
+{
+    if (!m_overrideSnapshotPreset || m_overrideSnapshotIndex < 0) {
+        return false;
+    }
+    // 先取出并清空快照 (消费一次即失效, 防止旧快照被误用)
+    const KisPaintOpPresetSP preset = m_overrideSnapshotPreset;
+    const int index = m_overrideSnapshotIndex;
+    const qreal size = m_overrideSnapshotSize;
+    const qreal opacity = m_overrideSnapshotOpacity;
+    const qreal flow = m_overrideSnapshotFlow;
+    const qreal spacing = m_overrideSnapshotSpacing;
+    const qreal angle = m_overrideSnapshotAngle;
+    const qreal rotation = m_overrideSnapshotRotation;
+    const qreal smudgeRate = m_overrideSnapshotSmudgeRate;
+    const qreal smudgeLength = m_overrideSnapshotSmudgeLength;
+    const bool airbrush = m_overrideSnapshotAirbrush;
+    const int eraserFlag = m_overrideSnapshotEraserFlag;
+    const ToolMode toolMode = m_overrideSnapshotToolMode;
+    const bool tipOverridden = m_overrideSnapshotTipOverridden;
+    const QString tipAsset = m_overrideSnapshotTipAsset;
+    m_overrideSnapshotPreset.clear();
+    m_overrideSnapshotIndex = -1;
+
+    m_brushPreset = preset;
+    m_brushPresetIndex = index;
+    m_brushSize = size;
+    m_brushOpacity = opacity;
+    m_brushFlow = flow;
+    m_brushSpacing = spacing;
+    m_brushAngle = angle;
+    m_brushRotation = rotation;
+    m_smudgeRate = smudgeRate;
+    m_smudgeLength = smudgeLength;
+    m_airbrushEnabled = airbrush;
+    m_presetIsEraserOverride = eraserFlag;
+    m_toolMode = toolMode;
+    m_tipOverridden = tipOverridden;
+    m_brushTipAsset = tipAsset;
+    // 与 loadBrushPreset 的加载后处理保持一致: eraser 模式按工具态重写
+    if (m_brushPreset && m_brushPreset->settings()) {
+        m_brushPreset->settings()->setEraserMode(m_toolMode == ToolEraser);
+    }
+    // 压感曲线缓存按 owner 指针失效 (覆盖期间可能已指向橡皮 settings)
+    {
+        QMutexLocker locker(&m_sizeCurveMutex);
+        m_sizeCurveOwner = nullptr;
+    }
+    RPC_LOG("RPC overrideSnapshot end restore idx=%d", index);
+    return true;
+}
+
 // 一次 .kpp 解析同时提取 defaults / paintOpId / tipFilename 三个只读值。
 // 选择预设时 Kotlin 会在主线程连查这三个值 (原本各做一次完整解析:
 // 读文件 + PNG zTXt 解压 + 正则扫描 + XML loadFromDevice), 是"换笔卡顿"

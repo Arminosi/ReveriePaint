@@ -77,6 +77,18 @@ Java_com_reverie_paint_core_ReverieCoreBridge_loadBrushPreset(JNIEnv *, jobject,
     return core()->loadBrushPreset(index);
 }
 
+JNIEXPORT jboolean JNICALL
+Java_com_reverie_paint_core_ReverieCoreBridge_beginPresetOverrideSnapshot(JNIEnv *, jobject)
+{
+    return core()->beginPresetOverrideSnapshot() ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_reverie_paint_core_ReverieCoreBridge_endPresetOverrideSnapshot(JNIEnv *, jobject)
+{
+    return core()->endPresetOverrideSnapshot() ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT jdoubleArray JNICALL
 Java_com_reverie_paint_core_ReverieCoreBridge_brushPresetDefaults(JNIEnv *env, jobject, jint index)
 {

@@ -60,6 +60,40 @@ class Model3DTest {
     }
 
     @Test
+    fun `Model3DState fromJsonObject parses org json JSONObject correctly`() {
+        val json = org.json.JSONObject().apply {
+            put("layerId", 101L)
+            put("layerIndex", 3)
+            put("layerName", "3D 参考 (cat)")
+            put("modelType", "cat")
+            put("rotX", -10.5)
+            put("rotY", 25.0)
+            put("rotZ", 0.0)
+            put("panX", 0.1)
+            put("panY", -0.2)
+            put("zoom", 1.5)
+            put("lightYaw", 50.0)
+            put("lightPitch", 40.0)
+            put("renderMode", "shading")
+            put("baseColor", 0xFFD8D4CEL)
+            put("wireframeColor", 0xFF36383BL)
+            put("posePreset", "sit")
+            put("jointAngles", "cat_head_yaw=12.5;cat_spine_arch=-5.0")
+        }
+        val restored = Model3DState.fromJsonObject(json)
+        assertEquals(101L, restored.layerId)
+        assertEquals(3, restored.layerIndex)
+        assertEquals("3D 参考 (cat)", restored.layerName)
+        assertEquals("cat", restored.modelType)
+        assertEquals(-10.5f, restored.rotX, 0.01f)
+        assertEquals(25.0f, restored.rotY, 0.01f)
+        assertEquals(RenderMode3D.SHADING, restored.renderMode)
+        assertEquals("sit", restored.posePreset)
+        assertEquals(12.5f, restored.jointAngles["cat_head_yaw"] ?: 0f, 0.01f)
+        assertEquals(-5.0f, restored.jointAngles["cat_spine_arch"] ?: 0f, 0.01f)
+    }
+
+    @Test
     fun `Math3D identity and multiplication preserves identity`() {
         val ident = Math3D.identity()
         val result = Math3D.multiplyMM(ident, ident)

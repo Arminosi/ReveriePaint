@@ -93,7 +93,48 @@ data class Model3DState(
     }
 
     companion object {
+        fun fromJsonObject(json: org.json.JSONObject): Model3DState {
+            val anglesStr = json.optString("jointAngles", "")
+            val anglesMap = if (anglesStr.isNotEmpty()) {
+                anglesStr.split(";").mapNotNull { entry ->
+                    val parts = entry.split("=")
+                    if (parts.size == 2) {
+                        val angleVal = parts[1].toFloatOrNull()
+                        if (angleVal != null) parts[0] to angleVal else null
+                    } else null
+                }.toMap()
+            } else emptyMap()
+
+            return Model3DState(
+                layerId = json.optLong("layerId", 0L),
+                layerIndex = json.optInt("layerIndex", -1),
+                layerName = json.optString("layerName", ""),
+                modelType = json.optString("modelType", BuiltinModel3D.ANIME_BOY.id),
+                rotX = json.optDouble("rotX", 15.0).toFloat(),
+                rotY = json.optDouble("rotY", -30.0).toFloat(),
+                rotZ = json.optDouble("rotZ", 0.0).toFloat(),
+                panX = json.optDouble("panX", 0.0).toFloat(),
+                panY = json.optDouble("panY", 0.0).toFloat(),
+                zoom = json.optDouble("zoom", 1.0).toFloat(),
+                lightYaw = json.optDouble("lightYaw", 45.0).toFloat(),
+                lightPitch = json.optDouble("lightPitch", 35.0).toFloat(),
+                renderMode = RenderMode3D.fromId(json.optString("renderMode", "clay")),
+                baseColor = json.optLong("baseColor", 0xFFD8D4CEL),
+                wireframeColor = json.optLong("wireframeColor", 0xFF36383BL),
+                posePreset = json.optString("posePreset", "stand"),
+                jointAngles = anglesMap,
+            )
+        }
+
         fun fromJson(json: String): Model3DState? {
+            return try {
+                fromJsonObject(org.json.JSONObject(json))
+            } catch (_: Throwable) {
+                fromJsonManual(json)
+            }
+        }
+
+        private fun fromJsonManual(json: String): Model3DState? {
             return try {
                 val clean = json.trim().removeSurrounding("{", "}")
                 val pairs = clean.split(",")

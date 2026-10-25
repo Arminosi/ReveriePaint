@@ -551,6 +551,7 @@ internal fun PaintViewModel.copyLayer(i: Int) {
     runCore(after = {
         isCopyingLayer = false
         clearLayerSelection()
+        notifyLayerChanged()
         if (src3DState != null) {
             val newLayer = layers.getOrNull(currentLayerIndex)
             if (newLayer != null) {
@@ -558,7 +559,6 @@ internal fun PaintViewModel.copyLayer(i: Int) {
                 ensure3DLayerClearedInCore(newLayer.id)
             }
         }
-        notifyLayerChanged()
     }) {
         val newIdx = ReverieCoreBridge.copyLayer(i)
         if (!isZh && newIdx >= 0 && newIdx < ReverieCoreBridge.layerCount()) {

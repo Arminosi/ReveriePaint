@@ -867,6 +867,12 @@ class PaintViewModel : ViewModel() {
 
     data class ToolBrushState(
         val presetIndex: Int = -1,
+        /**
+         * 预设名字 = 稳定身份。#136 A：`presetIndex` 是「当前目录里按名排序」的产物，
+         * 导入/删除预设会整表重排，只存索引会让工具槽在重排后指到别的笔（橡皮变喷漆）。
+         * 解析顺序见 [com.reverie.paint.core.ToolPresetMemory]：先名字，名字缺失才退回索引并自愈回填。
+         */
+        val presetName: String = "",
         val category: String = "全部",
         val categoryScrollIndex: Int = 0,
         val categoryScrollOffset: Int = 0,

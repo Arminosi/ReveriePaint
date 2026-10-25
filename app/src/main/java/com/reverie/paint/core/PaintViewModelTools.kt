@@ -190,14 +190,22 @@ internal fun PaintViewModel.touchStart(
             ?: brushPresets.firstOrNull { it.name == "Eraser_circle" }?.index
             ?: brushPresets.firstOrNull { it.group == "橡皮擦" }?.index
             ?: -1
-        eraserPresetIdx = if (eraserState != null && brushPresets.any { it.index == eraserState.presetIndex }) {
-            eraserState.presetIndex
-        } else {
-            defaultEraserIdx
-        }
+        // #136 A：先按名字解析（索引会随导入/删除重排），解析不到才退回默认橡皮
+        eraserPresetIdx = ToolPresetMemory.resolve(
+            eraserState?.presetName ?: "",
+            eraserState?.presetIndex ?: -1,
+            brushPresets,
+        )?.index ?: defaultEraserIdx
         if (eraserState == null && eraserPresetIdx >= 0) {
             toolBrushStates = toolBrushStates.toMutableMap().apply {
-                put("eraser", PaintViewModel.ToolBrushState(category = "橡皮擦", presetIndex = eraserPresetIdx))
+                put(
+                    "eraser",
+                    PaintViewModel.ToolBrushState(
+                        category = "橡皮擦",
+                        presetIndex = eraserPresetIdx,
+                        presetName = brushPresets.firstOrNull { it.index == eraserPresetIdx }?.name ?: "",
+                    ),
+                )
             }
         }
         val eraserPreset = brushPresets.firstOrNull { it.index == eraserPresetIdx }
@@ -1045,18 +1053,37 @@ internal fun PaintViewModel.applyTool(toolId: String) {
             } else {
                 defaultIdx
             }
-            state = PaintViewModel.ToolBrushState(category = cat, presetIndex = initialPresetIdx)
+            state = PaintViewModel.ToolBrushState(
+                category = cat,
+                presetIndex = initialPresetIdx,
+                presetName = brushPresets.firstOrNull { it.index == initialPresetIdx }?.name ?: "",
+            )
             toolBrushStates = toolBrushStates.toMutableMap().apply { put(toolId, state) }
-        } else if (isBrushTool && state.presetIndex >= 0) {
+        }
+
+        // #136 A：工具槽以名字为身份（索引会随导入/删除重排）。解析不到就退回本工具的默认笔，
+        // 并把槽修好，避免下一次又拿着漂移的索引去选笔。
+        var resolved = ToolPresetMemory.resolve(state.presetName, state.presetIndex, brushPresets)
+        if (isBrushTool && resolved != null) {
             // Self-healing: if brush tool mistakenly inherited an eraser preset, revert to default drawing brush
-            val cur = brushPresets.firstOrNull { it.index == state.presetIndex }
-            if (cur != null) {
-                val isEraser = cur.group == "橡皮擦" || cur.name.startsWith("a)_Eraser") || cur.name.equals("Eraser_circle", ignoreCase = true)
-                if (isEraser && defaultBrushIdx >= 0) {
-                    state = state.copy(category = "基础", presetIndex = defaultBrushIdx)
-                    toolBrushStates = toolBrushStates.toMutableMap().apply { put(toolId, state) }
-                }
+            val isEraser = resolved.group == "橡皮擦" || resolved.name.startsWith("a)_Eraser") ||
+                resolved.name.equals("Eraser_circle", ignoreCase = true)
+            if (isEraser) {
+                // 没有可用的默认画笔时保持原样（与旧行为一致），不要解析成 null 丢掉选择
+                brushPresets.firstOrNull { it.index == defaultBrushIdx }?.let { resolved = it }
             }
+        }
+        if (resolved == null) {
+            val fallbackIdx = when {
+                isEraserTool -> defaultEraserIdx
+                isSmudgeTool -> defaultSmudgeIdx
+                else -> defaultBrushIdx
+            }
+            resolved = brushPresets.firstOrNull { it.index == fallbackIdx }
+        }
+        if (resolved != null && (resolved.index != state.presetIndex || resolved.name != state.presetName)) {
+            state = state.copy(presetIndex = resolved.index, presetName = resolved.name)
+            toolBrushStates = toolBrushStates.toMutableMap().apply { put(toolId, state) }
         }
 
         brushPanelSelectedCategory = state.category
@@ -1066,10 +1093,11 @@ internal fun PaintViewModel.applyTool(toolId: String) {
         brushPresetScrollOffset = state.presetScrollOffset
 
         // Stale-index clamp: persisted presetIndex can point past the end of
-        // the current preset list (preset set changed between runs). Treat it
-        // as "no selection" instead of letting selectBrushPreset fail late.
-        if (brushPresets.any { it.index == state.presetIndex }) {
-            if (isResumingSameDrawingTool && state.presetIndex == brushPresetIndex) {
+        // the current preset list (preset set changed between runs). 解析结果为空时
+        // 说明槽里的预设已被删除且没有可用的默认笔，什么都不做。
+        val targetPreset = resolved
+        if (targetPreset != null) {
+            if (isResumingSameDrawingTool && targetPreset.index == brushPresetIndex) {
                 // 用户从吸管等临时工具切回当前正在使用的同一个绘制工具, 笔刷预设索引未改变:
                 // 此时用户调好的笔刷大小/不透明度/流量应当保持原样, 严禁被旧快照覆盖!
                 runCore(render = false) {
@@ -1082,7 +1110,7 @@ internal fun PaintViewModel.applyTool(toolId: String) {
                 }
             } else {
                 // 工具切换或预设改变: 统一走标准预设加载流程, 保证间距、动态、笔尖与 compositeOp 完整恢复并覆盖工具记忆
-                selectBrushPreset(state.presetIndex)
+                selectBrushPreset(targetPreset.index)
             }
         }
         lastDrawingToolId = toolId

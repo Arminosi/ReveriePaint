@@ -243,6 +243,7 @@ import kotlinx.coroutines.withContext
                 val o = org.json.JSONObject()
                 o.put("id", id)
                 o.put("pi", s.presetIndex)
+                o.put("pn", s.presetName)
                 o.put("c", s.category)
                 o.put("csi", s.categoryScrollIndex)
                 o.put("cso", s.categoryScrollOffset)
@@ -394,6 +395,7 @@ import kotlinx.coroutines.withContext
                 }
                 map[o.getString("id")] = PaintViewModel.ToolBrushState(
                     presetIndex = o.optInt("pi", -1),
+                    presetName = o.optString("pn", ""),
                     category = o.optString("c", "全部"),
                     categoryScrollIndex = o.optInt("csi", 0),
                     categoryScrollOffset = o.optInt("cso", 0),
@@ -607,7 +609,7 @@ import kotlinx.coroutines.withContext
         return if (engineSize.isFinite()) engineSize else 20.0
     }
 
-    internal fun PaintViewModel.selectBrushPreset(index: Int) {
+    internal fun PaintViewModel.selectBrushPreset(index: Int, recordToToolState: Boolean = true) {
         // brushPresetIndex and every native API are indexed by the NATIVE
         // preset table (filename-sorted). Resolve by BrushPresetInfo.index,
         // never by list position: the Compose list may be reordered by the
@@ -643,7 +645,9 @@ import kotlinx.coroutines.withContext
         pendingKppReloadJob = null
 
         brushPresetIndex = index
-        updateCurrentToolBrushState { it.copy(presetIndex = index) }
+        // #136 A：重载预设表后的内部重选不是用户选笔，不能写工具槽，否则会把表里第 0 支笔
+        // （或任何回退项）记进「橡皮」槽，下次切橡皮就变成那支笔。
+        if (recordToToolState) updateCurrentToolBrushState { it.copy(presetIndex = index) }
 
         // v2：只做落盘准备（上一支笔的待提交编辑），引擎与 UI 走下面的上游链
         BrushStoreVm.prepareSelect(this, preset)
@@ -1155,7 +1159,15 @@ import kotlinx.coroutines.withContext
             if (lastDrawingToolId.isNotBlank()) lastDrawingToolId else "brush"
         }
         val state = toolBrushStates[targetToolId] ?: PaintViewModel.ToolBrushState()
-        toolBrushStates = toolBrushStates.toMutableMap().apply { put(targetToolId, updater(state)) }
+        val next = updater(state)
+        // #136 A：名字与索引必须同源。索引一变就把名字一起写上，工具槽从此以名字为身份；
+        // 老数据（只有 pi 没有 pn）在这里自愈回填。
+        val synced = if (next.presetIndex != state.presetIndex || next.presetName.isBlank()) {
+            next.copy(presetName = brushPresets.firstOrNull { it.index == next.presetIndex }?.name ?: next.presetName)
+        } else {
+            next
+        }
+        toolBrushStates = toolBrushStates.toMutableMap().apply { put(targetToolId, synced) }
         schedulePersistToolBrushStates()
     }
 
@@ -1172,12 +1184,17 @@ import kotlinx.coroutines.withContext
             lastDrawingToolId
         }
         val name = brushPresets.firstOrNull { it.index == brushPresetIndex }?.name ?: return
-        val currentMap = toolBrushStates[targetToolId] ?: PaintViewModel.ToolBrushState(presetIndex = brushPresetIndex)
+        val currentMap = toolBrushStates[targetToolId]
+            ?: PaintViewModel.ToolBrushState(presetIndex = brushPresetIndex, presetName = name)
         toolBrushStates = toolBrushStates.toMutableMap().apply {
             put(
                 targetToolId,
                 currentMap.copy(
                     presetIndex = if (currentMap.presetIndex >= 0) currentMap.presetIndex else brushPresetIndex,
+                    // #136 A：名字是身份，索引会随导入/删除重排；这里补一次，避免新建的槽只有索引
+                    presetName = currentMap.presetName.ifBlank {
+                        brushPresets.firstOrNull { it.index == currentMap.presetIndex }?.name ?: name
+                    },
                     paramMemory = currentMap.paramMemory.toMutableMap().apply {
                         put(name, listOf(brushSize, brushOpacity, brushFlow))
                     }
@@ -1284,7 +1301,16 @@ import kotlinx.coroutines.withContext
             brushPresetsLoaded = true
             if (ordered.isNotEmpty()) {
                 val target = keepName?.let { n -> ordered.firstOrNull { it.name == n } }
-                selectBrushPreset(target?.index ?: ordered[0].index)
+                when {
+                    // 同一支笔、索引变了：正常重选，工具槽跟着刷新索引（名字不变）
+                    target != null -> selectBrushPreset(target.index)
+                    // 首次启动、本来就没有"上一个选择"：选第一支
+                    keepName == null -> selectBrushPreset(ordered[0].index)
+                    // 上一个选择已不存在（预设被删除）：给画布一支能画的笔，但不写工具槽。
+                    // #136 A：这里以前无条件 selectBrushPreset(ordered[0])，会把"表里第 0 支笔"
+                    // 记进当前工具槽——删完预设后切橡皮就变成那支笔。
+                    else -> selectBrushPreset(ordered[0].index, recordToToolState = false)
+                }
             }
         }) {
             ReverieCoreBridge.loadBrushResources(brushDir.absolutePath)

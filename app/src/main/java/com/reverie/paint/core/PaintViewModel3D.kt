@@ -116,29 +116,29 @@ private fun buildEulerMap(
         when (posePreset.lowercase()) {
             // 端坐: 躯干前倾上抬, 头回补到平视, 后肢折起
             "sit" -> {
-                spineArch = 20f; headP = -20f
-                flLeg = -10f; frLeg = -10f
-                hlLeg = 35f; hrLeg = 35f
-                hlShank = -40f; hrShank = -40f
-                hlFoot = -10f; hrFoot = -10f
+                spineArch = 6f; headP = -6f
+                flLeg = -6f; frLeg = -6f
+                hlLeg = 40f; hrLeg = 40f
+                hlShank = -55f; hrShank = -55f
+                hlFoot = -15f; hrFoot = -15f
                 tailP = -20f; tailY = 20f
             }
             // 农民揣: 前爪收进胸下, 后肢缩进腹下
             "loaf" -> {
-                spineArch = 2f
-                flLeg = -55f; frLeg = -55f; flPaw = 35f; frPaw = 35f
+                spineArch = 0f
+                flLeg = -40f; frLeg = -40f; flPaw = 25f; frPaw = 25f
                 hlLeg = 45f; hrLeg = 45f
-                hlShank = -55f; hrShank = -55f
+                hlShank = -60f; hrShank = -60f
                 hlFoot = -15f; hrFoot = -15f
                 tailP = -30f; tailY = 25f
             }
             // 伸懒腰: 前肢前伸压胸, 尾巴上翘
             "stretch" -> {
-                spineArch = -12f; headP = -12f
-                flLeg = 35f; frLeg = 35f; flPaw = 8f; frPaw = 8f
-                hlLeg = 8f; hrLeg = 8f
-                hlShank = -8f; hrShank = -8f
-                tailP = 40f; tailY = 0f
+                spineArch = -10f; headP = -6f
+                flLeg = 30f; frLeg = 30f; flPaw = 5f; frPaw = 5f
+                hlLeg = 5f; hrLeg = 5f
+                hlShank = -5f; hrShank = -5f
+                tailP = 30f; tailY = 0f
             }
         }
 

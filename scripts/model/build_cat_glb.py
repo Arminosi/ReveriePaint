@@ -1,341 +1,178 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""从 Meshy 高模 previous_cat_model.glb 重建 3D 猫猫参考资产 (anime_cat.glb)
+"""修复并重绑 3D 猫猫参考资产 (anime_cat.glb)
 
     blender -b --python scripts/model/build_cat_glb.py -- \
-        --in "/path/previous_cat_model.glb" --out app/src/main/assets/3d_models/anime_cat.glb
+        --in app/src/main/assets/3d_models/anime_cat.glb \
+        --out app/src/main/assets/3d_models/anime_cat.glb
 
-原始资产是一只"身体朝向 -X、头扭向 +Z 约 105°"的猫。本脚本:
-  1) 整体绕竖直轴旋转 86° 让身体朝向 +Z (glTF 标准正面)
-  2) 以"鼻尖测地距离"作权重把头部回正 105° 并移回身体中线
-     (过渡带内做 Taubin 平滑: 只松弛折痕, 不做体积收缩)
-  3) 减面到 ~3.9k 顶点 / 7.8k 三角面 (与人体素模同级)
-  4) 重建 21 节骨骼并做骨骼热扩散蒙皮 (限 4 影响 + 归一化)
-  5) 导出无材质/无动画的 GLB
-
-产物契约 (App 侧 GlbParser / Skeleton3D / PoseAdjustmentPanel 依赖):
-  * Y 轴向上, +Z 为面部正前方, x 关于 0 对称, 原点居中
-  * 21 关节: Hips→Spine→Chest→Neck→Head, tail1..4,
-    前肢 l|r_front_shoulder→leg→paw, 后肢 l|r_hind_thigh→shank→foot
-  * 骨骼局部 +Y 沿骨长, 局部 X = 世界 -X ⇒ App 的 pitch>0 = 前摆 / 抬头 / 尾巴上翘
-  * 每顶点最多 4 骨骼影响, 权重和归一化为 1
+Meshy 导出的这套骨骼有几处硬伤, 本脚本逐条修掉:
+  1) 焊接重复顶点: 源网格是 652 个碎壳 (11547 条边界边), 直接热扩散求解会失败
+  2) Spine / Neck 的骨起点分别在 z=+18.4 / z=+23.0, 远在模型之外 ——
+     任何旋转都会把上半身甩飞; 改为贴到父骨末端
+  3) Head 骨改为竖直: App 的 yaw 绕骨骼局部 Y 轴旋转, 骨头一歪, 转头就变侧翻
+  4) headend 改名 muzzle: App 的 humanoid 启发式按"名字含 head"匹配,
+     headend 会顶掉真正的 Head, 让头部旋转被乘两次
+  5) 权重重算: 源资产 Head 一根骨独占 66% 权重、躯干没有脊柱权重;
+     改为"到骨线段距离 1/d^3 取前 4 + 18 轮表面平滑", 并让 Neck 的影响在颅骨内淡出
+  6) 居中到原点 (源模型整体悬在 y>0, 在 App 里会画到画布上方之外)
+  7) 丢掉 glTF 里的 walk 动画轨道 (App 的 3D 参考层不消费动画)
 """
-import argparse
-import heapq
-import json
-import math
-import os
-import struct
-import sys
-
-import bpy
+"""Repair the new cat's rig: apply transforms -> fix bone heads/axes -> re-skin -> centre -> export."""
+import bpy, math, os, sys, argparse
 import numpy as np
-from mathutils import Vector
+from mathutils import Vector, Matrix
 
-BODY_DEG = 86.0
-HEAD_DEG = -113.0
-D0, D1 = 0.36, 0.82
-SMOOTH_ITERS = 30
-RATIO = 0.022
+_argv = sys.argv[sys.argv.index("--")+1:] if "--" in sys.argv else []
+_ap = argparse.ArgumentParser()
+_ap.add_argument("--in", dest="src", required=True)
+_ap.add_argument("--out", dest="out", required=True)
+_a = _ap.parse_args(_argv)
+SRC, OUT = _a.src, _a.out
+MAXINF = 4
 
-ORDER = ["Hips", "Spine", "Chest", "Neck", "Head", "tail1", "tail2", "tail3", "tail4",
-         "l_front_shoulder", "l_front_leg", "l_front_paw",
-         "r_front_shoulder", "r_front_leg", "r_front_paw",
-         "l_hind_thigh", "l_hind_shank", "l_hind_foot",
-         "r_hind_thigh", "r_hind_shank", "r_hind_foot"]
-PARENT = {"Spine": "Hips", "Chest": "Spine", "Neck": "Chest", "Head": "Neck",
-          "tail1": "Hips", "tail2": "tail1", "tail3": "tail2", "tail4": "tail3",
-          "l_front_shoulder": "Chest", "l_front_leg": "l_front_shoulder", "l_front_paw": "l_front_leg",
-          "r_front_shoulder": "Chest", "r_front_leg": "r_front_shoulder", "r_front_paw": "r_front_leg",
-          "l_hind_thigh": "Hips", "l_hind_shank": "l_hind_thigh", "l_hind_foot": "l_hind_shank",
-          "r_hind_thigh": "Hips", "r_hind_shank": "r_hind_thigh", "r_hind_foot": "r_hind_shank"}
-CONNECT = {"Spine", "Chest", "Neck", "Head", "tail2", "tail3", "tail4",
-           "l_front_leg", "l_front_paw", "r_front_leg", "r_front_paw",
-           "l_hind_shank", "l_hind_foot", "r_hind_shank", "r_hind_foot"}
+bpy.ops.wm.read_factory_settings(use_empty=True)
+for o in list(bpy.data.objects):
+    bpy.data.objects.remove(o, do_unlink=True)
+bpy.ops.import_scene.gltf(filepath=SRC)
+arm = [o for o in bpy.data.objects if o.type == 'ARMATURE'][0]
+me = [o for o in bpy.data.objects if o.type == 'MESH' and o.parent is arm][0]
+if arm.animation_data:
+    arm.animation_data_clear()
+for a in list(bpy.data.actions):
+    bpy.data.actions.remove(a)
 
+# weld the shattered source mesh
+bpy.context.view_layer.objects.active = me
+me.select_set(True)
+bpy.ops.object.mode_set(mode='EDIT')
+bpy.ops.mesh.select_all(action='SELECT')
+bpy.ops.mesh.remove_doubles(threshold=0.0008)
+bpy.ops.object.mode_set(mode='OBJECT')
+print("[weld] %d verts / %d tris" % (len(me.data.vertices), len(me.data.polygons)))
 
-def parse_args():
-    argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--in", dest="src", required=True)
-    ap.add_argument("--out", dest="out", required=True)
-    ap.add_argument("--ratio", dest="ratio", type=float, default=RATIO)
-    return ap.parse_args(argv)
+# bake the import rotation so armature space == world space (Blender Z-up)
+bpy.ops.object.select_all(action='DESELECT')
+arm.select_set(True); me.select_set(True)
+bpy.context.view_layer.objects.active = arm
+bpy.ops.object.transform_apply(location=False, rotation=True, scale=True)
+print("[apply] rotations baked; arm rot", tuple(round(v, 3) for v in arm.matrix_world.to_euler()))
 
+# ---- rig repair (Blender space: +Z up, -Y forward) -------------------------
+bpy.context.view_layer.objects.active = arm
+bpy.ops.object.mode_set(mode='EDIT')
+eb = arm.data.edit_bones
+print("[rig] Spine.head was", tuple(round(v, 3) for v in eb['Spine'].head),
+      " Neck.head was", tuple(round(v, 3) for v in eb['Neck'].head))
+eb['Spine'].head = eb['Hips'].tail.copy(); eb['Spine'].use_connect = True
+eb['Neck'].head = eb['Chest'].tail.copy(); eb['Neck'].use_connect = True
+# the app's "yaw" rotates about the bone local Y: the head bone must be vertical
+hd = eb['Head']
+hd.tail = hd.head + Vector((0.0, 0.0, 0.16))
+# 'headend' would be caught by the app's humanoid heuristic (contains "head")
+for nm in ('headend',):
+    if nm in eb:
+        eb[nm].name = 'muzzle'
+print("[rig] Head bone", tuple(round(v, 3) for v in hd.head), "->", tuple(round(v, 3) for v in hd.tail))
+bpy.ops.object.mode_set(mode='OBJECT')
 
-def load_glb(path):
-    d = open(path, 'rb').read()
-    off, js, binc = 12, None, None
-    while off < len(d):
-        clen, ctype = struct.unpack('<II', d[off:off + 8])
-        payload = d[off + 8:off + 8 + clen]
-        if ctype == 0x4E4F534A:
-            js = json.loads(payload.decode())
-        elif ctype == 0x004E4942:
-            binc = payload
-        off += 8 + clen
-    acc, bvs = js['accessors'], js['bufferViews']
-    prim = js['meshes'][0]['primitives'][0]
-    a = acc[prim['attributes']['POSITION']]
-    bv = bvs[a['bufferView']]
-    V = np.frombuffer(binc, dtype='<f4', count=a['count'] * 3,
-                      offset=bv.get('byteOffset', 0) + a.get('byteOffset', 0)).reshape(-1, 3).astype(np.float64)
-    ia = acc[prim['indices']]
-    ibv = bvs[ia['bufferView']]
-    dt = {5121: np.uint8, 5123: '<u2', 5125: '<u4'}[ia['componentType']]
-    I = np.frombuffer(binc, dtype=dt, count=ia['count'],
-                      offset=ibv.get('byteOffset', 0) + ia.get('byteOffset', 0)).astype(np.int64).reshape(-1, 3)
-    return V, I
-
-
-def geodesic(V, I, seed):
-    adj = [[] for _ in range(len(V))]
-    for i, j in np.vstack([I[:, [0, 1]], I[:, [1, 2]], I[:, [2, 0]]]):
-        i, j = int(i), int(j)
-        w = float(np.linalg.norm(V[i] - V[j]))
-        adj[i].append((j, w))
-        adj[j].append((i, w))
-    dist = np.full(len(V), 1e9)
-    dist[seed] = 0.0
-    pq = [(0.0, seed)]
-    while pq:
-        dd, u = heapq.heappop(pq)
-        if dd > dist[u]:
-            continue
-        for v, w in adj[u]:
-            nd = dd + w
-            if nd < dist[v]:
-                dist[v] = nd
-                heapq.heappush(pq, (nd, v))
-    return dist
+# ---- custom skinning (distance to bone segments) ---------------------------
+bones = [(b.name, np.array([*b.head_local]), np.array([*b.tail_local])) for b in arm.data.bones]
+V = np.array([v.co[:] for v in me.data.vertices])          # local == world now
+print("[skin] %d bones, mesh bbox %s %s" % (len(bones), V.min(0).round(3), V.max(0).round(3)))
 
 
-def orient(V, I):
-    """ cuerpo -> +Z, head -> straight forward, head centred on the body midline """
-    t = math.radians(BODY_DEG)
-    c, s = math.cos(t), math.sin(t)
-    V = V @ np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]]).T
-    ymin, ymax = V[:, 1].min(), V[:, 1].max()
-    H = ymax - ymin
-    hc = V[V[:, 1] > ymin + 0.72 * H].mean(0)
-    pivot = np.array([hc[0], hc[1] - 0.16, hc[2]])
-
-    nose = int(np.argmax(V[:, 2]))
-    dist = geodesic(V, I, nose)
-    w = np.clip((D1 - dist) / (D1 - D0), 0.0, 1.0)
-    w = w * w * (3 - 2 * w)
-
-    th = math.radians(HEAD_DEG)
-    V1 = V.copy()
-    idx = np.nonzero(w > 1e-3)[0]
-    for i in idx:
-        p = V[i] - pivot
-        ang = th * w[i]
-        ca, sa = math.cos(ang), math.sin(ang)
-        V1[i] = pivot + np.array([p[0] * ca + p[2] * sa, p[1], -p[0] * sa + p[2] * ca])
-    # 横向对中: 头部整体向身体中线平移, 位移沿身高渐变铺到上身躯干,
-    # 避免位移全部集中在脖子造成剪切/歪脖
-    core = w > 0.9
-    cx = V1[core][:, 0].mean()
-    ws = np.clip((V1[:, 1] - (ymin + 0.10 * H)) / (0.45 * H), 0.0, 1.0)
-    ws = ws * ws * (3 - 2 * ws)
-    V1[:, 0] -= cx * ws
-    print("[orient] head %.0f deg, lateral %+.3f (spread over upper body), band %.2f-%.2f"
-          % (HEAD_DEG, -cx, D0, D1))
-
-    edges = np.vstack([I[:, [0, 1]], I[:, [1, 2]], I[:, [2, 0]]])
-    edges = np.vstack([edges, edges[:, ::-1]])
-    deg = np.bincount(edges[:, 0], minlength=len(V1)).astype(np.float64)
-    deg[deg == 0] = 1
-    band = (w > 0.05) & (w < 0.95)
-    lam, mu = 0.5, -0.53
-    for _ in range(SMOOTH_ITERS):
-        acc = np.zeros_like(V1)
-        np.add.at(acc, edges[:, 0], V1[edges[:, 1]])
-        V1[band] += lam * ((acc / deg[:, None]) - V1)[band]
-        acc = np.zeros_like(V1)
-        np.add.at(acc, edges[:, 0], V1[edges[:, 1]])
-        V1[band] += mu * ((acc / deg[:, None]) - V1)[band]
-
-    c = (V1.min(0) + V1.max(0)) / 2
-    V1 -= np.array([c[0], 0.0, c[2]])
-    return V1
+def seg_dist(P, A, B):
+    AB = B - A
+    L2 = float(AB @ AB)
+    if L2 < 1e-12:
+        return np.linalg.norm(P - A, axis=1)
+    t = np.clip(((P - A) @ AB) / L2, 0, 1)
+    return np.linalg.norm(P - (A + np.outer(t, AB)), axis=1)
 
 
-def build_rig(V):
-    ymin, ymax = V[:, 1].min(), V[:, 1].max()
-    H = ymax - ymin
-    J = {}
+D = np.stack([seg_dist(V, h, t) for _, h, t in bones], 1)
+INFL = 1.0 / (D + 0.03) ** 3
+best = np.argsort(-INFL, axis=1)[:, :MAXINF]
+rows = np.arange(len(V))
+W = np.zeros_like(INFL)
+for k in range(MAXINF):
+    W[rows, best[:, k]] = INFL[rows, best[:, k]]
+W /= W.sum(1, keepdims=True)
 
-    def add(name, head, tail):
-        J[name] = (np.array(head, float), np.array(tail, float))
+# smooth weights over the mesh graph
+edges = np.array([tuple(e.vertices) for e in me.data.edges], dtype=np.int64)
+e2 = np.vstack([edges, edges[:, ::-1]])
+deg = np.bincount(e2[:, 0], minlength=len(V)).astype(np.float64)
+deg[deg == 0] = 1
+for _ in range(18):
+    acc = np.zeros_like(W)
+    np.add.at(acc, e2[:, 0], W[e2[:, 1]])
+    W = 0.55 * W + 0.45 * (acc / deg[:, None])
+    W /= W.sum(1, keepdims=True)
 
-    add("Hips", (0, -0.02, -0.33), (0, 0.02, -0.10))
-    add("Spine", (0, 0.02, -0.10), (0, 0.05, 0.26))
-    add("Chest", (0, 0.05, 0.26), (0, 0.20, 0.52))
-    add("Neck", (0, 0.20, 0.52), (0, 0.37, 0.63))
-    add("Head", (0, 0.37, 0.63), (0, 0.52, 0.67))
+# the neck must not drive the skull
+neck_i = [i for i, (n, h, t) in enumerate(bones) if n == 'Neck'][0]
+head_i = [i for i, (n, h, t) in enumerate(bones) if n == 'Head'][0]
+yj = float(bones[head_i][1][2])          # head joint height (Blender Z)
+fade = np.clip((yj + 0.02 - V[:, 2]) / 0.30, 0.0, 1.0)
+W[:, neck_i] *= fade
+W /= np.maximum(W.sum(1, keepdims=True), 1e-9)
 
-    tail = [np.array([0.0, 0.10, -0.40]), np.array([0.0, -0.06, -0.56]),
-            np.array([0.0, -0.19, -0.72]), np.array([0.0, -0.16, -0.85]),
-            np.array([0.0, -0.03, -0.94])]
-    for i in range(4):
-        add("tail%d" % (i + 1), tail[i], tail[i + 1])
+best = np.argsort(-W, axis=1)[:, :MAXINF]
+W4 = np.zeros_like(W)
+for k in range(MAXINF):
+    W4[rows, best[:, k]] = W[rows, best[:, k]]
+s = W4.sum(1, keepdims=True)
+bad = s[:, 0] < 1e-6
+W4[~bad] /= s[~bad]
+W4[bad] = 0
+print("[skin] unweighted %d" % int(bad.sum()))
+for j, (n, h, t) in enumerate(bones):
+    w = W4[:, j]
+    if w.sum() > 0.5:
+        print("   %-18s verts>0.05 %5d sum %7.1f max %.2f" % (n, int((w > 0.05).sum()), w.sum(), w.max()))
 
-    def paw(sx, sz):
-        band = ymin + 0.05 * H
-        sel = V[(np.sign(V[:, 0]) == sx) & (np.sign(V[:, 2]) == sz) & (V[:, 1] < band)]
-        return np.array([np.median(sel[:, 0]), sel[:, 1].min(), np.median(sel[:, 2])])
+for g in list(me.vertex_groups):
+    me.vertex_groups.remove(g)
+groups = [me.vertex_groups.new(name=n) for n, h, t in bones]
+for i in range(len(V)):
+    for j in np.nonzero(W4[i] > 1e-4)[0]:
+        groups[j].add([i], float(W4[i, j]), 'REPLACE')
 
-    def centerline(sx, pz, rmax=0.20):
-        sel = V[(np.sign(V[:, 0]) == sx) & (np.abs(V[:, 2] - pz) < 0.22) & (V[:, 1] < ymin + 0.50 * H)]
-        pc = np.array([np.median(sel[sel[:, 1] < ymin + 0.06 * H][:, 0]),
-                       np.median(sel[sel[:, 1] < ymin + 0.06 * H][:, 2])])
-        keep = sel[np.linalg.norm(sel[:, [0, 2]] - pc, axis=1) < rmax]
-        out = []
-        for y0 in np.linspace(keep[:, 1].min(), keep[:, 1].max(), 10):
-            s2 = keep[np.abs(keep[:, 1] - y0) < 0.035 * H]
-            if len(s2) > 6:
-                out.append(np.array([s2[:, 0].mean(), y0, s2[:, 2].mean()]))
-        return np.array(out)
+# ---- centre on the origin --------------------------------------------------
+ctr = (V.min(0) + V.max(0)) / 2
+me.data.transform(Matrix.Translation(-Vector(ctr.tolist())))
+bpy.context.view_layer.objects.active = arm
+bpy.ops.object.mode_set(mode='EDIT')
+for eb2 in arm.data.edit_bones:
+    eb2.head = eb2.head - Vector(ctr.tolist())
+    eb2.tail = eb2.tail - Vector(ctr.tolist())
+bpy.ops.object.mode_set(mode='OBJECT')
+print("[centre] shift", ctr.round(3))
 
-    def at_y(cl, y):
-        if len(cl) == 0:
-            return np.array([0.0, y, 0.0])
-        c = cl[np.argsort(cl[:, 1])]
-        if y <= c[0, 1]:
-            return np.array([c[0, 0], y, c[0, 2]])
-        if y >= c[-1, 1]:
-            return np.array([c[-1, 0], y, c[-1, 2]])
-        for i in range(len(c) - 1):
-            if c[i, 1] <= y <= c[i + 1, 1]:
-                t = (y - c[i, 1]) / (c[i + 1, 1] - c[i, 1])
-                return c[i] * (1 - t) + c[i + 1] * t
-        return c[-1]
+if not any(m.type == 'ARMATURE' for m in me.modifiers):
+    md = me.modifiers.new("Armature", 'ARMATURE')
+    md.object = arm
+for p in me.data.polygons:
+    p.use_smooth = True
+for pb in arm.pose.bones:
+    pb.rotation_mode = 'QUATERNION'
+    pb.rotation_quaternion = (1, 0, 0, 0)
+    pb.location = (0, 0, 0)
+for o in (me, arm):
+    o.location = (0, 0, 0)
+    o.rotation_euler = (0, 0, 0)
+    o.scale = (1, 1, 1)
+Vf = np.array([v.co[:] for v in me.data.vertices])
+print("[final] bbox", Vf.min(0).round(3), Vf.max(0).round(3))
 
-    def leg(prefix, sx, pawp, hind):
-        cl = centerline(sx, pawp[2])
-        p_top = at_y(cl, 0.02 if hind else 0.10)
-        p_mid = at_y(cl, -0.42)
-        p_lo = at_y(cl, -0.62)
-        toe = np.array([pawp[0], pawp[1] + 0.01, pawp[2] + 0.04])
-        if hind:
-            add(prefix + "_thigh", p_top, p_mid)
-            add(prefix + "_shank", p_mid, p_lo)
-            add(prefix + "_foot", p_lo, toe)
-        else:
-            add(prefix + "_shoulder", np.array([p_top[0] * 0.55, p_top[1] + 0.06, p_top[2] - 0.03]), p_top)
-            add(prefix + "_leg", p_top, p_lo)
-            add(prefix + "_paw", p_lo, toe)
-
-    leg("l_front", +1, paw(+1, +1), False)
-    leg("r_front", -1, paw(-1, +1), False)
-    leg("l_hind", +1, paw(+1, -1), True)
-    leg("r_hind", -1, paw(-1, -1), True)
-    return J
-
-
-def to_blender(p):
-    """glTF (fwd +Z, up +Y) -> Blender (fwd -Y, up +Z)"""
-    return (float(p[0]), float(-p[2]), float(p[1]))
-
-
-def main():
-    args = parse_args()
-    V, I = load_glb(args.src)
-    print("[load] %d verts / %d tris" % (len(V), len(I)))
-    V = orient(V, I)
-    J = build_rig(V)
-
-    bpy.ops.wm.read_factory_settings(use_empty=True)
-    for o in list(bpy.data.objects):
-        bpy.data.objects.remove(o, do_unlink=True)
-    bv = np.stack([V[:, 0], -V[:, 2], V[:, 1]], 1)
-    me = bpy.data.meshes.new("CAT")
-    me.from_pydata([tuple(v) for v in bv], [], [tuple(int(x) for x in t) for t in I])
-    me.validate()
-    ob = bpy.data.objects.new("CAT", me)
-    bpy.context.scene.collection.objects.link(ob)
-    bpy.context.view_layer.objects.active = ob
-    dec = ob.modifiers.new("dec", 'DECIMATE')
-    dec.decimate_type = 'COLLAPSE'
-    dec.ratio = args.ratio
-    dec.use_collapse_triangulate = True
-    bpy.ops.object.modifier_apply(modifier="dec")
-    print("[decimate] %d verts / %d tris" % (len(ob.data.vertices), len(ob.data.polygons)))
-
-    arm_data = bpy.data.armatures.new("CatArmature")
-    arm = bpy.data.objects.new("CatArmature", arm_data)
-    bpy.context.scene.collection.objects.link(arm)
-    bpy.context.view_layer.objects.active = arm
-    bpy.ops.object.mode_set(mode='EDIT')
-    for name in ORDER:
-        h, t = J[name]
-        eb = arm_data.edit_bones.new(name)
-        eb.head = Vector(to_blender(h))
-        eb.tail = Vector(to_blender(t))
-        eb.align_roll(Vector((-1, 0, 0)).cross((eb.tail - eb.head).normalized()))
-    for name in ORDER:
-        p = PARENT.get(name)
-        if p:
-            eb = arm_data.edit_bones[name]
-            eb.parent = arm_data.edit_bones[p]
-            eb.use_connect = name in CONNECT
-    bpy.ops.object.mode_set(mode='OBJECT')
-
-    bpy.ops.object.select_all(action='DESELECT')
-    ob.select_set(True)
-    arm.select_set(True)
-    bpy.context.view_layer.objects.active = arm
-    bpy.ops.object.parent_set(type='ARMATURE_AUTO')
-
-    names = [g.name for g in ob.vertex_groups]
-    nV = len(ob.data.vertices)
-    W = np.zeros((nV, len(names)))
-    for v in ob.data.vertices:
-        for ge in v.groups:
-            W[v.index, ge.group] = ge.weight
-    order4 = np.argsort(-W, axis=1)[:, :4]
-    W4 = np.zeros_like(W)
-    rows = np.arange(nV)
-    for k in range(4):
-        W4[rows, order4[:, k]] = W[rows, order4[:, k]]
-    tot = W4.sum(1, keepdims=True)
-    bad = tot[:, 0] < 1e-6
-    print("[skin] unweighted %d" % int(bad.sum()))
-    W4[~bad] /= tot[~bad]
-    W4[bad] = 0.0
-    for g in list(ob.vertex_groups):
-        ob.vertex_groups.remove(g)
-    groups = [ob.vertex_groups.new(name=n) for n in names]
-    for i in range(nV):
-        for j in np.nonzero(W4[i] > 1e-5)[0]:
-            groups[j].add([i], float(W4[i, j]), 'REPLACE')
-
-    for pb in arm.pose.bones:
-        pb.rotation_mode = 'QUATERNION'
-        pb.rotation_quaternion = (1, 0, 0, 0)
-        pb.location = (0, 0, 0)
-    for o in (ob, arm):
-        o.location = (0, 0, 0)
-        o.rotation_euler = (0, 0, 0)
-        o.scale = (1, 1, 1)
-    for p in ob.data.polygons:
-        p.use_smooth = True
-
-    bpy.ops.object.select_all(action='DESELECT')
-    ob.select_set(True)
-    arm.select_set(True)
-    bpy.context.view_layer.objects.active = ob
-    bpy.ops.export_scene.gltf(
-        filepath=os.path.abspath(args.out),
-        export_format='GLB', use_selection=True, export_apply=False, export_yup=True,
-        export_animations=False, export_skins=True, export_morph=False, export_materials='NONE',
-        export_normals=True, export_tangents=False, export_texcoords=False, export_extras=False,
-        export_cameras=False, export_lights=False, export_def_bones=False,
-    )
-    print("[done] %s (%d bytes)" % (args.out, os.path.getsize(args.out)))
-
-
-if __name__ == "__main__":
-    main()
+bpy.ops.object.select_all(action='DESELECT')
+me.select_set(True); arm.select_set(True)
+bpy.context.view_layer.objects.active = me
+bpy.ops.export_scene.gltf(filepath=OUT, export_format='GLB', use_selection=True, export_apply=False,
+                          export_yup=True, export_animations=False, export_skins=True, export_morph=False,
+                          export_materials='NONE', export_normals=True, export_tangents=False,
+                          export_texcoords=False, export_extras=False, export_cameras=False,
+                          export_lights=False, export_def_bones=False)
+print("[done]", OUT, os.path.getsize(OUT))

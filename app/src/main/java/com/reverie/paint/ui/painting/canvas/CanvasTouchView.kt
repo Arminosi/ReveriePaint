@@ -253,6 +253,7 @@ class CanvasTouchView(context: Context) : View(context) {
     private var touch3DPinchDist = 0f
     private var touch3DMidX = 0f
     private var touch3DMidY = 0f
+    private var touch3DStartState: com.reverie.paint.model.Model3DState? = null
     private val canvas3DDrawer = com.reverie.paint.core.gl3d.Canvas3DDrawer()
 
     // 触控交互锁 (手指接触期间，阻止外部 Compose 状态回冲覆盖)
@@ -4352,6 +4353,9 @@ class CanvasTouchView(context: Context) : View(context) {
                 when (event.actionMasked) {
                     MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
                         v.isInteracting3D = true
+                        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                            touch3DStartState = state.copy()
+                        }
                         if (fingerCount >= 2) {
                             touch3DIsPinch = true
                             val idx0 = fingerIndices[0]
@@ -4418,6 +4422,14 @@ class CanvasTouchView(context: Context) : View(context) {
                         }
                     }
                     MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        if (event.actionMasked == MotionEvent.ACTION_UP) {
+                            val start = touch3DStartState
+                            val end = v.currentLayer3DState
+                            if (start != null && end != null && start != end) {
+                                v.push3DUndoState(start)
+                            }
+                        }
+                        touch3DStartState = null
                         touch3DIsPinch = false
                         v.isInteracting3D = false
                         invalidate()

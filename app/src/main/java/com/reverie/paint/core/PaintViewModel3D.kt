@@ -389,10 +389,50 @@ internal fun PaintViewModel.getMeshForState(state: Model3DState): Mesh3D {
 }
 
 /**
+ * 压入一条 3D 图层历史状态快照至撤销栈
+ */
+internal fun PaintViewModel.push3DUndoState(state: Model3DState) {
+    val maxUndo = 30
+    undo3DStack = (listOf(state) + undo3DStack).take(maxUndo)
+    redo3DStack = emptyList()
+}
+
+/**
+ * 撤销 3D 姿态与视角变换
+ */
+internal fun PaintViewModel.undo3D(): Boolean {
+    val previous = undo3DStack.firstOrNull() ?: return false
+    val current = currentLayer3DState ?: return false
+    undo3DStack = undo3DStack.drop(1)
+    redo3DStack = listOf(current) + redo3DStack
+    update3DState(previous)
+    if (undoToastEnabled) {
+        showActionToast(R.string.toast_undo_3d_pose, R.drawable.ic_undo)
+    }
+    return true
+}
+
+/**
+ * 重做 3D 姿态与视角变换
+ */
+internal fun PaintViewModel.redo3D(): Boolean {
+    val next = redo3DStack.firstOrNull() ?: return false
+    val current = currentLayer3DState ?: return false
+    redo3DStack = redo3DStack.drop(1)
+    undo3DStack = listOf(current) + undo3DStack
+    update3DState(next)
+    if (undoToastEnabled) {
+        showActionToast(R.string.toast_redo_3d_pose, R.drawable.ic_redo)
+    }
+    return true
+}
+
+/**
  * 切换当前 3D 模型的姿态预设
  */
 internal fun PaintViewModel.set3DPosePreset(preset: String) {
     val state = currentLayer3DState ?: return
+    push3DUndoState(state)
     val updated = state.copy(posePreset = preset, jointAngles = emptyMap())
     update3DState(updated)
 }
@@ -417,6 +457,7 @@ internal fun PaintViewModel.set3DJointAngle(jointKey: String, angle: Float) {
  */
 internal fun PaintViewModel.reset3DJointAngles() {
     val state = currentLayer3DState ?: return
+    push3DUndoState(state)
     val updated = state.copy(jointAngles = emptyMap())
     update3DState(updated)
 }

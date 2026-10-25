@@ -6141,7 +6141,18 @@ class PaintViewModel : ViewModel() {
     var live3DPreviewBitmap by mutableStateOf<android.graphics.Bitmap?>(null)
     var isInteracting3D by mutableStateOf(false)
     var show3DModelPicker by mutableStateOf(false)
+    var show3DPosePanel by mutableStateOf(false)
     val gl3dRenderer = com.reverie.paint.core.gl3d.Gl3dRenderer()
+    var undo3DStack by mutableStateOf<List<com.reverie.paint.model.Model3DState>>(emptyList())
+        internal set
+    var redo3DStack by mutableStateOf<List<com.reverie.paint.model.Model3DState>>(emptyList())
+        internal set
+
+    val canUndo3D: Boolean
+        get() = undo3DStack.isNotEmpty()
+
+    val canRedo3D: Boolean
+        get() = redo3DStack.isNotEmpty()
 
     val currentLayer3DState: com.reverie.paint.model.Model3DState?
         get() = layers.getOrNull(currentLayerIndex)?.let { active3DLayers[it.id] }

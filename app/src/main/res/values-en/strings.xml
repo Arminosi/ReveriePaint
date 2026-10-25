@@ -3018,6 +3018,19 @@
     <string name="toast_3d_layer_created">3D reference layer created</string>
     <string name="toast_3d_rasterized">3D reference layer rasterized</string>
     <string name="toast_3d_outline_extracted">3D outline extracted to new layer</string>
+    <string name="toast_undo_3d_pose">Undid 3D pose adjustment</string>
+    <string name="toast_redo_3d_pose">Redid 3D pose adjustment</string>
+    <string name="layer_3d_part_all">All</string>
+    <string name="layer_3d_part_head">Head</string>
+    <string name="layer_3d_part_body">Torso</string>
+    <string name="layer_3d_part_front_legs">Front Legs</string>
+    <string name="layer_3d_part_hind_legs">Hind Legs</string>
+    <string name="layer_3d_part_arms">Arms</string>
+    <string name="layer_3d_part_legs">Legs</string>
+    <string name="layer_3d_part_tail">Tail</string>
+    <string name="layer_3d_pose_undo">Undo Pose</string>
+    <string name="layer_3d_pose_redo">Redo Pose</string>
+    <string name="layer_3d_pose_reset_single">Reset Joint</string>
 
     <!-- Gesture Controls -->
     <string name="gesture_settings_title">Gesture Controls</string>

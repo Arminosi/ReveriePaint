@@ -58,7 +58,6 @@ fun Floating3DToolbar(
 
     var showStyleMenu by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
-    var showPosePanel by remember { mutableStateOf(false) }
 
     AnimatedVisibility(
         visible = vm.isCurrentLayer3D,
@@ -239,8 +238,8 @@ fun Floating3DToolbar(
                     CompactModeIconButton(
                         icon = R.drawable.ic_sliders,
                         tooltip = stringResource(R.string.layer_3d_pose_rigging),
-                        active = showPosePanel,
-                        onClick = { showPosePanel = true },
+                        active = vm.show3DPosePanel,
+                        onClick = { vm.show3DPosePanel = !vm.show3DPosePanel },
                     )
                 }
 
@@ -286,13 +285,6 @@ fun Floating3DToolbar(
                 }
             }
         }
-    }
-
-    if (showPosePanel) {
-        PoseAdjustmentPanel(
-            vm = vm,
-            onDismiss = { showPosePanel = false },
-        )
     }
 }
 

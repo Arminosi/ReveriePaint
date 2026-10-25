@@ -405,19 +405,27 @@ class Canvas3DDrawer {
             val cz = mvp[2] * wx + mvp[6] * wy + mvp[10] * wz + mvp[14]
             val cw = mvp[3] * wx + mvp[7] * wy + mvp[11] * wz + mvp[15]
 
+            val jointName = skeleton.joints[j].name
+            if (jointName.equals("neutral_bone", ignoreCase = true) || jointName.startsWith("neutral", ignoreCase = true)) {
+                continue
+            }
+
             if (cw > 0.05f) {
                 val sx = (cx / cw) * halfW
                 val sy = (-cy / cw) * halfH
                 pX[j] = sx
                 pY[j] = sy
                 valid[j] = true
-                projectedJoints.add(ProjectedJoint(j, skeleton.joints[j].name, sx, sy, cz / cw))
+                projectedJoints.add(ProjectedJoint(j, jointName, sx, sy, cz / cw))
             }
         }
 
         // 1. 绘制骨架连接线
         for (j in 0 until jointCount) {
             val joint = skeleton.joints[j]
+            if (joint.name.equals("neutral_bone", ignoreCase = true) || joint.name.startsWith("neutral", ignoreCase = true)) {
+                continue
+            }
             val pIdx = joint.parentIndex
             if (pIdx >= 0 && pIdx < jointCount && valid[j] && valid[pIdx]) {
                 canvas.drawLine(pX[pIdx], pY[pIdx], pX[j], pY[j], boneLinePaint)

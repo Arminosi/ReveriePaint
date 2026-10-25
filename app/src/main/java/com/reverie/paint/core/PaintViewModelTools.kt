@@ -1655,6 +1655,10 @@ internal fun PaintViewModel.undo() {
     if (customUndoHook?.invoke() == true) {
         return
     }
+    if (isCurrentLayer3D && canUndo3D) {
+        undo3D()
+        return
+    }
     if (currentToolId == "lasso" && lassoMultiPoints.isNotEmpty()) {
         undoLassoPoint()
         if (undoToastEnabled) {
@@ -1745,6 +1749,10 @@ internal fun PaintViewModel.undo() {
 internal fun PaintViewModel.redo() {
     val restoreRedoSel = canRedoTransformSelection
     if (isQuickShapeEditing) return
+    if (isCurrentLayer3D && canRedo3D) {
+        redo3D()
+        return
+    }
     if (pendingHistoryOps.get() >= 1) return
     // s13-C5: 同 undo(): 笔画进行中点重做先取消当前笔画
     com.reverie.paint.ui.painting.canvas.CanvasTouchView.activeTouchView?.abortActiveStrokeForHistory()

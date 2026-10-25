@@ -444,12 +444,29 @@ fun CanvasView(
         )
 
         if (vm.isCurrentLayer3D) {
+            val cfg = androidx.compose.ui.platform.LocalConfiguration.current
+            val isPhoneLayout = cfg.screenWidthDp < 600 || cfg.screenWidthDp < cfg.screenHeightDp
             com.reverie.paint.ui.painting.panels.Floating3DToolbar(
                 vm = vm,
                 modifier = Modifier
                     .align(androidx.compose.ui.Alignment.BottomCenter)
                     .padding(bottom = 24.dp),
             )
+            if (vm.show3DPosePanel) {
+                com.reverie.paint.ui.painting.panels.PoseAdjustmentPanel(
+                    vm = vm,
+                    onDismiss = { vm.show3DPosePanel = false },
+                    modifier = if (isPhoneLayout) {
+                        Modifier
+                            .align(androidx.compose.ui.Alignment.BottomCenter)
+                            .padding(bottom = 76.dp, start = 12.dp, end = 12.dp)
+                    } else {
+                        Modifier
+                            .align(androidx.compose.ui.Alignment.TopEnd)
+                            .padding(top = 68.dp, end = 16.dp, bottom = 80.dp)
+                    },
+                )
+            }
         }
     }
 }

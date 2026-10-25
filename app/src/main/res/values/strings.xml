@@ -3018,6 +3018,19 @@
     <string name="toast_3d_layer_created">已创建 3D 参考图层</string>
     <string name="toast_3d_rasterized">3D 参考图层已栅格化</string>
     <string name="toast_3d_outline_extracted">已提取 3D 线稿到新图层</string>
+    <string name="toast_undo_3d_pose">已撤销 3D 姿态调整</string>
+    <string name="toast_redo_3d_pose">已恢复 3D 姿态调整</string>
+    <string name="layer_3d_part_all">全部</string>
+    <string name="layer_3d_part_head">头部</string>
+    <string name="layer_3d_part_body">躯干</string>
+    <string name="layer_3d_part_front_legs">前肢</string>
+    <string name="layer_3d_part_hind_legs">后肢</string>
+    <string name="layer_3d_part_arms">手臂</string>
+    <string name="layer_3d_part_legs">腿部</string>
+    <string name="layer_3d_part_tail">尾巴</string>
+    <string name="layer_3d_pose_undo">撤销姿态</string>
+    <string name="layer_3d_pose_redo">恢复姿态</string>
+    <string name="layer_3d_pose_reset_single">重置此关节</string>
 
     <!-- 手势自定义与控制 (Gesture Controls) -->
     <string name="gesture_settings_title">手势控制</string>

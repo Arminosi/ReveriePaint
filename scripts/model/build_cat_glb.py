@@ -58,6 +58,15 @@ bpy.context.view_layer.objects.active = arm
 bpy.ops.object.transform_apply(location=False, rotation=True, scale=True)
 print("[apply] rotations baked; arm rot", tuple(round(v, 3) for v in arm.matrix_world.to_euler()))
 
+# delete any neutral / dummy bones from armature
+bpy.context.view_layer.objects.active = arm
+bpy.ops.object.mode_set(mode='EDIT')
+for b in list(arm.data.edit_bones):
+    if 'neutral' in b.name.lower():
+        print("[rig] removing dummy bone:", b.name)
+        arm.data.edit_bones.remove(b)
+bpy.ops.object.mode_set(mode='OBJECT')
+
 # ---- rig repair (Blender space: +Z up, -Y forward) -------------------------
 bpy.context.view_layer.objects.active = arm
 bpy.ops.object.mode_set(mode='EDIT')
@@ -161,8 +170,11 @@ for k in range(MAXINF):
 s = W4.sum(1, keepdims=True)
 bad = s[:, 0] < 1e-6
 W4[~bad] /= s[~bad]
-W4[bad] = 0
-print("[skin] unweighted %d" % int(bad.sum()))
+if bad.any():
+    closest = np.argmin(D, axis=1)
+    for bi in np.where(bad)[0]:
+        W4[bi, closest[bi]] = 1.0
+print("[skin] unweighted recovered:", int(bad.sum()))
 for j, (n, h, t) in enumerate(bones):
     w = W4[:, j]
     if w.sum() > 0.5:
@@ -172,8 +184,13 @@ for g in list(me.vertex_groups):
     me.vertex_groups.remove(g)
 groups = [me.vertex_groups.new(name=n) for n, h, t in bones]
 for i in range(len(V)):
-    for j in np.nonzero(W4[i] > 1e-4)[0]:
-        groups[j].add([i], float(W4[i, j]), 'REPLACE')
+    nz = np.nonzero(W4[i] > 1e-4)[0]
+    if len(nz) == 0:
+        c = int(np.argmin(D[i]))
+        groups[c].add([i], 1.0, 'REPLACE')
+    else:
+        for j in nz:
+            groups[j].add([i], float(W4[i, j]), 'REPLACE')
 
 # ---- centre on the origin --------------------------------------------------
 ctr = (V.min(0) + V.max(0)) / 2

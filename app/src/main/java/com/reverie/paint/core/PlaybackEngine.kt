@@ -358,7 +358,7 @@ private fun PaintViewModel.applyReplayPresetSetupLocked(target: Int) {
             ReverieCoreBridge.setBrushJitter(saved.jitterAngle, saved.jitterSize)
         }
         if (saved.textureEnabled) {
-            ReverieCoreBridge.setBrushTexture(
+            com.reverie.paint.core.brushstore.BrushTextureLive.apply(
                 saved.textureEnabled,
                 saved.textureScale,
                 saved.textureStrength,
@@ -373,7 +373,11 @@ private fun PaintViewModel.applyReplayPresetSetupLocked(target: Int) {
  *  sessions that mutated the preset table mid-way (add/remove/rename shifts
  *  native indexes) still land on the right brush; fall back to the recorded
  *  native index when the name no longer exists. */
-private fun PaintViewModel.replayPresetSelectLocked(idx: Int, name: String) {
+private fun PaintViewModel.replayPresetSelectLocked(
+    idx: Int,
+    name: String,
+    v2: com.reverie.paint.core.brushstore.PlaybackPresetCache.Select? = null,
+) {
     val byName = if (name.isNotEmpty()) brushPresets.firstOrNull { it.name == name } else null
     val target = byName?.index ?: idx
     if (target < 0) return
@@ -385,7 +389,20 @@ private fun PaintViewModel.replayPresetSelectLocked(idx: Int, name: String) {
             ReverieCoreBridge.touchStrokeCancel()
         }
         currentReplayPreset = target
-        applyReplayPresetSetupLocked(target)
+        if (v2 != null) {
+            // W-12：只核对 md5（不匹配记诊断；resolve 顺带回温 playback_cache 的 LRU 时间戳）；
+            // 回放 setup 与 V1 同路径——加载的是当前物化的预设字节，不加载缓存字节
+            val res = com.reverie.paint.core.brushstore.PlaybackPresetCache.resolve(v2)
+            if (res != com.reverie.paint.core.brushstore.PlaybackPresetCache.Resolution.EXACT) {
+                com.reverie.paint.core.brushstore.BrushDiagnostics.log(
+                    "playback_md5_mismatch",
+                    "name" to v2.name, "id" to v2.presetId, "md5" to v2.md5, "resolution" to res.name,
+                )
+            }
+            applyReplayPresetSetupLocked(target)
+        } else {
+            applyReplayPresetSetupLocked(target)
+        }
     }
 }
 
@@ -1017,6 +1034,11 @@ private fun PaintViewModel.dispatchToolOpLocked(
             val idx = r.u16()
             val name = r.str()
             replayPresetSelectLocked(if (idx == 0xFFFF) -1 else idx, name)
+        }
+
+        com.reverie.paint.model.RecordingEvents.T_PRESET_SELECT_V2 -> {
+            val sel = com.reverie.paint.core.brushstore.PlaybackPresetCache.read(r)
+            replayPresetSelectLocked(sel.index, sel.name, sel)
         }
 
         T_TEXT -> {

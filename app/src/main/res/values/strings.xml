@@ -1499,6 +1499,22 @@
     <string name="brush_studio_blend_difference">差值</string>
     <string name="brush_studio_blend_exclusion">排除</string>
     <string name="brush_studio_blend_dodge_color">颜色减淡</string>
+    <string name="brush_studio_texmode_multiply">正片叠底</string>
+    <string name="brush_studio_texmode_subtract">减去</string>
+    <string name="brush_studio_texmode_lightness">亮度</string>
+    <string name="brush_studio_texmode_gradient">渐变</string>
+    <string name="brush_studio_texmode_darken">变暗</string>
+    <string name="brush_studio_texmode_overlay">叠加</string>
+    <string name="brush_studio_texmode_color_dodge">颜色减淡</string>
+    <string name="brush_studio_texmode_color_burn">颜色加深</string>
+    <string name="brush_studio_texmode_linear_dodge">线性减淡</string>
+    <string name="brush_studio_texmode_linear_burn">线性加深</string>
+    <string name="brush_studio_texmode_hard_mix_photoshop">实色混合 (Photoshop)</string>
+    <string name="brush_studio_texmode_hard_mix_softer_photoshop">柔和实色混合 (Photoshop)</string>
+    <string name="brush_studio_texmode_height">高度</string>
+    <string name="brush_studio_texmode_linear_height">线性高度</string>
+    <string name="brush_studio_texmode_height_photoshop">高度 (Photoshop)</string>
+    <string name="brush_studio_texmode_linear_height_photoshop">线性高度 (Photoshop)</string>
     <string name="brush_studio_prop_ops">笔刷管理与预设操作</string>
     <string name="brush_studio_prop_copy">复制副本</string>
     <string name="brush_studio_prop_rename">重命名</string>
@@ -1581,6 +1597,11 @@
     <string name="brush_dynamics_live_cursor">实时动态响应</string>
     <string name="brush_dynamics_strength">动态影响强度</string>
     <string name="brush_studio_revert_changes">还原修改</string>
+    <string name="brush_studio_revert_short">还原</string>
+    <string name="brush_studio_scratchpad_short">试画</string>
+    <string name="brush_studio_new_short">新建</string>
+    <string name="brush_studio_duplicate_short">复制</string>
+    <string name="brush_studio_import_short">导入</string>
     <string name="brush_studio_revert_confirm">确定要放弃本次进入工作台后的所有修改，还原至初始状态吗？此操作无法撤销</string>
     <string name="brush_studio_revert_toast">已还原至进入工作台前的状态</string>
     <string name="brush_studio_scratchpad_toggle">试画板</string>
@@ -3077,5 +3098,10 @@
     <string name="gesture_trigger_single_finger_long_press">单指长按</string>
     <string name="gesture_trigger_quick_pinch">快速双捏</string>
     <string name="gesture_trigger_none">无</string>
+    <string name="brush_gate_mypaint">MyPaint 笔刷（.myb）不支持此项</string>
+    <string name="brush_gate_colorsmudge_only">仅涂抹引擎（colorsmudge）的笔刷有效，当前笔刷引擎不读取此项</string>
+    <string name="brush_gate_no_brush_def">当前笔刷引擎没有笔尖定义，此项不起作用</string>
+    <string name="brush_gate_auto_tip_only">图片笔尖不支持（仅作用于参数化笔尖）</string>
+    <string name="brush_possibly_modified_hint">此笔刷的原始文件可能曾被旧版本修改，重置将回到迁移时的状态。</string>
 </resources>
 

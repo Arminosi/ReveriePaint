@@ -52,17 +52,66 @@ internal fun PaintViewModel.loadBrushPresets(force: Boolean = false) {
     viewModelScope.launch {
         try {
             val dirs = withContext(Dispatchers.IO) {
+                com.reverie.paint.core.brushstore.BrushDiagnostics.init(appContext.filesDir)
                 val d = copyBundledBrushAssets()
                 // 必须在引擎加载任何预设之前清掉历史重复参数键
                 migrateDuplicatedPresetParams(d.first)
+                bootstrapBrushStore(d.first)
                 d
             }
+            // S2.3 一次性记录修复：必须在首次 selectBrushPreset（loadBrushPresetsAfterAssets 内）之前完成
+            com.reverie.paint.core.brushstore.ParityRepair.runOnce(this@loadBrushPresets)
             loadBrushPresetsAfterAssets(dirs.first, dirs.second)
         } catch (t: Throwable) {
             android.util.Log.e("ReveriePaint", "loadBrushPresets IO failed", t)
             isBrushPresetsLoading = false
         }
     }
+}
+
+/**
+ * 笔刷存储 v2 启动编排（执行文档 W-04）：同步出厂快照 → 迁移（W-07）→ materializeAll。
+ * 失败或迁移未完成时 [com.reverie.paint.core.brushstore.BrushStoreBootstrap.active] 为 false，VM 继续走旧路径。
+ */
+private fun PaintViewModel.bootstrapBrushStore(presetDir: File) {
+    val ctx = appContext
+    val stamp = try {
+        val pi = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
+        "${com.reverie.paint.BuildConfig.VERSION_CODE}:${pi.lastUpdateTime}"
+    } catch (_: Throwable) {
+        "${com.reverie.paint.BuildConfig.VERSION_CODE}"
+    }
+    com.reverie.paint.core.brushstore.BrushStoreBootstrap.run(
+        filesDir = ctx.filesDir,
+        presetDir = presetDir,
+        enabled = com.reverie.paint.core.brushstore.BrushStoreFlags.isEnabled(ctx),
+        installStamp = stamp,
+        readAssets = {
+            val am = ctx.assets
+            (am.list("paintoppresets") ?: emptyArray())
+                .filter { com.reverie.paint.core.brushstore.BrushStoreBootstrap.isFactoryPreset(it) }
+                .associateWith { n -> am.open("paintoppresets/$n").use { it.readBytes() } }
+        },
+        migrate = { migrateLegacyBrushParams(presetDir) },
+    )
+}
+
+/** W-07：首次进入 v2 时把旧 brushParams 迁成覆盖；成功后写 schema，之后直接返回 true */
+private fun PaintViewModel.migrateLegacyBrushParams(presetDir: File): Boolean {
+    val ctx = appContext
+    if (!com.reverie.paint.core.brushstore.BrushStoreFlags.needsMigration(ctx)) return true
+    val legacy = HashMap(brushParams)
+    val raw = prefs().getString("brush_params", null)
+    val ts = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())
+    com.reverie.paint.core.brushstore.LegacyBrushParamsMigrator.run(
+        com.reverie.paint.core.brushstore.BrushStoreBootstrap.storeRoot(ctx.filesDir),
+        presetDir,
+        legacy,
+        raw,
+        ts,
+    )
+    com.reverie.paint.core.brushstore.BrushStoreFlags.setMigratedSchema(ctx, com.reverie.paint.core.brushstore.BrushStoreFlags.CURRENT_SCHEMA)
+    return true
 }
 
 /**
@@ -115,6 +164,13 @@ private fun PaintViewModel.copyBundledBrushAssets(): Pair<File, File> {
                 assets.open("brushes/$name").use { input ->
                     target.outputStream().use { output -> input.copyTo(output) }
                 }
+            } else if (!isVersionMatched) {
+                // W-10：升级时内置资源按 APK 更新（导入资源已命名空间化 `<包>__<名>`，不会被冲掉）
+                val bytes = assets.open("brushes/$name").use { it.readBytes() }
+                if (target.length() != bytes.size.toLong() || !target.readBytes().contentEquals(bytes)) {
+                    target.writeBytes(bytes)
+                    com.reverie.paint.core.brushstore.BrushDiagnostics.log("upgrade_resource", "kind" to "brushes", "name" to name)
+                }
             }
         }
     } catch (e: Exception) {
@@ -129,6 +185,13 @@ private fun PaintViewModel.copyBundledBrushAssets(): Pair<File, File> {
             if (!target.exists()) {
                 assets.open("patterns/$name").use { input ->
                     target.outputStream().use { output -> input.copyTo(output) }
+                }
+            } else if (!isVersionMatched) {
+                // W-10：升级时内置资源按 APK 更新（导入资源已命名空间化 `<包>__<名>`，不会被冲掉）
+                val bytes = assets.open("patterns/$name").use { it.readBytes() }
+                if (target.length() != bytes.size.toLong() || !target.readBytes().contentEquals(bytes)) {
+                    target.writeBytes(bytes)
+                    com.reverie.paint.core.brushstore.BrushDiagnostics.log("upgrade_resource", "kind" to "patterns", "name" to name)
                 }
             }
         }

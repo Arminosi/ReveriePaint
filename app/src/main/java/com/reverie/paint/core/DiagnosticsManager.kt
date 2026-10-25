@@ -199,6 +199,13 @@ object DiagnosticsManager {
             sb.append(sanitize(latestCrash)).append("\n")
         }
 
+        // 7. 笔刷存储日志尾部 (brush_diag/brush.log)
+        val brushLog = com.reverie.paint.core.brushstore.BrushDiagnostics.tail()
+        if (brushLog.isNotBlank()) {
+            sb.append("\n--- [Brush Store Log Tail (Sanitized)] ---\n")
+            sb.append(sanitize(brushLog)).append("\n")
+        }
+
         sb.append("\n===================================================\n")
         return sb.toString()
     }

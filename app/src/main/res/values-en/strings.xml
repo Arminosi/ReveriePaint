@@ -1499,6 +1499,22 @@
     <string name="brush_studio_blend_difference">Difference</string>
     <string name="brush_studio_blend_exclusion">Exclusion</string>
     <string name="brush_studio_blend_dodge_color">Color Dodge</string>
+    <string name="brush_studio_texmode_multiply">Multiply</string>
+    <string name="brush_studio_texmode_subtract">Subtract</string>
+    <string name="brush_studio_texmode_lightness">Lightness</string>
+    <string name="brush_studio_texmode_gradient">Gradient</string>
+    <string name="brush_studio_texmode_darken">Darken</string>
+    <string name="brush_studio_texmode_overlay">Overlay</string>
+    <string name="brush_studio_texmode_color_dodge">Color Dodge</string>
+    <string name="brush_studio_texmode_color_burn">Color Burn</string>
+    <string name="brush_studio_texmode_linear_dodge">Linear Dodge</string>
+    <string name="brush_studio_texmode_linear_burn">Linear Burn</string>
+    <string name="brush_studio_texmode_hard_mix_photoshop">Hard Mix (Photoshop)</string>
+    <string name="brush_studio_texmode_hard_mix_softer_photoshop">Hard Mix Softer (Photoshop)</string>
+    <string name="brush_studio_texmode_height">Height</string>
+    <string name="brush_studio_texmode_linear_height">Linear Height</string>
+    <string name="brush_studio_texmode_height_photoshop">Height (Photoshop)</string>
+    <string name="brush_studio_texmode_linear_height_photoshop">Linear Height (Photoshop)</string>
     <string name="brush_studio_prop_ops">Brush Actions</string>
     <string name="brush_studio_prop_copy">Duplicate</string>
     <string name="brush_studio_prop_rename">Rename</string>
@@ -1581,6 +1597,11 @@
     <string name="brush_dynamics_live_cursor">Live Feedback</string>
     <string name="brush_dynamics_strength">Dynamic Strength</string>
     <string name="brush_studio_revert_changes">Revert Changes</string>
+    <string name="brush_studio_revert_short">Revert</string>
+    <string name="brush_studio_scratchpad_short">Draw</string>
+    <string name="brush_studio_new_short">New</string>
+    <string name="brush_studio_duplicate_short">Copy</string>
+    <string name="brush_studio_import_short">Import</string>
     <string name="brush_studio_revert_confirm">Discard all changes made during this studio session and revert to initial state? This cannot be undone.</string>
     <string name="brush_studio_revert_toast">Reverted to state before entering studio</string>
     <string name="brush_studio_scratchpad_toggle">Scratchpad</string>
@@ -3077,5 +3098,10 @@
     <string name="gesture_trigger_single_finger_long_press">Single-Finger Long Press</string>
     <string name="gesture_trigger_quick_pinch">Quick Pinch</string>
     <string name="gesture_trigger_none">None</string>
+    <string name="brush_gate_mypaint">Not supported by MyPaint brushes (.myb)</string>
+    <string name="brush_gate_colorsmudge_only">Only affects Color Smudge (colorsmudge) brushes; this brush engine ignores it</string>
+    <string name="brush_gate_no_brush_def">This brush engine has no tip definition; this setting has no effect</string>
+    <string name="brush_gate_auto_tip_only">Not supported by image tips (parametric tips only)</string>
+    <string name="brush_possibly_modified_hint">The original file of this brush may have been modified by an older version; reset returns to its state at migration.</string>
 </resources>
 

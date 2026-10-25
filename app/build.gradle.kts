@@ -238,5 +238,6 @@ dependencies {
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
 
     testImplementation("junit:junit:4.13.2")
+    // android.jar 的 org.json 在 JVM 单测里是桩实现，brushstore 的 JSON 读写需要真实现
     testImplementation("org.json:json:20240303")
 }

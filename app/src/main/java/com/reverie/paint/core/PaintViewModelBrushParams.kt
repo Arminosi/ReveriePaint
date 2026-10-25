@@ -123,7 +123,7 @@ import kotlinx.coroutines.launch
         brushTextureEnabled = v
         saveBrushParam(reloadEngine = true, immediateReload = true)
         runCore(render = false) {
-            ReverieCoreBridge.setBrushTexture(brushTextureEnabled, brushTextureScale, brushTextureStrength, brushTextureMode, brushTexturePattern)
+            com.reverie.paint.core.brushstore.BrushTextureLive.apply(brushTextureEnabled, brushTextureScale, brushTextureStrength, brushTextureMode, brushTexturePattern)
         }
     }
 
@@ -131,7 +131,7 @@ import kotlinx.coroutines.launch
         brushTextureScale = v
         saveBrushParam(reloadEngine = true)
         runCore(render = false) {
-            ReverieCoreBridge.setBrushTexture(brushTextureEnabled, brushTextureScale, brushTextureStrength, brushTextureMode, brushTexturePattern)
+            com.reverie.paint.core.brushstore.BrushTextureLive.apply(brushTextureEnabled, brushTextureScale, brushTextureStrength, brushTextureMode, brushTexturePattern)
         }
     }
 
@@ -139,7 +139,7 @@ import kotlinx.coroutines.launch
         brushTextureStrength = v
         saveBrushParam(reloadEngine = true)
         runCore(render = false) {
-            ReverieCoreBridge.setBrushTexture(brushTextureEnabled, brushTextureScale, brushTextureStrength, brushTextureMode, brushTexturePattern)
+            com.reverie.paint.core.brushstore.BrushTextureLive.apply(brushTextureEnabled, brushTextureScale, brushTextureStrength, brushTextureMode, brushTexturePattern)
         }
     }
 
@@ -147,7 +147,7 @@ import kotlinx.coroutines.launch
         brushTextureMode = v
         saveBrushParam(reloadEngine = true, immediateReload = true)
         runCore(render = false) {
-            ReverieCoreBridge.setBrushTexture(brushTextureEnabled, brushTextureScale, brushTextureStrength, brushTextureMode, brushTexturePattern)
+            com.reverie.paint.core.brushstore.BrushTextureLive.apply(brushTextureEnabled, brushTextureScale, brushTextureStrength, brushTextureMode, brushTexturePattern)
         }
     }
 
@@ -155,7 +155,7 @@ import kotlinx.coroutines.launch
         brushTexturePattern = v
         saveBrushParam(reloadEngine = true, immediateReload = true)
         runCore(render = false) {
-            ReverieCoreBridge.setBrushTexture(brushTextureEnabled, brushTextureScale, brushTextureStrength, brushTextureMode, brushTexturePattern)
+            com.reverie.paint.core.brushstore.BrushTextureLive.apply(brushTextureEnabled, brushTextureScale, brushTextureStrength, brushTextureMode, brushTexturePattern)
         }
     }
 
@@ -552,80 +552,11 @@ import kotlinx.coroutines.launch
         val dc = dynamicsChanged || (existing?.dynamicsCustomized == true)
         val sc = smudgeChanged || (existing?.smudgeCustomized == true)
         val spc = spacingChanged || (existing?.spacingCustomized == true)
-        val p = BrushParams(
-            dynamicOptions = if (dc) buildDynamicOptionSensorXml() else (existing?.dynamicOptions ?: emptyMap()),
-            size = brushSize,
-            opacity = brushOpacity,
-            flow = brushFlow,
-            spacing = brushSpacing,
-            angle = brushAngle,
-            scatter = brushScatter,
-            fade = brushFade,
-            softness = brushSoftness,
-            ratio = brushRatio,
-            sharpness = brushSharpness,
-            rotation = brushRotation,
-            compositeOp = if (isEraserPreset) "erase" else if (brushCompositeOp != "erase") brushCompositeOp else (existing?.compositeOp?.takeIf { it != "erase" } ?: "normal"),
-            antiAliasing = brushAntiAliasing,
-            tipShape = brushTipShape,
-            randomFlipX = brushRandomFlipX,
-            randomFlipY = brushRandomFlipY,
-            followDirection = brushFollowDirection,
-            streamline = brushStreamline,
-            taper = brushTaper,
-            textureEnabled = brushTextureEnabled,
-            textureScale = brushTextureScale,
-            textureStrength = brushTextureStrength,
-            textureMode = brushTextureMode,
-            texturePattern = brushTexturePattern,
-            hueJitter = brushHueJitter,
-            satJitter = brushSatJitter,
-            valJitter = brushValJitter,
-            secondaryMix = brushSecondaryMix,
-            pressureColorMix = brushPressureColorMix,
-            pressureEnabled = brushPressureEnabled,
-            pressureSize = brushPressureSize,
-            pressureOpacity = brushPressureOpacity,
-            pressureFlow = brushPressureFlow,
-            speedSize = brushSpeedSize,
-            pressureCurve = brushPressureCurve,
-            minSizeLimit = brushMinSizeLimit,
-            maxSizeLimit = brushMaxSizeLimit,
-            tipAsset = brushTipAsset,
-            paintOpId = brushPaintOpId,
-            airbrush = brushAirbrush,
-            airbrushRate = brushAirbrushRate,
-            smudgeRate = brushSmudgeRate,
-            smudgeLength = brushSmudgeLength,
-            colorRate = brushColorRate,
-            smudgeMode = brushSmudgeMode,
-            spikes = brushSpikes,
-            jitterAngle = brushJitterAngle,
-            jitterSize = brushJitterSize,
-            author = brushAuthor,
-            isAuthorLocked = brushIsAuthorLocked,
-            description = brushDescription,
-            version = brushVersion,
-            isCustomized = true,
-            dynamicsCustomized = dc,
-            smudgeCustomized = sc,
-            spacingCustomized = spc,
-            maskingEnabled = brushMaskingEnabled,
-            maskingCompositeOp = brushMaskingCompositeOp,
-            maskingSizeRatio = brushMaskingSizeRatio,
-            maskingSpacing = brushMaskingSpacing,
-            maskingTipAsset = brushMaskingTipAsset,
-            maskingTipShape = brushMaskingTipShape,
-            maskingFade = brushMaskingFade,
-            maskingSoftness = brushMaskingSoftness,
-            rotationSensor = brushRotationSensor,
-            scatterSensor = brushScatterSensor,
-            sizeSensor = brushSizeSensor,
-            opacitySensor = brushOpacitySensor,
-            flowSensor = brushFlowSensor,
-        )
+        val p = currentBrushParamsFromVm(name, dc, sc, spc, existing, isEraserPreset)
         brushParams[name] = p
         schedulePersistBrushParams()
+        // v2：只落盘（stage + 防抖 commit/materialize），引擎重载由下面的旧块负责
+        BrushStoreVm.onSavedPersist(this, name, p)
         val dir = File(appContext.filesDir, "paintoppresets")
         val kppFile = File(dir, "$name.kpp")
         if (kppFile.exists()) {
@@ -639,6 +570,7 @@ import kotlinx.coroutines.launch
                     runCore(render = false) {
                         if (brushPresetIndex != targetIdx) return@runCore
                         val pSnapshot = brushParams[name] ?: return@runCore
+                        BrushStoreVm.flushNow(name)
                         if (ReverieCoreBridge.loadBrushPreset(targetIdx)) {
                             if (pSnapshot.tipAsset.isNotBlank()) ReverieCoreBridge.setBrushTipAsset(pSnapshot.tipAsset)
                             ReverieCoreBridge.setPresetIsEraser(isEraserPreset)
@@ -698,7 +630,7 @@ import kotlinx.coroutines.launch
                                     )
                                 }
                             }
-                            ReverieCoreBridge.setBrushTexture(
+                            com.reverie.paint.core.brushstore.BrushTextureLive.apply(
                                 pSnapshot.textureEnabled,
                                 pSnapshot.textureScale,
                                 pSnapshot.textureStrength,
@@ -723,3 +655,84 @@ import kotlinx.coroutines.launch
         }
     }
 
+    /** 从当前 VM 状态构造 BrushParams（saveBrushParam 与 v2 captureUiBaseline 共用的字段表） */
+    internal fun PaintViewModel.currentBrushParamsFromVm(
+        name: String?,
+        dynamicsCustomized: Boolean,
+        smudgeCustomized: Boolean,
+        spacingCustomized: Boolean,
+        existing: BrushParams?,
+        isEraserPreset: Boolean,
+    ): BrushParams =
+        BrushParams(
+            dynamicOptions = if (dynamicsCustomized) buildDynamicOptionSensorXml() else (existing?.dynamicOptions ?: emptyMap()),
+            size = brushSize,
+            opacity = brushOpacity,
+            flow = brushFlow,
+            spacing = brushSpacing,
+            angle = brushAngle,
+            scatter = brushScatter,
+            fade = brushFade,
+            softness = brushSoftness,
+            ratio = brushRatio,
+            sharpness = brushSharpness,
+            rotation = brushRotation,
+            compositeOp = if (isEraserPreset) "erase" else if (brushCompositeOp != "erase") brushCompositeOp else (existing?.compositeOp?.takeIf { it != "erase" } ?: "normal"),
+            antiAliasing = brushAntiAliasing,
+            tipShape = brushTipShape,
+            randomFlipX = brushRandomFlipX,
+            randomFlipY = brushRandomFlipY,
+            followDirection = brushFollowDirection,
+            streamline = brushStreamline,
+            taper = brushTaper,
+            textureEnabled = brushTextureEnabled,
+            textureScale = brushTextureScale,
+            textureStrength = brushTextureStrength,
+            textureMode = brushTextureMode,
+            texturePattern = brushTexturePattern,
+            hueJitter = brushHueJitter,
+            satJitter = brushSatJitter,
+            valJitter = brushValJitter,
+            secondaryMix = brushSecondaryMix,
+            pressureColorMix = brushPressureColorMix,
+            pressureEnabled = brushPressureEnabled,
+            pressureSize = brushPressureSize,
+            pressureOpacity = brushPressureOpacity,
+            pressureFlow = brushPressureFlow,
+            speedSize = brushSpeedSize,
+            pressureCurve = brushPressureCurve,
+            minSizeLimit = brushMinSizeLimit,
+            maxSizeLimit = brushMaxSizeLimit,
+            tipAsset = brushTipAsset,
+            paintOpId = brushPaintOpId,
+            airbrush = brushAirbrush,
+            airbrushRate = brushAirbrushRate,
+            smudgeRate = brushSmudgeRate,
+            smudgeLength = brushSmudgeLength,
+            colorRate = brushColorRate,
+            smudgeMode = brushSmudgeMode,
+            spikes = brushSpikes,
+            jitterAngle = brushJitterAngle,
+            jitterSize = brushJitterSize,
+            author = brushAuthor,
+            isAuthorLocked = brushIsAuthorLocked,
+            description = brushDescription,
+            version = brushVersion,
+            isCustomized = true,
+            dynamicsCustomized = dynamicsCustomized,
+            smudgeCustomized = smudgeCustomized,
+            spacingCustomized = spacingCustomized,
+            maskingEnabled = brushMaskingEnabled,
+            maskingCompositeOp = brushMaskingCompositeOp,
+            maskingSizeRatio = brushMaskingSizeRatio,
+            maskingSpacing = brushMaskingSpacing,
+            maskingTipAsset = brushMaskingTipAsset,
+            maskingTipShape = brushMaskingTipShape,
+            maskingFade = brushMaskingFade,
+            maskingSoftness = brushMaskingSoftness,
+            rotationSensor = brushRotationSensor,
+            scatterSensor = brushScatterSensor,
+            sizeSensor = brushSizeSensor,
+            opacitySensor = brushOpacitySensor,
+            flowSensor = brushFlowSensor,
+        )

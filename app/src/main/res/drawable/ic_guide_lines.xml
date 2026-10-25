@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Horizontal guide line with end ticks -->
+    <path
+        android:pathData="M2,12 L22,12"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.6"
+        android:strokeLineCap="round" />
+    <!-- Vertical guide line with end ticks -->
+    <path
+        android:pathData="M12,2 L12,22"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.6"
+        android:strokeLineCap="round" />
+    <!-- Guide reference box corners -->
+    <path
+        android:pathData="M5,5 L8,5 M5,5 L5,8 M19,5 L16,5 M19,5 L19,8 M5,19 L8,19 M5,19 L5,16 M19,19 L16,19 M19,19 L19,16"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round" />
+</vector>

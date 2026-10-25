@@ -9,6 +9,9 @@
  * ============================================================ */
 #include "ReverieCoreInternal.h"
 #include "ReverieCoreUndoStore.h"
+#include "PaintOpTraits.h"
+#include "StrokeTailFlush.h"
+#include "StrokeTimeContract.h"
 #include <strokes/KisMaskingBrushRenderer.h>
 #include <strokes/KisMaskedFreehandStrokePainter.h>
 #include <KisFreehandStrokeInfo.h>
@@ -16,8 +19,14 @@
 #include <filter/kis_filter_registry.h>
 #include <QtConcurrent/QtConcurrentMap>
 #include <cmath>
+#include <string_view>
 
 namespace {
+
+std::string_view opView(const QByteArray &idBytes)
+{
+    return std::string_view(idBytes.constData(), size_t(idBytes.size()));
+}
 
 // doAsynchronousUpdate 把大笔刷的单个 dab 切成多条 KisStrokeJobData::CONCURRENT
 // 水平条带。原先逐条串行跑, 大直径湿笔 (colorsmudge) 单批耗时随直径平方增长。
@@ -119,9 +128,10 @@ void ReverieCore::touchStrokeStart(qreal x, qreal y, qreal pressure, qreal tiltX
     m_strokeColor = m_brushColor;
     m_strokeOpacity = m_brushOpacity;
     m_idleKickPainted = false;
+    m_lastFlushHadInk = false;
     m_strokeTimer.restart();
     m_strokeCounter++;
-    const int strokeSeed = int(quint32(m_strokeCounter) * 1664525u + 1013904223u);
+    const int strokeSeed = (m_replaySeed >= 0) ? m_replaySeed : int(quint32(m_strokeCounter) * 1664525u + 1013904223u);
     m_randomSource = new KisRandomSource(strokeSeed);
     m_perStrokeRandomSource = new KisPerStrokeRandomSource();
     // The stroke paints straight onto the layer device with per-dab opacity
@@ -266,8 +276,9 @@ reverie::MirrorBatchAction ReverieCore::paintMirrorPolyline(const float *samples
     const QString opId = (m_toolMode == ToolSmudge)
         ? QStringLiteral("colorsmudge")
         : (m_brushPreset ? m_brushPreset->paintOp().id() : QString());
-    const bool engineBypassesSelection =
-        opId != QLatin1String("paintbrush") && opId != QLatin1String("duplicate") && opId != QLatin1String("colorsmudge");
+    const QByteArray mirrorIdBytes = opId.toLatin1();
+    const std::string_view mirrorId = opView(mirrorIdBytes);
+    const bool engineBypassesSelection = !reverie::PaintOpTraits::honorsPainterSelection(mirrorId);
     // 只有真 Krita 引擎链路能给分支各建一个 paintop。快速路径 (QuickRoundBrush 的跨批状态只有
     // 一份)、双笔刷蒙版 (KisMaskedFreehandStrokePainter)、以及"引擎绕过选区且有选区"
     // (主笔靠整批读回/写回裁剪) 都退回抬笔重放。
@@ -374,18 +385,20 @@ reverie::MirrorBatchAction ReverieCore::paintMirrorPolyline(const float *samples
             // 与主笔 m_strokeDistance = KisDistanceInformation(start, 0.0) 同构 (Krita
             // createPainters 也用起笔点初始化每个分支的 dragDistance)
             cursor.distance = KisDistanceInformation(pos, 0.0);
-            KisPaintInformation info(pos, pressure, tiltX, tiltY, rotation, 0.0, 1.0, time, 0.0);
+            KisPaintInformation info(pos, pressure, tiltX, tiltY, rotation, 0.0, 1.0,
+                                     reverie::StrokeTimeContract::toKritaMs(time), 0.0);
             if (m_randomSource) info.setRandomSource(m_randomSource);
             if (m_perStrokeRandomSource) info.setPerStrokeRandomSource(m_perStrokeRandomSource);
             cursor.op->paintAt(info, &cursor.distance);
         } else {
             const qreal dist = QLineF(cursor.lastPos, pos).length();
-            const qreal dt = qMax<qreal>(1e-4, time - cursor.lastTime);
-            const qreal speed = dist / (dt * 1000.0);
+            const qreal speed = reverie::StrokeTimeContract::speedPxPerMs(dist, cursor.lastTime, time);
+            const qreal t0Ms = reverie::StrokeTimeContract::toKritaMs(cursor.lastTime);
+            const qreal t1Ms = reverie::StrokeTimeContract::toKritaMs(time);
             KisPaintInformation infoLast(cursor.lastPos, cursor.lastPressure, cursor.lastTiltX,
                                          cursor.lastTiltY, cursor.lastRotation, 0.0, 1.0,
-                                         cursor.lastTime, speed);
-            KisPaintInformation infoCur(pos, pressure, tiltX, tiltY, rotation, 0.0, 1.0, time, speed);
+                                         t0Ms, speed);
+            KisPaintInformation infoCur(pos, pressure, tiltX, tiltY, rotation, 0.0, 1.0, t1Ms, speed);
             if (m_randomSource) {
                 infoLast.setRandomSource(m_randomSource);
                 infoCur.setRandomSource(m_randomSource);
@@ -446,11 +459,8 @@ reverie::MirrorBatchAction ReverieCore::paintMirrorPolyline(const float *samples
             exactUnion = exactUnion.isNull() ? r : exactUnion.united(r);
         }
     }
-    const bool isPathEngine = (opId == QLatin1String("experimentbrush") ||
-                               opId == QLatin1String("curvebrush") ||
-                               opId == QLatin1String("sketchbrush") ||
-                               opId == QLatin1String("gridbrush") ||
-                               opId == QLatin1String("particlebrush"));
+    const QByteArray branchIdBytes = opId.toLatin1();
+    const bool isPathEngine = reverie::PaintOpTraits::isPathEngine(opView(branchIdBytes));
     const int w = int(m_brushSize) + 2;
     if (isPathEngine) {
         const int margin = int(m_brushSize) + 8;
@@ -482,6 +492,7 @@ void ReverieCore::touchStrokeEnd()
             }
         }
         flushStrokeBatch();
+        flushExperimentTail();
         endStrokeBatch();
         m_strokeBatchOpen = false;
     }
@@ -492,6 +503,7 @@ void ReverieCore::touchStrokeEnd()
     KisPaintLayer *pl = (m_currentLayer >= 0 && m_currentLayer < m_layers.size())
         ? dynamic_cast<KisPaintLayer *>(m_layers[m_currentLayer].node)
         : nullptr;
+    bool committedTempTarget = false;
     if (pl && pl->hasTemporaryTarget()) {
         KisPaintDeviceSP tempTarget = pl->temporaryTarget();
         const QRect ext = tempTarget->exactBounds();
@@ -514,13 +526,18 @@ void ReverieCore::touchStrokeEnd()
             if (m_toolMode == ToolEraser) {
                 gc.setCompositeOpId(QStringLiteral("erase"));
             }
+            // F-03 之后，间接绘制的笔画 painter 不带选区。这里是合并时的唯一一次裁剪。
+            // setupTemporaryPainter 已经按 setTemporarySelection 设过一次；KisPainter::setSelection
+            // 是替换不是叠加。保留这行，是为了笔画中途选区变化时合并用最新的 m_selection。
             if (m_selection) {
                 gc.setSelection(m_selection);
             }
             gc.setChannelFlags(pl->alphaLocked() ? pl->channelLockFlags() : QBitArray());
             gc.bitBlt(ext.topLeft(), tempTarget, ext);
             gc.end();
-            markStrokeDirty(ext);
+            const int strokeMargin = strokeLayerMargin();
+            markStrokeDirty(ext.adjusted(-strokeMargin, -strokeMargin, strokeMargin, strokeMargin));
+            committedTempTarget = true;
             bumpLayerThumbGen(pl);
         }
         pl->setTemporaryTarget(nullptr);
@@ -563,12 +580,8 @@ void ReverieCore::touchStrokeEnd()
     // clears projection tiles asynchronously and races with rendering, creating
     // dirty block artifacts and visual flickering during continuous painting.
     KisPaintDeviceSP endDev = pl ? pl->paintDevice() : currentPaintDevice();
-    if (endDev && m_document) {
-        int strokeMargin = 0;
-        if (m_currentLayer >= 0 && m_currentLayer < m_layers.size() && m_layers[m_currentLayer].isStrokeLayer) {
-            strokeMargin = m_layers[m_currentLayer].strokeSize + 4;
-        }
-        const int margin = qMax(int(m_brushSize * 2.0), 32) + 16 + strokeMargin;
+    if (endDev && m_document && !committedTempTarget) {
+        const int margin = qMax(int(m_brushSize * 2.0), 32) + 16 + strokeLayerMargin();
         const QRect totalDirty = m_accumulatedStrokeBounds.toAlignedRect().adjusted(
             -margin, -margin, margin, margin).intersected(
             QRect(0, 0, m_document->width(), m_document->height()));
@@ -675,10 +688,8 @@ bool ReverieCore::appendStrokeSample(const QPointF &imgPos, qreal pressure, qrea
     } else if (m_brushPreset) {
         opId = m_brushPreset->paintOp().id();
     }
-    const bool isPathEngine = (opId == QLatin1String("experimentbrush") ||
-                               opId == QLatin1String("curvebrush") ||
-                               opId == QLatin1String("sketchbrush") ||
-                               opId == QLatin1String("gridbrush"));
+    const QByteArray spacingIdBytes = opId.toLatin1();
+    const bool isPathEngine = reverie::PaintOpTraits::usesFineSpacing(opView(spacingIdBytes));
     // Krita emits dabs via KisDistanceInformation at the preset's own spacing;
     // this outer filter only gates SAMPLE emission into the batch, so keep it
     // small and fixed. The old max(1.5px, 20% diameter) left a blind zone of
@@ -709,6 +720,11 @@ bool ReverieCore::appendStrokeSample(const QPointF &imgPos, qreal pressure, qrea
     s.rotation = rotation;
     if (timeSeconds >= 0.0) {
         s.time = timeSeconds;
+    } else if (m_replayPixelsPerSecond > 0.0) {
+        double lastTime = m_strokeSamples.isEmpty() ? 0.0 : m_strokeSamples.last().time;
+        QPointF lastPos = m_strokeSamples.isEmpty() ? m_strokeStartImg : m_strokeSamples.last().imgPos;
+        double dist = std::hypot(imgPos.x() - lastPos.x(), imgPos.y() - lastPos.y());
+        s.time = lastTime + dist / m_replayPixelsPerSecond;
     } else {
         s.time = m_strokeTimer.elapsed() / 1000.0;
     }
@@ -818,6 +834,9 @@ bool ReverieCore::flushStrokeBatch()
     } else {
         target = currentPaintDevice();
     }
+    // One declaration for the rest of this flush. Indirect paint leaves the stroke
+    // painter unclipped; preview and pen-up merge each clip once.
+    const bool tempTargetClips = needsIndirect && pl && pl->hasTemporaryTarget();
 
     if (!target) {
         m_strokeSamples.clear();
@@ -964,9 +983,11 @@ bool ReverieCore::flushStrokeBatch()
             m_strokePainter->setPaintColor(koColor);
             m_strokePainter->setBackgroundColor(koBgColor);
 
-            // Constrain the whole stroke to the active selection (if any)
-            if (m_selection) {
+            // Direct paint clips here. Indirect paint clips later, once.
+            if (m_selection && !tempTargetClips) {
                 m_strokePainter->setSelection(m_selection);
+            } else {
+                m_strokePainter->setSelection(KisSelectionSP());
             }
             m_strokePainter->setChannelFlags(pl && pl->alphaLocked() ? pl->channelLockFlags() : QBitArray());
             // Real Krita brush engine: construct the brush op once per stroke
@@ -1022,7 +1043,7 @@ bool ReverieCore::flushStrokeBatch()
         m_strokePainter->setOpacityF(needsIndirect ? 1.0 : (m_brushPreset ? 1.0 : qBound<qreal>(0.0, m_strokeOpacity, 1.0)));
         m_strokePainter->setPaintColor(koColor);
         m_strokePainter->setBackgroundColor(koBgColor);
-        if (m_selection) {
+        if (m_selection && !tempTargetClips) {
             m_strokePainter->setSelection(m_selection);
         } else {
             m_strokePainter->setSelection(KisSelectionSP());
@@ -1043,7 +1064,8 @@ bool ReverieCore::flushStrokeBatch()
             qBound<qreal>(0.0, first.pressure, 1.0);
         QRect strokeDirty;
         if (m_maskedStrokePainter) {
-            KisPaintInformation info(p, pressure, first.tiltX, first.tiltY, first.rotation, 0.0, 1.0, first.time, 0.0);
+            KisPaintInformation info(p, pressure, first.tiltX, first.tiltY, first.rotation, 0.0, 1.0,
+                                     reverie::StrokeTimeContract::toKritaMs(first.time), 0.0);
             if (m_randomSource) info.setRandomSource(m_randomSource);
             if (m_perStrokeRandomSource) info.setPerStrokeRandomSource(m_perStrokeRandomSource);
             m_maskedStrokePainter->paintAt(info);
@@ -1064,7 +1086,8 @@ bool ReverieCore::flushStrokeBatch()
             }
         } else if (m_brushPreset && m_strokeOp) {
             // Krita dab for a genuine tap (paintAt = single dab at pos)
-            KisPaintInformation info(p, pressure, first.tiltX, first.tiltY, first.rotation, 0.0, 1.0, first.time, 0.0);
+            KisPaintInformation info(p, pressure, first.tiltX, first.tiltY, first.rotation, 0.0, 1.0,
+                                     reverie::StrokeTimeContract::toKritaMs(first.time), 0.0);
             if (m_randomSource) info.setRandomSource(m_randomSource);
             if (m_perStrokeRandomSource) info.setPerStrokeRandomSource(m_perStrokeRandomSource);
             m_strokeOp->paintAt(info, m_strokeDistance);
@@ -1109,11 +1132,12 @@ bool ReverieCore::flushStrokeBatch()
             const StrokeSample &a = m_strokeSamples[i - 1];
             const StrokeSample &b = m_strokeSamples[i];
             const qreal dist = QLineF(a.imgPos, b.imgPos).length();
-            const qreal dt = qMax<qreal>(1e-4, b.time - a.time);
-            // Speed in px/ms to align with Krita's sensor scale
-            const qreal speed = dist / (dt * 1000.0);
-            KisPaintInformation infoA(a.imgPos, a.pressure, a.tiltX, a.tiltY, a.rotation, 0.0, 1.0, a.time, speed);
-            KisPaintInformation infoB(b.imgPos, b.pressure, b.tiltX, b.tiltY, b.rotation, 0.0, 1.0, b.time, speed);
+            // Speed in px/ms to align with Krita's sensor scale. Sample times stay in seconds.
+            const qreal speed = reverie::StrokeTimeContract::speedPxPerMs(dist, a.time, b.time);
+            KisPaintInformation infoA(a.imgPos, a.pressure, a.tiltX, a.tiltY, a.rotation, 0.0, 1.0,
+                                      reverie::StrokeTimeContract::toKritaMs(a.time), speed);
+            KisPaintInformation infoB(b.imgPos, b.pressure, b.tiltX, b.tiltY, b.rotation, 0.0, 1.0,
+                                      reverie::StrokeTimeContract::toKritaMs(b.time), speed);
             if (m_randomSource) {
                 infoA.setRandomSource(m_randomSource);
                 infoB.setRandomSource(m_randomSource);
@@ -1143,16 +1167,14 @@ bool ReverieCore::flushStrokeBatch()
         // ---- Real Krita brush engine ----
         KisPainter &painter = *m_strokePainter;
         const QString opId = (m_toolMode == ToolSmudge) ? QStringLiteral("colorsmudge") : m_brushPreset->paintOp().id();
-        const bool isPathEngine = (opId == QLatin1String("experimentbrush") ||
-                                   opId == QLatin1String("curvebrush") ||
-                                   opId == QLatin1String("sketchbrush") ||
-                                   opId == QLatin1String("gridbrush") ||
-                                   opId == QLatin1String("particlebrush"));
-        const bool engineBypassesSelection =
-            opId != QLatin1String("paintbrush") && opId != QLatin1String("duplicate") && opId != QLatin1String("colorsmudge");
+        const QByteArray idBytes = opId.toLatin1();
+        const std::string_view id = opView(idBytes);
+        const bool isPathEngine = reverie::PaintOpTraits::isPathEngine(id);
+        const bool engineBypassesSelection = !reverie::PaintOpTraits::honorsPainterSelection(id);
         QByteArray selClipBefore;
         QRect selClipBox;
-        if (m_selection && engineBypassesSelection) {
+        const bool needsSelSnapshot = m_selection && !tempTargetClips && engineBypassesSelection;
+        if (needsSelSnapshot) {
             if (isPathEngine) {
                 const int margin = int(m_brushSize) + 8;
                 selClipBox = m_accumulatedStrokeBounds.toAlignedRect().adjusted(-margin, -margin, margin, margin);
@@ -1178,11 +1200,12 @@ bool ReverieCore::flushStrokeBatch()
             const StrokeSample &a = m_strokeSamples[i - 1];
             const StrokeSample &b = m_strokeSamples[i];
             const qreal dist = QLineF(a.imgPos, b.imgPos).length();
-            const qreal dt = qMax<qreal>(1e-4, b.time - a.time);
-            // Speed in px/ms to align with Krita's sensor scale
-            const qreal speed = dist / (dt * 1000.0);
-            KisPaintInformation infoA(a.imgPos, a.pressure, a.tiltX, a.tiltY, a.rotation, 0.0, 1.0, a.time, speed);
-            KisPaintInformation infoB(b.imgPos, b.pressure, b.tiltX, b.tiltY, b.rotation, 0.0, 1.0, b.time, speed);
+            // Speed in px/ms to align with Krita's sensor scale. Sample times stay in seconds.
+            const qreal speed = reverie::StrokeTimeContract::speedPxPerMs(dist, a.time, b.time);
+            KisPaintInformation infoA(a.imgPos, a.pressure, a.tiltX, a.tiltY, a.rotation, 0.0, 1.0,
+                                      reverie::StrokeTimeContract::toKritaMs(a.time), speed);
+            KisPaintInformation infoB(b.imgPos, b.pressure, b.tiltX, b.tiltY, b.rotation, 0.0, 1.0,
+                                      reverie::StrokeTimeContract::toKritaMs(b.time), speed);
             if (m_randomSource) {
                 infoA.setRandomSource(m_randomSource);
                 infoB.setRandomSource(m_randomSource);
@@ -1203,7 +1226,7 @@ bool ReverieCore::flushStrokeBatch()
         }
         // Restore the pixels outside the selection for engines that bypass
         // KisPainter's selection clipping
-        if (m_selection && engineBypassesSelection && !selClipBox.isEmpty() &&
+        if (needsSelSnapshot && !selClipBox.isEmpty() &&
             !selClipBefore.isEmpty()) {
             const int w = selClipBox.width();
             const int h = selClipBox.height();
@@ -1229,7 +1252,7 @@ bool ReverieCore::flushStrokeBatch()
             target->writeBytes(reinterpret_cast<const quint8 *>(after.constData()),
                                selClipBox.x(), selClipBox.y(), w, h);
         }
-        if (isPathEngine) {
+        if (isPathEngine && !reverie::PaintOpTraits::reportsExactDirty(id)) {
             const int margin = int(m_brushSize) + 8;
             const QRect pathDirty = m_accumulatedStrokeBounds.toAlignedRect().adjusted(-margin, -margin, margin, margin);
             addBatchDirty(pathDirty);
@@ -1354,9 +1377,99 @@ bool ReverieCore::flushStrokeBatch()
             }
         }
         if (m_dirtyCb) m_dirtyCb(m_dirtyCtx);
+        // gpu-render-v2: 本批落墨则记录 (原实现为 if (strokeHadInk) m_lastFlushHadInk = true,
+        // 本实现的 strokeHadInk 等价于 strokeDirty 非空), 供 Stash 事务恢复判断
+        m_lastFlushHadInk = true;
         bumpLayerThumbGen(m_layers[m_currentLayer].node);
     }
     return !strokeDirty.isNull();
+}
+
+int ReverieCore::strokeLayerMargin() const
+{
+    if (m_currentLayer >= 0 && m_currentLayer < m_layers.size()
+        && m_layers[m_currentLayer].isStrokeLayer) {
+        return m_layers[m_currentLayer].strokeSize + 4;
+    }
+    return 0;
+}
+
+namespace {
+
+void paintTailSegment(KisPaintOp *op, KisDistanceInformation *distance,
+                      const QPointF &pos, qreal pressure, qreal tiltX, qreal tiltY,
+                      qreal rotation, qreal timeSeconds,
+                      KisRandomSourceSP randomSource,
+                      KisPerStrokeRandomSourceSP perStrokeRandom)
+{
+    if (!op || !distance) {
+        return;
+    }
+    const qreal t0 = reverie::StrokeTimeContract::toKritaMs(timeSeconds);
+    const qreal t1 = t0 + 41.0;
+    KisPaintInformation a(pos, pressure, tiltX, tiltY, rotation, 0.0, 1.0, t0, 0.0);
+    KisPaintInformation b(pos, pressure, tiltX, tiltY, rotation, 0.0, 1.0, t1, 0.0);
+    if (randomSource) {
+        a.setRandomSource(randomSource);
+        b.setRandomSource(randomSource);
+    }
+    if (perStrokeRandom) {
+        a.setPerStrokeRandomSource(perStrokeRandom);
+        b.setPerStrokeRandomSource(perStrokeRandom);
+    }
+    op->paintLine(a, b, distance);
+}
+
+} // namespace
+
+void ReverieCore::flushExperimentTail()
+{
+    // Smudge swaps the live op to colorsmudge while the preset id stays experimentbrush.
+    // A tail flush would paint an extra +41ms segment the main path never drew.
+    if (m_toolMode == ToolSmudge || !m_strokeOp || !m_strokePainter || m_maskedStrokePainter
+        || m_strokeUsedQuickPath || m_strokeSamples.isEmpty()
+        || !m_brushPreset || !m_brushPreset->settings()) {
+        return;
+    }
+    const QByteArray idBytes = m_brushPreset->paintOp().id().toLatin1();
+    const bool displacementEnabled = m_brushPreset->settings()->getBool(
+        QStringLiteral("Experiment/displacementEnabled"), false);
+    const bool speedEnabled = m_brushPreset->settings()->getBool(
+        QStringLiteral("Experiment/speedEnabled"), false);
+    if (!reverie::StrokeTailFlush::allowed(
+            m_fillTailFlushEnabled,
+            std::string_view(idBytes.constData(), size_t(idBytes.size())),
+            displacementEnabled, speedEnabled)) {
+        return;
+    }
+    const StrokeSample &last = m_strokeSamples.last();
+    paintTailSegment(m_strokeOp.data(), m_strokeDistance, last.imgPos, last.pressure,
+                     last.tiltX, last.tiltY, last.rotation, last.time,
+                     m_randomSource, m_perStrokeRandomSource);
+    while (true) {
+        QVector<KisRunnableStrokeJobData *> jobs;
+        auto result = m_strokeOp->doAsynchronousUpdate(jobs);
+        runStrokeJobsBatch(jobs, m_brushSize);
+        if (jobs.isEmpty() || !result.second) {
+            break;
+        }
+    }
+    for (MirrorBranchCursor &cursor : m_mirrorCursor) {
+        if (!cursor.op || !cursor.hasLast) {
+            continue;
+        }
+        paintTailSegment(cursor.op.data(), &cursor.distance, cursor.lastPos, cursor.lastPressure,
+                         cursor.lastTiltX, cursor.lastTiltY, cursor.lastRotation, cursor.lastTime,
+                         m_randomSource, m_perStrokeRandomSource);
+        while (true) {
+            QVector<KisRunnableStrokeJobData *> jobs;
+            auto result = cursor.op->doAsynchronousUpdate(jobs);
+            runStrokeJobsBatch(jobs, m_brushSize);
+            if (jobs.isEmpty() || !result.second) {
+                break;
+            }
+        }
+    }
 }
 
 void ReverieCore::endStrokeBatch()
@@ -1686,7 +1799,9 @@ bool ReverieCore::strokeAirbrushTick()
     const qreal tiltX = lastSample ? lastSample->tiltX : m_lastTiltX;
     const qreal tiltY = lastSample ? lastSample->tiltY : m_lastTiltY;
     const qreal rotation = lastSample ? lastSample->rotation : m_lastRotation;
-    KisPaintInformation info(p, pressure, tiltX, tiltY, rotation, 0.0, 1.0, m_strokeTimer.elapsed() / 1000.0, 0.0);
+    // elapsed() is already milliseconds. Do not pass it through toKritaMs.
+    const qreal tickMs = qMax<qreal>(0.0, qreal(m_strokeTimer.elapsed()));
+    KisPaintInformation info(p, pressure, tiltX, tiltY, rotation, 0.0, 1.0, tickMs, 0.0);
     if (m_randomSource) info.setRandomSource(m_randomSource);
     if (m_perStrokeRandomSource) info.setPerStrokeRandomSource(m_perStrokeRandomSource);
 
@@ -1742,6 +1857,149 @@ bool ReverieCore::strokeAirbrushTick()
         markStrokeDirty(tickDirty);
     }
     return true;
+}
+
+void ReverieCore::setStrokeReplayClock(double pixelsPerSecond)
+{
+    m_replayPixelsPerSecond = (pixelsPerSecond > 0.0) ? pixelsPerSecond : 0.0;
+}
+
+void ReverieCore::setStrokeReplaySeed(int seed)
+{
+    m_replaySeed = seed;
+}
+
+int ReverieCore::currentStrokeSeed()
+{
+    return (m_replaySeed >= 0) ? m_replaySeed : int(quint32(m_strokeCounter) * 1664525u + 1013904223u);
+}
+
+bool ReverieCore::stashOpenStrokePatch()
+{
+    if (!m_document) return false;
+    KisPaintLayer *pl = (m_currentLayer >= 0 && m_currentLayer < m_layers.size())
+        ? dynamic_cast<KisPaintLayer *>(m_layers[m_currentLayer].node)
+        : nullptr;
+    if (!pl) return false;
+
+    KisPaintDeviceSP srcDevice = nullptr;
+    bool isIndirect = false;
+    if (pl->hasTemporaryTarget() && pl->temporaryTarget() && !pl->temporaryTarget()->exactBounds().isEmpty()) {
+        srcDevice = pl->temporaryTarget();
+        isIndirect = true;
+    } else {
+        srcDevice = pl->paintDevice();
+        isIndirect = false;
+    }
+    if (!srcDevice) return false;
+
+    const int margin = qMax(int(m_brushSize * 2.0), 32) + 16;
+    QRect strokeRect = m_accumulatedStrokeBounds.toAlignedRect().adjusted(-margin, -margin, margin, margin);
+    QRect docRect(0, 0, m_document->width(), m_document->height());
+    QRect cropRect = strokeRect.intersected(docRect);
+
+    if (cropRect.isEmpty() || cropRect.width() <= 0 || cropRect.height() <= 0) {
+        return false;
+    }
+
+    qint64 pixelCount = qint64(cropRect.width()) * qint64(cropRect.height());
+    if (pixelCount > 16000000) {
+        return false;
+    }
+
+    const int pixelSize = srcDevice->pixelSize();
+    qint64 byteCount = pixelCount * pixelSize;
+    m_strokeStash.bounds = cropRect;
+    m_strokeStash.bytes.resize(byteCount);
+    srcDevice->readBytes(reinterpret_cast<quint8 *>(m_strokeStash.bytes.data()), cropRect);
+    m_strokeStash.valid = true;
+    m_strokeStash.wasIndirect = isIndirect;
+    return true;
+}
+
+bool ReverieCore::restoreStashedStrokePatchOpen()
+{
+    if (!m_strokeStash.valid || m_strokeStash.bounds.isEmpty() || m_strokeStash.bytes.isEmpty()) {
+        return false;
+    }
+    KisPaintLayer *pl = (m_currentLayer >= 0 && m_currentLayer < m_layers.size())
+        ? dynamic_cast<KisPaintLayer *>(m_layers[m_currentLayer].node)
+        : nullptr;
+    if (!pl || !pl->paintDevice()) return false;
+
+    if (m_openRestoreTransaction) {
+        m_openRestoreTransaction->revert();
+        delete m_openRestoreTransaction;
+        m_openRestoreTransaction = nullptr;
+    }
+
+    m_openRestoreTransaction = new KisTransaction(pl->paintDevice());
+    if (m_strokeStash.wasIndirect) {
+        KisPaintDeviceSP tempDevice = new KisPaintDevice(pl->colorSpace());
+        tempDevice->writeBytes(reinterpret_cast<const quint8 *>(m_strokeStash.bytes.constData()), m_strokeStash.bounds);
+        KisPainter gc(pl->paintDevice());
+        pl->setupTemporaryPainter(&gc);
+        if (gc.compositeOpId().isEmpty()) {
+            gc.setCompositeOpId(QStringLiteral("normal"));
+        }
+        if (m_toolMode == ToolEraser) {
+            gc.setCompositeOpId(QStringLiteral("erase"));
+        }
+        if (m_selection) {
+            gc.setSelection(m_selection);
+        }
+        gc.setChannelFlags(pl->alphaLocked() ? pl->channelLockFlags() : QBitArray());
+        gc.bitBlt(m_strokeStash.bounds.topLeft(), tempDevice, m_strokeStash.bounds);
+        gc.end();
+    } else {
+        pl->paintDevice()->writeBytes(reinterpret_cast<const quint8 *>(m_strokeStash.bytes.constData()), m_strokeStash.bounds);
+    }
+    pl->paintDevice()->setDirty(m_strokeStash.bounds);
+    markRegionDirty(m_strokeStash.bounds);
+    recompositeProjection();
+    markDirty();
+    return true;
+}
+
+void ReverieCore::commitStashedStrokePatch()
+{
+    if (m_openRestoreTransaction) {
+        if (m_undoCaptureEnabled && m_document && m_document->undoAdapter()) {
+            m_openRestoreTransaction->commit(m_document->undoAdapter());
+        } else {
+            KUndo2Command *cmd = m_openRestoreTransaction->endAndTake();
+            delete cmd;
+        }
+        delete m_openRestoreTransaction;
+        m_openRestoreTransaction = nullptr;
+    }
+    m_strokeStash.valid = false;
+    m_strokeStash.wasIndirect = false;
+    m_strokeStash.bytes.clear();
+    m_strokeStash.bounds = QRect();
+}
+
+void ReverieCore::revertOpenRestorePatch()
+{
+    if (m_openRestoreTransaction) {
+        m_openRestoreTransaction->revert();
+        delete m_openRestoreTransaction;
+        m_openRestoreTransaction = nullptr;
+        if (KisPaintDeviceSP target = currentPaintDevice()) {
+            target->setDirty();
+        }
+        recompositeProjection();
+        markDirty();
+    }
+}
+
+void ReverieCore::discardStashedStrokePatch()
+{
+    revertOpenRestorePatch();
+    m_strokeStash.valid = false;
+    m_strokeStash.wasIndirect = false;
+    m_strokeStash.bytes.clear();
+    m_strokeStash.bounds = QRect();
 }
 
 // Fast ARM NEON SIMD blitter to convert Krita's native BGRA/ARGB32 projection bytes

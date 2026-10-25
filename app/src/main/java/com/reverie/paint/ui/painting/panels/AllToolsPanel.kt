@@ -46,6 +46,11 @@ import com.reverie.paint.ui.theme.Morandi
 import com.reverie.paint.ui.theme.systemHoverIcon
 import com.reverie.paint.ui.painting.ToolbarCustomizeDialog
 
+private sealed interface AllToolItem {
+    data class Regular(val tool: Tool) : AllToolItem
+    object GuideLines : AllToolItem
+}
+
 @Composable
 fun AllToolsPanel(
     vm: PaintViewModel,
@@ -61,7 +66,7 @@ fun AllToolsPanel(
 
     val groupedTools = remember(vm.pinnedTools) {
         val customSet = vm.pinnedTools.toSet()
-        val moreTools = Tool.entries.filter { it !in customSet }
+        val moreTools = Tool.entries.filter { it !in customSet && it != Tool.SYMMETRY && it != Tool.PERSPECTIVE }
         ToolGroup.entries.map { g -> g to moreTools.filter { it.group == g } }
             .filter { it.second.isNotEmpty() }
     }
@@ -183,75 +188,131 @@ fun AllToolsPanel(
                             )
                         }
 
-                        val chunked = tools.chunked(2)
+                        val itemsList = buildList {
+                            for (t in tools) {
+                                add(AllToolItem.Regular(t))
+                                if (t == Tool.DRAWING_GUIDE) {
+                                    add(AllToolItem.GuideLines)
+                                }
+                            }
+                        }
+                        val chunked = itemsList.chunked(2)
                         items(chunked) { rowTools ->
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                rowTools.forEach { t ->
-                                    val isSelected = when (t) {
-                                        Tool.REFERENCE -> vm.referenceWindowOpen
-                                        Tool.SHORTCUT -> vm.quickActionWindowOpen
-                                        Tool.QUICK_BRUSH -> vm.quickBrushWindowOpen
-                                        Tool.QUICK_COLOR -> vm.quickColorWindowOpen
-                                        Tool.QUICK_OKLCH -> vm.quickOklchWindowOpen
-                                        Tool.QUICK_LAYER -> vm.quickLayerWindowOpen
-                                        Tool.SYMMETRY -> vm.drawingGuide.mode == GuideMode.SYMMETRY
-                                        Tool.PERSPECTIVE -> vm.drawingGuide.mode == GuideMode.PERSPECTIVE
-                                        else -> tool == t
-                                    }
-                                    val cellSource = remember { MutableInteractionSource() }
-                                    val toolLabel = stringResource(t.labelRes())
-
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .height(34.dp)
-                                            .pressScale(cellSource, pressedScale = 0.95f)
-                                            .clip(RoundedCornerShape(7.dp))
-                                            .background(
-                                                if (isSelected) Morandi.accent.copy(alpha = 0.22f)
-                                                else Morandi.panelHi.copy(alpha = 0.35f)
-                                            )
-                                            .then(
-                                                if (isSelected) Modifier.border(0.8.dp, Morandi.accent.copy(alpha = 0.55f), RoundedCornerShape(7.dp))
-                                                else Modifier
-                                            )
-                                            .liquidHighlight(cellSource, Color.White, radius = 24.dp)
-                                            .clickable(interactionSource = cellSource, indication = null) {
-                                                if (t == tool && t.group == ToolGroup.BRUSH) {
-                                                    vm.updateBrushPanelCategory(
-                                                        when (t) {
-                                                            Tool.ERASER -> "橡皮擦"
-                                                            Tool.SMUDGE -> "混合"
-                                                            else -> vm.brushPanelSelectedCategory
-                                                        }
-                                                    )
-                                                    onOpenBrush()
-                                                    onClose()
-                                                } else {
-                                                    onTool(t)
-                                                    onClose()
-                                                }
+                                rowTools.forEach { item ->
+                                    when (item) {
+                                        is AllToolItem.Regular -> {
+                                            val t = item.tool
+                                            val isSelected = when (t) {
+                                                Tool.REFERENCE -> vm.referenceWindowOpen
+                                                Tool.SHORTCUT -> vm.quickActionWindowOpen
+                                                Tool.QUICK_BRUSH -> vm.quickBrushWindowOpen
+                                                Tool.QUICK_COLOR -> vm.quickColorWindowOpen
+                                                Tool.QUICK_OKLCH -> vm.quickOklchWindowOpen
+                                                Tool.QUICK_LAYER -> vm.quickLayerWindowOpen
+                                                Tool.DRAWING_GUIDE -> vm.drawingGuide.mode != GuideMode.OFF
+                                                Tool.SYMMETRY -> vm.drawingGuide.mode == GuideMode.SYMMETRY
+                                                Tool.PERSPECTIVE -> vm.drawingGuide.mode == GuideMode.PERSPECTIVE
+                                                else -> tool == t
                                             }
-                                            .padding(horizontal = 7.dp)
-                                    ) {
-                                        Icon(
-                                            painter = painterResource(toolIcon(t)),
-                                            contentDescription = toolLabel,
-                                            tint = if (isSelected) Morandi.accentHi else Morandi.icon,
-                                            modifier = Modifier.size(17.dp)
-                                        )
-                                        Spacer(Modifier.width(6.dp))
-                                        Text(
-                                            text = toolLabel,
-                                            color = if (isSelected) Morandi.accentHi else Morandi.text,
-                                            fontSize = 11.5.sp,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
+                                            val cellSource = remember { MutableInteractionSource() }
+                                            val toolLabel = t.annotatedName(vm)
+
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .height(34.dp)
+                                                    .pressScale(cellSource, pressedScale = 0.95f)
+                                                    .clip(RoundedCornerShape(7.dp))
+                                                    .background(
+                                                        if (isSelected) Morandi.accent.copy(alpha = 0.22f)
+                                                        else Morandi.panelHi.copy(alpha = 0.35f)
+                                                    )
+                                                    .then(
+                                                        if (isSelected) Modifier.border(0.8.dp, Morandi.accent.copy(alpha = 0.55f), RoundedCornerShape(7.dp))
+                                                        else Modifier
+                                                    )
+                                                    .liquidHighlight(cellSource, Color.White, radius = 24.dp)
+                                                    .clickable(interactionSource = cellSource, indication = null) {
+                                                        if (t == tool && t.group == ToolGroup.BRUSH) {
+                                                            vm.updateBrushPanelCategory(
+                                                                when (t) {
+                                                                    Tool.ERASER -> "橡皮擦"
+                                                                    Tool.SMUDGE -> "混合"
+                                                                    else -> vm.brushPanelSelectedCategory
+                                                                }
+                                                            )
+                                                            onOpenBrush()
+                                                            onClose()
+                                                        } else {
+                                                            onTool(t)
+                                                            onClose()
+                                                        }
+                                                    }
+                                                    .padding(horizontal = 7.dp)
+                                            ) {
+                                                Icon(
+                                                    painter = painterResource(toolIcon(t)),
+                                                    contentDescription = toolLabel,
+                                                    tint = if (isSelected) Morandi.accentHi else Morandi.icon,
+                                                    modifier = Modifier.size(17.dp)
+                                                )
+                                                Spacer(Modifier.width(6.dp))
+                                                Text(
+                                                    text = toolLabel,
+                                                    color = if (isSelected) Morandi.accentHi else Morandi.text,
+                                                    fontSize = 11.5.sp,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                )
+                                            }
+                                        }
+                                        AllToolItem.GuideLines -> {
+                                            val isSelected = vm.drawingGuideLinesVisible
+                                            val cellSource = remember { MutableInteractionSource() }
+                                            val toolLabel = stringResource(R.string.tool_guide_lines)
+
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .height(34.dp)
+                                                    .pressScale(cellSource, pressedScale = 0.95f)
+                                                    .clip(RoundedCornerShape(7.dp))
+                                                    .background(
+                                                        if (isSelected) Morandi.accent.copy(alpha = 0.22f)
+                                                        else Morandi.panelHi.copy(alpha = 0.35f)
+                                                    )
+                                                    .then(
+                                                        if (isSelected) Modifier.border(0.8.dp, Morandi.accent.copy(alpha = 0.55f), RoundedCornerShape(7.dp))
+                                                        else Modifier
+                                                    )
+                                                    .liquidHighlight(cellSource, Color.White, radius = 24.dp)
+                                                    .clickable(interactionSource = cellSource, indication = null) {
+                                                        vm.toggleDrawingGuideLines()
+                                                    }
+                                                    .padding(horizontal = 7.dp)
+                                            ) {
+                                                Icon(
+                                                    painter = painterResource(R.drawable.ic_guide_lines),
+                                                    contentDescription = toolLabel,
+                                                    tint = if (isSelected) Morandi.accentHi else Morandi.icon,
+                                                    modifier = Modifier.size(17.dp)
+                                                )
+                                                Spacer(Modifier.width(6.dp))
+                                                Text(
+                                                    text = toolLabel,
+                                                    color = if (isSelected) Morandi.accentHi else Morandi.text,
+                                                    fontSize = 11.5.sp,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                )
+                                            }
+                                        }
                                     }
                                 }
                                 if (rowTools.size == 1) {

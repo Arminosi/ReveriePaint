@@ -462,6 +462,60 @@ Java_com_reverie_paint_core_ReverieCoreBridge_touchStrokeCancel(JNIEnv *, jobjec
     core()->touchStrokeCancel();
 }
 
+JNIEXPORT void JNICALL
+Java_com_reverie_paint_core_ReverieCoreBridge_setStrokeReplayClock(JNIEnv *, jobject, jdouble pixelsPerSecond)
+{
+    core()->setStrokeReplayClock(pixelsPerSecond);
+}
+
+JNIEXPORT void JNICALL
+Java_com_reverie_paint_core_ReverieCoreBridge_setStrokeReplaySeed(JNIEnv *, jobject, jint seed)
+{
+    core()->setStrokeReplaySeed(seed);
+}
+
+JNIEXPORT jint JNICALL
+Java_com_reverie_paint_core_ReverieCoreBridge_currentStrokeSeed(JNIEnv *, jobject)
+{
+    return core()->currentStrokeSeed();
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_reverie_paint_core_ReverieCoreBridge_lastFlushHadInk(JNIEnv *, jobject)
+{
+    return core()->lastFlushHadInk() ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_reverie_paint_core_ReverieCoreBridge_stashOpenStrokePatch(JNIEnv *, jobject)
+{
+    return core()->stashOpenStrokePatch() ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_reverie_paint_core_ReverieCoreBridge_restoreStashedStrokePatchOpen(JNIEnv *, jobject)
+{
+    return core()->restoreStashedStrokePatchOpen() ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL
+Java_com_reverie_paint_core_ReverieCoreBridge_commitStashedStrokePatch(JNIEnv *, jobject)
+{
+    core()->commitStashedStrokePatch();
+}
+
+JNIEXPORT void JNICALL
+Java_com_reverie_paint_core_ReverieCoreBridge_revertOpenRestorePatch(JNIEnv *, jobject)
+{
+    core()->revertOpenRestorePatch();
+}
+
+JNIEXPORT void JNICALL
+Java_com_reverie_paint_core_ReverieCoreBridge_discardStashedStrokePatch(JNIEnv *, jobject)
+{
+    core()->discardStashedStrokePatch();
+}
+
 JNIEXPORT jboolean JNICALL
 Java_com_reverie_paint_core_ReverieCoreBridge_scratchpadStart(JNIEnv *, jobject, jint w, jint h)
 {

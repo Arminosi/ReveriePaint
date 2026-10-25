@@ -56,6 +56,7 @@ fun Tool.labelRes(): Int = when (this) {
     Tool.QUICK_COLOR -> R.string.tool_quick_color
     Tool.QUICK_OKLCH -> R.string.tool_quick_oklch
     Tool.QUICK_LAYER -> R.string.tool_quick_layer
+    Tool.DRAWING_GUIDE -> R.string.guide_title
     Tool.SYMMETRY -> R.string.tool_symmetry
     Tool.PERSPECTIVE -> R.string.tool_perspective
     Tool.SHADING_ASSIST -> R.string.shading_assist_title
@@ -82,3 +83,19 @@ val ToolGroup.displayName: String
 val Tool.displayName: String
     @Composable
     get() = stringResource(labelRes())
+
+@Composable
+fun Tool.annotatedName(vm: com.reverie.paint.core.PaintViewModel): String {
+    if (this == Tool.DRAWING_GUIDE) {
+        val modeName = when (vm.drawingGuide.mode) {
+            com.reverie.paint.model.GuideMode.OFF -> stringResource(R.string.guide_mode_off_short)
+            com.reverie.paint.model.GuideMode.GRID_2D -> stringResource(R.string.guide_mode_2d_grid)
+            com.reverie.paint.model.GuideMode.ISOMETRIC -> stringResource(R.string.guide_mode_isometric)
+            com.reverie.paint.model.GuideMode.PERSPECTIVE -> stringResource(R.string.guide_mode_perspective)
+            com.reverie.paint.model.GuideMode.SYMMETRY -> stringResource(R.string.guide_mode_symmetry)
+        }
+        return "${stringResource(R.string.guide_title)} ($modeName)"
+    }
+    return displayName
+}
+

@@ -306,10 +306,10 @@ fun ToolButtonsContent(
                     Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxHeight()) {
                         ReIconButton(
                             toolIcon(t),
-                            t.displayName,
+                            t.annotatedName(vm),
                             modifier = Modifier.fillMaxHeight().width(32.dp),
                             onTap = {
-                                if (t == Tool.REFERENCE || t == Tool.SHORTCUT || t == Tool.QUICK_BRUSH || t == Tool.QUICK_COLOR || t == Tool.QUICK_OKLCH || t == Tool.QUICK_LAYER || t == Tool.SYMMETRY || t == Tool.PERSPECTIVE) {
+                                if (t == Tool.REFERENCE || t == Tool.SHORTCUT || t == Tool.QUICK_BRUSH || t == Tool.QUICK_COLOR || t == Tool.QUICK_OKLCH || t == Tool.QUICK_LAYER || t == Tool.DRAWING_GUIDE || t == Tool.SYMMETRY || t == Tool.PERSPECTIVE) {
                                     tooltipTool = null
                                     onTool(t)
                                 } else if (t in listOf(Tool.BRUSH, Tool.ERASER, Tool.SMUDGE) && tool == t) {
@@ -329,11 +329,26 @@ fun ToolButtonsContent(
                                 Tool.QUICK_COLOR -> vm.quickColorWindowOpen
                                 Tool.QUICK_OKLCH -> vm.quickOklchWindowOpen
                                 Tool.QUICK_LAYER -> vm.quickLayerWindowOpen
+                                Tool.DRAWING_GUIDE -> vm.drawingGuide.mode != GuideMode.OFF
                                 Tool.SYMMETRY -> vm.drawingGuide.mode == GuideMode.SYMMETRY
                                 Tool.PERSPECTIVE -> vm.drawingGuide.mode == GuideMode.PERSPECTIVE
                                 else -> tool == t
                             },
                         )
+                    }
+                    if (t == Tool.DRAWING_GUIDE) {
+                        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxHeight()) {
+                            ReIconButton(
+                                icon = R.drawable.ic_guide_lines,
+                                desc = stringResource(R.string.tool_guide_lines),
+                                modifier = Modifier.fillMaxHeight().width(32.dp),
+                                selected = vm.drawingGuideLinesVisible,
+                                onTap = {
+                                    tooltipTool = null
+                                    vm.toggleDrawingGuideLines()
+                                },
+                            )
+                        }
                     }
                 }
 
@@ -372,10 +387,10 @@ fun ToolButtonsContent(
                     Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxWidth()) {
                         ReIconButton(
                             toolIcon(t),
-                            t.displayName,
+                            t.annotatedName(vm),
                             modifier = Modifier.fillMaxWidth().height(32.dp),
                             onTap = {
-                                if (t == Tool.REFERENCE || t == Tool.SHORTCUT || t == Tool.QUICK_BRUSH || t == Tool.QUICK_COLOR || t == Tool.QUICK_OKLCH || t == Tool.QUICK_LAYER || t == Tool.SYMMETRY || t == Tool.PERSPECTIVE) {
+                                if (t == Tool.REFERENCE || t == Tool.SHORTCUT || t == Tool.QUICK_BRUSH || t == Tool.QUICK_COLOR || t == Tool.QUICK_OKLCH || t == Tool.QUICK_LAYER || t == Tool.DRAWING_GUIDE || t == Tool.SYMMETRY || t == Tool.PERSPECTIVE) {
                                     tooltipTool = null
                                     onTool(t)
                                 } else if (t in listOf(Tool.BRUSH, Tool.ERASER, Tool.SMUDGE) && tool == t) {
@@ -395,6 +410,7 @@ fun ToolButtonsContent(
                                 Tool.QUICK_COLOR -> vm.quickColorWindowOpen
                                 Tool.QUICK_OKLCH -> vm.quickOklchWindowOpen
                                 Tool.QUICK_LAYER -> vm.quickLayerWindowOpen
+                                Tool.DRAWING_GUIDE -> vm.drawingGuide.mode != GuideMode.OFF
                                 Tool.SYMMETRY -> vm.drawingGuide.mode == GuideMode.SYMMETRY
                                 Tool.PERSPECTIVE -> vm.drawingGuide.mode == GuideMode.PERSPECTIVE
                                 else -> tool == t
@@ -430,13 +446,27 @@ fun ToolButtonsContent(
                                         .padding(horizontal = 10.dp, vertical = 5.dp)
                                 ) {
                                     Text(
-                                        t.displayName,
+                                        t.annotatedName(vm),
                                         color = Morandi.text,
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Medium
                                     )
                                 }
                             }
+                        }
+                    }
+                    if (t == Tool.DRAWING_GUIDE) {
+                        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxWidth()) {
+                            ReIconButton(
+                                icon = R.drawable.ic_guide_lines,
+                                desc = stringResource(R.string.tool_guide_lines),
+                                modifier = Modifier.fillMaxWidth().height(32.dp),
+                                selected = vm.drawingGuideLinesVisible,
+                                onTap = {
+                                    tooltipTool = null
+                                    vm.toggleDrawingGuideLines()
+                                },
+                            )
                         }
                     }
                 }
@@ -850,6 +880,7 @@ fun toolIcon(tool: Tool): Int =
         Tool.QUICK_COLOR -> R.drawable.ic_palette
         Tool.QUICK_OKLCH -> R.drawable.ic_oklch
         Tool.QUICK_LAYER -> R.drawable.ic_layers
+        Tool.DRAWING_GUIDE -> R.drawable.ic_grid
         Tool.SYMMETRY -> R.drawable.ic_flip_horizontal
         Tool.PERSPECTIVE -> R.drawable.ic_grid
         Tool.SHADING_ASSIST -> R.drawable.ic_moon

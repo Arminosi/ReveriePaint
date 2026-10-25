@@ -83,8 +83,8 @@ fun ToolbarCustomizeDialog(
     vm: PaintViewModel,
     onClose: () -> Unit
 ) {
-    val initialPinned = remember(vm.pinnedTools) { vm.pinnedTools.distinct() }
-    val initialRest = remember(initialPinned) { Tool.entries.filter { it !in initialPinned } }
+    val initialPinned = remember(vm.pinnedTools) { vm.pinnedTools.distinct().filter { it != Tool.SYMMETRY && it != Tool.PERSPECTIVE } }
+    val initialRest = remember(initialPinned) { Tool.entries.filter { it !in initialPinned && it != Tool.SYMMETRY && it != Tool.PERSPECTIVE } }
     val orderedTools = remember { mutableStateListOf(*(initialPinned + initialRest).distinctBy { it.id }.toTypedArray()) }
     var enabledTools by remember { mutableStateOf(initialPinned.toSet()) }
 
@@ -226,8 +226,8 @@ fun ToolbarCustomizeDialog(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         QuickActionPill(stringResource(R.string.tool_customize_reset_default)) {
-                            val defaultList = PaintViewModel.DEFAULT_PINNED_TOOLS
-                            val rest = Tool.entries.filter { it !in defaultList }
+                            val defaultList = PaintViewModel.DEFAULT_PINNED_TOOLS.filter { it != Tool.SYMMETRY && it != Tool.PERSPECTIVE }
+                            val rest = Tool.entries.filter { it !in defaultList && it != Tool.SYMMETRY && it != Tool.PERSPECTIVE }
                             orderedTools.clear()
                             orderedTools.addAll(defaultList + rest)
                             enabledTools = defaultList.toSet()

@@ -56,6 +56,7 @@ ReverieCore::~ReverieCore()
         QObject::disconnect(m_sigImageUpdatedConn);
     }
     endStrokeBatch();
+    discardStashedStrokePatch();
     m_layers.clear();
     m_canvasClipboard = nullptr;
     waitForDocumentTasks();

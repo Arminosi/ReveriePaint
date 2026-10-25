@@ -1860,6 +1860,16 @@ class PaintViewModel : ViewModel() {
     var quickShapeCommitting by mutableStateOf(false)
     var activeQuickShape by mutableStateOf<QuickShapeResult?>(null)
     var isQuickShapeEditing by mutableStateOf(false)
+    internal data class QuickShapePreviewSnapshot(
+        val generation: Int,
+        val shape: com.reverie.paint.model.QuickShapeResult,
+    )
+    internal val quickShapePreviewSnapshot = java.util.concurrent.atomic.AtomicReference<QuickShapePreviewSnapshot?>()
+    internal val quickShapePreviewRequest = java.util.concurrent.atomic.AtomicReference<com.reverie.paint.model.QuickShapeResult?>()
+    internal val quickShapePreviewGeneration = java.util.concurrent.atomic.AtomicInteger(0)
+    internal val quickShapePreviewQueued = java.util.concurrent.atomic.AtomicBoolean(false)
+    internal val quickShapeSession = com.reverie.paint.model.QuickShapeSession()
+    internal var quickShapeReplaySeed: Int = -1
 
     // Vendor Stylus Adaptations (OPPO Pencil / OnePlus Stylo & Samsung S Pen)
     var oppoPencilModelMode by mutableStateOf("AUTO") // "AUTO", "STANDARD", "PRO"
@@ -2167,6 +2177,15 @@ class PaintViewModel : ViewModel() {
 
     // 绘图辅助与参考线状态 (Symmetry, Perspective, Grid)
     var drawingGuide by mutableStateOf(DrawingGuideConfig())
+    var drawingGuideLinesVisible by mutableStateOf(true)
+        internal set
+
+    fun toggleDrawingGuideLines() {
+        drawingGuideLinesVisible = !drawingGuideLinesVisible
+        try {
+            prefs().edit().putBoolean("drawing_guide_lines_visible", drawingGuideLinesVisible).apply()
+        } catch (_: Exception) {}
+    }
 
     // 画布内富文本排版状态 (In-place Typography)
     var typographyConfig by mutableStateOf(TypographyConfig())
@@ -3879,6 +3898,7 @@ class PaintViewModel : ViewModel() {
             toolbarSqueezedWarningDismissed = prefs.getBoolean("toolbarSqueezedWarningDismissed", false)
             panelPinningEnabled = prefs.getBoolean("panelPinningEnabled", false)
             layerHeaderInheritAlpha = prefs.getBoolean("layerHeaderInheritAlpha", false)
+            drawingGuideLinesVisible = prefs.getBoolean("drawing_guide_lines_visible", true)
             leftHandMode = prefs.getBoolean("leftHandMode", false)
             val isTabletDevice = DeviceUtils.isTablet(appContext)
             val floatingSavedEnabled = prefs.getBoolean("floatingUi_enabled", isTabletDevice)

@@ -33,7 +33,7 @@ import numpy as np
 from mathutils import Vector
 
 BODY_DEG = 86.0
-HEAD_DEG = -105.0
+HEAD_DEG = -113.0
 D0, D1 = 0.36, 0.82
 SMOOTH_ITERS = 60
 RATIO = 0.022
@@ -133,10 +133,27 @@ def orient(V, I):
         ang = th * w[i]
         ca, sa = math.cos(ang), math.sin(ang)
         V1[i] = pivot + np.array([p[0] * ca + p[2] * sa, p[1], -p[0] * sa + p[2] * ca])
-    core = w > 0.9
-    cx = V1[core][:, 0].mean()
-    V1[idx, 0] -= cx * w[idx]
-    print("[orient] head %.0f deg, lateral %.3f, band %.2f-%.2f" % (HEAD_DEG, -cx, D0, D1))
+    # 横向对中: 以"头部对称面"为准 (质心会受耳朵/胡须影响, 不准); 迭代两次收敛
+    from mathutils.kdtree import KDTree
+    for _it in range(2):
+        hc1 = V1[w > 0.9].mean(0)
+        cloud = V1[(np.linalg.norm(V1 - hc1, axis=1) < 0.30) & (V1[:, 1] > ymin + 0.60 * H)]
+        if len(cloud) > 4000:
+            cloud = cloud[np.random.default_rng(0).choice(len(cloud), 4000, replace=False)]
+        kd = KDTree(len(cloud))
+        for i, p in enumerate(cloud):
+            kd.insert(Vector(p), i)
+        kd.balance()
+
+        def mirror_err(cx):
+            mir = cloud * np.array([-1, 1, 1])
+            mir[:, 0] += 2 * cx
+            return float(np.mean([kd.find(Vector(p))[2] for p in mir]))
+
+        best_c = min(((mirror_err(c), c) for c in np.arange(hc1[0] - 0.25, hc1[0] + 0.25, 0.01)))
+        V1[idx, 0] -= best_c[1] * w[idx]
+        print("  [center] head symmetry plane x=%+.3f (err %.4f) -> shift %+.3f" % (best_c[1], best_c[0], -best_c[1]))
+    print("[orient] head %.0f deg, band %.2f-%.2f" % (HEAD_DEG, D0, D1))
 
     edges = np.vstack([I[:, [0, 1]], I[:, [1, 2]], I[:, [2, 0]]])
     edges = np.vstack([edges, edges[:, ::-1]])

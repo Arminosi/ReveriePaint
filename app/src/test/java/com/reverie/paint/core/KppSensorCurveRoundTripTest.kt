@@ -119,4 +119,33 @@ class KppSensorCurveRoundTripTest {
         assertEquals(0.5f, points[1].x, 1e-4f)
         assertEquals(0.7f, points[1].y, 1e-4f)
     }
+
+    @Test
+    fun `动态选项包含enabled与strength属性时落盘并原样保留`() {
+        val customXml =
+            """<!DOCTYPE params><params id="pressure" enabled="false" strength="0.6"><curve>0.000,0.000;1.000,1.000;</curve></params>"""
+        val flowXml =
+            """<!DOCTYPE params><params id="pressure" enabled="true" strength="0.85"><curve>0.000,0.000;0.500,0.700;1.000,1.000;</curve></params>"""
+        val out = KppHelper.updateKppBytes(
+            buildKpp(sourceXml),
+            "probe",
+            BrushParams(size = 20.0, opacity = 1.0, flow = 1.0, spacing = 0.1, isCustomized = true)
+                .copy(dynamicOptions = mapOf("Size" to customXml, "Flow" to flowXml)),
+        )
+        val presetXml = KppHelper.readPresetXml(out)!!
+        val parsed = KppHelper.parseKppAttributes(presetXml)
+
+        val sizeBody = parsed.sensorXml["Size"]
+        assertTrue("SizeSensor 应被保存", sizeBody != null)
+        assertTrue("SizeSensor 应包含 enabled=false", sizeBody!!.contains("""enabled="false""""))
+        assertTrue("SizeSensor 应包含 strength=0.6", sizeBody.contains("""strength="0.6""""))
+
+        val flowBody = parsed.sensorXml["Flow"]
+        assertTrue("FlowSensor 应被保存", flowBody != null)
+        assertTrue("FlowSensor 应包含 enabled=true", flowBody!!.contains("""enabled="true""""))
+        assertTrue("FlowSensor 应包含 strength=0.85", flowBody.contains("""strength="0.85""""))
+
+        assertTrue("SizeUseCurve 应为 false", presetXml.contains("SizeUseCurve") && presetXml.contains("false"))
+        assertTrue("FlowUseCurve 应为 true", presetXml.contains("FlowUseCurve") && presetXml.contains("true"))
+    }
 }

@@ -14,7 +14,64 @@
 #include <KisFreehandStrokeInfo.h>
 #include <KoCompositeOpRegistry.h>
 #include <filter/kis_filter_registry.h>
+#include <QtConcurrent/QtConcurrentMap>
 #include <cmath>
+
+namespace {
+
+// doAsynchronousUpdate 把大笔刷的单个 dab 切成多条 KisStrokeJobData::CONCURRENT
+// 水平条带。原先逐条串行跑, 大直径湿笔 (colorsmudge) 单批耗时随直径平方增长。
+// 这里按 sequentiality() 严格保序: 连续 CONCURRENT 条带 >= 3 条时在
+// reverieBackgroundPool() 上 fork-join; 直径 >= 96px 时单条已够重, 2 条也并行。
+// SEQUENTIAL / UNIQUELY_CONCURRENT / BARRIER 仍在当前线程按序执行。
+// 同时用于 ParallelStrokeJobsExecutor (paintop 经 runnable 接口投递的任务): 那里拿到的是
+// const 列表, 所以并行段拷一份切片给 blockingMap。跑完即释放, 与 Krita 的假执行器语义一致。
+template <typename Job>
+void runStrokeJobsBatch(const QVector<Job *> &jobs, qreal brushSize = 0.0)
+{
+    const int n = jobs.size();
+    int i = 0;
+    while (i < n) {
+        Job *first = jobs[i];
+        if (!first) {
+            ++i;
+            continue;
+        }
+        if (first->sequentiality() != KisStrokeJobData::CONCURRENT) {
+            first->run();
+            delete first;
+            ++i;
+            continue;
+        }
+        int j = i + 1;
+        while (j < n && jobs[j] && jobs[j]->sequentiality() == KisStrokeJobData::CONCURRENT) {
+            ++j;
+        }
+        const int count = j - i;
+        if (count >= 3 || (count == 2 && brushSize >= 96.0)) {
+            const QVector<Job *> slice = jobs.mid(i, count);
+            QtConcurrent::blockingMap(reverieBackgroundPool(), slice, [](Job *job) { job->run(); });
+        } else {
+            for (int k = i; k < j; ++k) {
+                jobs[k]->run();
+            }
+        }
+        for (int k = i; k < j; ++k) {
+            delete jobs[k];
+        }
+        i = j;
+    }
+}
+
+} // namespace
+
+// paintop 经 KisRunnableStrokeJobsInterface 投递的任务 (例如大笔刷 dab 的条带) 原先由
+// KisFakeRunnableStrokeJobsExecutor 逐个串行跑; 这里改走同一套保序的 fork-join。
+// 直径未知, 按默认门槛 (>= 3 条才并行)。
+void ReverieCore::ParallelStrokeJobsExecutor::addRunnableJobs(const QVector<KisRunnableStrokeJobDataBase *> &list)
+{
+    runStrokeJobsBatch(list);
+}
 
 void ReverieCore::touchStrokeStart(qreal x, qreal y, qreal pressure, qreal tiltX, qreal tiltY, qreal rotation, qreal timeSeconds)
 {
@@ -38,6 +95,16 @@ void ReverieCore::touchStrokeStart(qreal x, qreal y, qreal pressure, qreal tiltX
         m_strokeTxn = nullptr;
         m_strokeTxnActive = false;
     }
+
+    m_strokeUsedQuickPath = false;
+    m_strokeQuickPlanned = false;
+    // 分支 painter/paintop 已在上面的 endStrokeBatch() 里释放, 这里只复位游标与标志
+    for (int i = 0; i < 8; ++i) {
+        m_mirrorCursor[i].hasLast = false;
+        m_mirrorCursor[i].distance = KisDistanceInformation();
+    }
+    m_mirrorLiveStarted = false;
+    m_mirrorDropLogged = false;
 
     // Defer the undo snapshot to the first real flush: reading every layer
     // here costs a full-document read per touch-down, which is felt as lag
@@ -120,6 +187,284 @@ bool ReverieCore::touchStrokeKickIdle()
     return false;
 }
 
+void ReverieCore::setMirrorStrokeSeq(int strokeSeq)
+{
+    m_mirrorStrokeSeq = strokeSeq > 0 ? strokeSeq : 0;
+}
+
+KisPaintOpSP ReverieCore::createStrokePaintOp(KisPainter *painter, KisImageSP image, int layerIndex, bool *fellBack)
+{
+    if (fellBack) {
+        *fellBack = false;
+    }
+    if (!painter || !m_brushPreset || layerIndex < 0 || layerIndex >= m_layers.size()) {
+        return KisPaintOpSP();
+    }
+    const bool isColorSmudge = (m_toolMode == ToolSmudge) ||
+        (m_brushPreset->paintOp().id() == QStringLiteral("colorsmudge"));
+    KisPaintOpFactory *smudgeFactory =
+        isColorSmudge ? KisPaintOpRegistry::instance()->value(QStringLiteral("colorsmudge")) : nullptr;
+    painter->setRunnableStrokeJobsInterface(&m_fakeExecutor);
+    KisPaintOpSP op;
+    if (smudgeFactory) {
+        op = smudgeFactory->createOp(m_brushPreset->settings(), painter,
+                                     KisNodeSP(m_layers[layerIndex].node), image);
+    }
+    if (!op) {
+        op = KisPaintOpRegistry::instance()->paintOp(
+            m_brushPreset, painter, KisNodeSP(m_layers[layerIndex].node), image);
+    }
+    if (!op) {
+        // 最后一档兜底: 引擎未注册时退化成 KisBrushOp (调用方负责打警告日志)
+        if (fellBack) {
+            *fellBack = true;
+        }
+        op = new KisBrushOp(m_brushPreset->settings(), painter,
+                            KisNodeSP(m_layers[layerIndex].node), image);
+    }
+    return op;
+}
+
+void ReverieCore::releaseMirrorBranchOps()
+{
+    // paintop 持有 painter 的裸指针: 先放 paintop 再删 painter。
+    for (int i = 0; i < 8; ++i) {
+        m_mirrorCursor[i].op = nullptr;
+        delete m_mirrorCursor[i].painter;
+        m_mirrorCursor[i].painter = nullptr;
+    }
+}
+
+reverie::MirrorBatchAction ReverieCore::paintMirrorPolyline(const float *samples, int count, int stride,
+                                                            int branchIndex, int strokeSeq)
+{
+    // 返回值语义 (s12 / s12-F1, 见 MirrorLivePolicy.h::mirrorBatchResultCode):
+    //  Paint / CreateAndPaint / DropAccepted = 接受 (本笔镜像实时出墨, Kotlin 不重放);
+    //  Reject = 拒绝 (本笔镜像还没有任何实时墨, Kotlin 改走抬笔重放);
+    //  Stale  = 这批点不属于引擎当前打开的笔画 (笔画号不符或笔触已关), 丢弃, 不改 Kotlin 状态。
+    // 一旦 m_mirrorLiveStarted, 绝不返回 Reject。
+    const bool strokeOpen = m_drawing && m_strokeBatchOpen && m_document;
+    const bool seqMatches = strokeSeq > 0 && strokeSeq == m_mirrorStrokeSeq;
+    if (!strokeOpen || !seqMatches) {
+        return reverie::MirrorBatchAction::Stale;
+    }
+    if (!samples || count < 1 || stride < 7 || branchIndex < 0 || branchIndex >= 8) {
+        return m_mirrorLiveStarted ? reverie::MirrorBatchAction::DropAccepted : reverie::MirrorBatchAction::Reject;
+    }
+    MirrorBranchCursor &cursor = m_mirrorCursor[branchIndex];
+
+    // 主笔这一笔还没完成 strokeSetup (第一次 flush 之前就收到镜像点): 先让主笔把已入队
+    // 的样本画掉, 顺带建好 m_strokePainter / m_strokeOp。没移动过时与 touchStrokeKickIdle
+    // 同语义 (置 m_idleKickPainted, 抬笔不会再补一个起笔点)。
+    if (strokeOpen && !cursor.op && !m_strokePainter && !m_maskedStrokePainter &&
+        !m_strokeSamples.isEmpty()) {
+        if (!touchStrokeKickIdle()) {
+            flushStrokeBatch();
+        }
+    }
+
+    const QString opId = (m_toolMode == ToolSmudge)
+        ? QStringLiteral("colorsmudge")
+        : (m_brushPreset ? m_brushPreset->paintOp().id() : QString());
+    const bool engineBypassesSelection =
+        opId != QLatin1String("paintbrush") && opId != QLatin1String("duplicate") && opId != QLatin1String("colorsmudge");
+    // 只有真 Krita 引擎链路能给分支各建一个 paintop。快速路径 (QuickRoundBrush 的跨批状态只有
+    // 一份)、双笔刷蒙版 (KisMaskedFreehandStrokePainter)、以及"引擎绕过选区且有选区"
+    // (主笔靠整批读回/写回裁剪) 都退回抬笔重放。
+    // s12-G1: 主笔本笔已判定会走快速路径 (m_strokeQuickPlanned, 每次 flush 在点按分支之前算)
+    // 时也不建分支 op: 否则起笔 kick 先用真引擎建了镜像 op, 主笔随后改走快速路径, 两侧笔迹不一致。
+    const bool eligible = strokeOpen && m_brushPreset && m_strokeOp && m_strokePainter &&
+        !m_maskedStrokePainter && !m_strokeQuickPlanned && !m_strokeUsedQuickPath &&
+        !(m_selection && engineBypassesSelection);
+
+    const reverie::MirrorBatchAction action =
+        reverie::decideMirrorBatch(strokeOpen, seqMatches, bool(cursor.op), eligible, m_mirrorLiveStarted);
+    if (action == reverie::MirrorBatchAction::Reject || action == reverie::MirrorBatchAction::Stale) {
+        if (action == reverie::MirrorBatchAction::Reject && !m_mirrorDropLogged) {
+            m_mirrorDropLogged = true;
+            RPC_LOG("RPC mirrorReject branch=%d quickPlanned=%d quick=%d masked=%d -> replay fallback",
+                    branchIndex, m_strokeQuickPlanned ? 1 : 0, m_strokeUsedQuickPath ? 1 : 0,
+                    m_maskedStrokePainter ? 1 : 0);
+        }
+        return action;
+    }
+    if (action == reverie::MirrorBatchAction::DropAccepted) {
+        if (!m_mirrorDropLogged) {
+            m_mirrorDropLogged = true;
+            RPC_LOG("RPC mirrorDrop branch=%d open=%d quick=%d masked=%d (live already started, batch dropped)",
+                    branchIndex, strokeOpen ? 1 : 0, m_strokeUsedQuickPath ? 1 : 0, m_maskedStrokePainter ? 1 : 0);
+        }
+        return action;
+    }
+
+    KisImageSP image = m_document;
+    if (action == reverie::MirrorBatchAction::CreateAndPaint) {
+        // 与 Krita KisPainterBasedStrokeStrategy::initPainters 同构: 每个 stroke info 一个
+        // KisPainter, begin 到同一个目标设备, 各自 setPaintOpPreset 出独立的 paintop。
+        // 画笔状态必须在建 op **之前**复制全: KisColorSmudgeOp 构造时就把
+        // painter->paintColor() / gradient() 固化进 m_paintColor / m_gradient, 其涂抹策略的
+        // initializePainting 也读 painter 的选区 / 合成; 建完再同步颜色对它无效。
+        KisPainter *bp = new KisPainter(m_strokePainter->device());
+        bp->setFillStyle(m_strokePainter->fillStyle());
+        bp->setStrokeStyle(m_strokePainter->strokeStyle());
+        bp->setChannelFlags(m_strokePainter->channelFlags());
+        bp->setCompositeOpId(m_strokePainter->compositeOpId());
+        bp->setOpacityF(m_strokePainter->opacityF());
+        bp->setPaintColor(m_strokePainter->paintColor());
+        bp->setBackgroundColor(m_strokePainter->backgroundColor());
+        bp->setSelection(m_strokePainter->selection());
+        if (m_strokePainter->gradient()) {
+            bp->setGradient(m_strokePainter->gradient());
+        }
+        const int layerIndex = qBound(0, m_currentLayer, m_layers.size() - 1);
+        bool fellBack = false;
+        KisPaintOpSP op = createStrokePaintOp(bp, image, layerIndex, &fellBack);
+        if (!op) {
+            delete bp;
+            if (m_mirrorLiveStarted) {
+                return reverie::MirrorBatchAction::DropAccepted;
+            }
+            RPC_LOG("RPC mirrorOp create failed branch=%d -> replay fallback", branchIndex);
+            return reverie::MirrorBatchAction::Reject;
+        }
+        cursor.painter = bp;
+        cursor.op = op;
+        m_mirrorLiveStarted = true;
+        const KisPaintOp &createdOp = *cursor.op; // 先取引用: typeid(*智能指针) 会触发 -Wpotentially-evaluated-expression
+        RPC_LOG("RPC mirrorOp created: branch=%d seq=%d presetId=%s actualOp=%s fellBack=%d",
+                branchIndex, strokeSeq, opId.isEmpty() ? "none" : opId.toUtf8().constData(),
+                typeid(createdOp).name(), fellBack ? 1 : 0);
+    }
+
+    KisPainter *bp = cursor.painter;
+    // 每批从主笔 painter 同步 (主笔 flushStrokeBatch 每批也会重设这些, 中途改混合模式/
+    // 颜色/选区时两边一致)。
+    if (m_strokePainter) {
+        bp->setCompositeOpId(m_strokePainter->compositeOpId());
+        bp->setOpacityF(m_strokePainter->opacityF());
+        bp->setPaintColor(m_strokePainter->paintColor());
+        bp->setBackgroundColor(m_strokePainter->backgroundColor());
+        bp->setSelection(m_strokePainter->selection());
+    }
+
+    QRectF batchBounds;
+    if (cursor.hasLast) {
+        batchBounds = QRectF(cursor.lastPos, QSizeF(1.0, 1.0));
+    }
+    bool paintedAny = false;
+    for (int i = 0; i < count; ++i) {
+        const float *s = samples + i * stride;
+        const qreal x = s[0];
+        const qreal y = s[1];
+        if (std::isnan(x) || std::isnan(y) || !std::isfinite(x) || !std::isfinite(y)) {
+            continue;
+        }
+        const qreal pressure = qBound<qreal>(0.0, qreal(s[2]), 1.0);
+        const qreal tiltX = std::isfinite(s[3]) ? qreal(s[3]) : 0.0;
+        const qreal tiltY = std::isfinite(s[4]) ? qreal(s[4]) : 0.0;
+        const qreal rotation = std::isfinite(s[5]) ? qreal(s[5]) : 0.0;
+        const qreal time = qMax<qreal>(0.0, qreal(s[6]));
+        const QPointF pos(x, y);
+        // 整笔包围盒兜底 (touchStrokeEnd 少报时整框补标) 也要认得镜像点; 不写入 m_strokeSamples。
+        m_accumulatedStrokeBounds = m_accumulatedStrokeBounds.united(QRectF(x, y, 1.0, 1.0));
+        const QRectF pr(x, y, 1.0, 1.0);
+        batchBounds = batchBounds.isNull() ? pr : batchBounds.united(pr);
+
+        if (!cursor.hasLast) {
+            // 与主笔 m_strokeDistance = KisDistanceInformation(start, 0.0) 同构 (Krita
+            // createPainters 也用起笔点初始化每个分支的 dragDistance)
+            cursor.distance = KisDistanceInformation(pos, 0.0);
+            KisPaintInformation info(pos, pressure, tiltX, tiltY, rotation, 0.0, 1.0, time, 0.0);
+            if (m_randomSource) info.setRandomSource(m_randomSource);
+            if (m_perStrokeRandomSource) info.setPerStrokeRandomSource(m_perStrokeRandomSource);
+            cursor.op->paintAt(info, &cursor.distance);
+        } else {
+            const qreal dist = QLineF(cursor.lastPos, pos).length();
+            const qreal dt = qMax<qreal>(1e-4, time - cursor.lastTime);
+            const qreal speed = dist / (dt * 1000.0);
+            KisPaintInformation infoLast(cursor.lastPos, cursor.lastPressure, cursor.lastTiltX,
+                                         cursor.lastTiltY, cursor.lastRotation, 0.0, 1.0,
+                                         cursor.lastTime, speed);
+            KisPaintInformation infoCur(pos, pressure, tiltX, tiltY, rotation, 0.0, 1.0, time, speed);
+            if (m_randomSource) {
+                infoLast.setRandomSource(m_randomSource);
+                infoCur.setRandomSource(m_randomSource);
+            }
+            if (m_perStrokeRandomSource) {
+                infoLast.setPerStrokeRandomSource(m_perStrokeRandomSource);
+                infoCur.setPerStrokeRandomSource(m_perStrokeRandomSource);
+            }
+            cursor.op->paintLine(infoLast, infoCur, &cursor.distance);
+        }
+
+        cursor.hasLast = true;
+        cursor.lastPos = pos;
+        cursor.lastPressure = pressure;
+        cursor.lastTiltX = tiltX;
+        cursor.lastTiltY = tiltY;
+        cursor.lastRotation = rotation;
+        cursor.lastTime = time;
+        paintedAny = true;
+    }
+    if (!paintedAny) {
+        return action;
+    }
+
+    while (true) {
+        QVector<KisRunnableStrokeJobData *> jobs;
+        auto result = cursor.op->doAsynchronousUpdate(jobs);
+        for (auto *j : jobs) {
+            j->run();
+            delete j;
+        }
+        if (jobs.isEmpty() || !result.second) {
+            break;
+        }
+    }
+
+    // 脏区: 与主笔 flushStrokeBatch 同规则 —— 逐块标脏 + 描边层外扩 + 少报/路径引擎兜底。
+    const bool strokeLayer =
+        (m_currentLayer >= 0 && m_currentLayer < m_layers.size() && m_layers[m_currentLayer].isStrokeLayer);
+    const int strokeExtra = strokeLayer ? (m_layers[m_currentLayer].strokeSize + 4) : 0;
+    bool hadInk = false;
+    auto markBranchDirty = [&](const QRect &r) {
+        if (r.isEmpty()) {
+            return;
+        }
+        const QRect d = strokeExtra > 0 ? r.adjusted(-strokeExtra, -strokeExtra, strokeExtra, strokeExtra) : r;
+        if (d.isEmpty()) {
+            return;
+        }
+        markRegionDirty(d);
+        hadInk = true;
+    };
+    const QVector<QRect> exactDirty = bp->takeDirtyRegion();
+    QRect exactUnion;
+    for (const QRect &r : exactDirty) {
+        markBranchDirty(r);
+        if (!r.isEmpty()) {
+            exactUnion = exactUnion.isNull() ? r : exactUnion.united(r);
+        }
+    }
+    const bool isPathEngine = (opId == QLatin1String("experimentbrush") ||
+                               opId == QLatin1String("curvebrush") ||
+                               opId == QLatin1String("sketchbrush") ||
+                               opId == QLatin1String("gridbrush") ||
+                               opId == QLatin1String("particlebrush"));
+    const int w = int(m_brushSize) + 2;
+    if (isPathEngine) {
+        const int margin = int(m_brushSize) + 8;
+        markBranchDirty(batchBounds.toAlignedRect().adjusted(-margin, -margin, margin, margin));
+    } else if (reverie::mirrorDirtyNeedsFallback(exactUnion.isEmpty(), exactUnion.width(),
+                                                 exactUnion.height(), m_brushSize)) {
+        markBranchDirty(batchBounds.toAlignedRect().adjusted(-w, -w, w, w));
+    }
+    if (hadInk && m_currentLayer >= 0 && m_currentLayer < m_layers.size()) {
+        bumpLayerThumbGen(m_layers[m_currentLayer].node);
+    }
+    return action;
+}
+
 void ReverieCore::touchStrokeEnd()
 {
     if (m_strokeBatchOpen) {
@@ -175,11 +520,12 @@ void ReverieCore::touchStrokeEnd()
             gc.setChannelFlags(pl->alphaLocked() ? pl->channelLockFlags() : QBitArray());
             gc.bitBlt(ext.topLeft(), tempTarget, ext);
             gc.end();
-            markRegionDirty(ext);
+            markStrokeDirty(ext);
             bumpLayerThumbGen(pl);
         }
         pl->setTemporaryTarget(nullptr);
         pl->setTemporaryChannelFlags(QBitArray());
+        m_indirectTempCompositeOp.clear();
         tempTarget->clear();
     }
 
@@ -227,21 +573,37 @@ void ReverieCore::touchStrokeEnd()
             -margin, -margin, margin, margin).intersected(
             QRect(0, 0, m_document->width(), m_document->height()));
         if (!totalDirty.isEmpty()) {
-            markRegionDirty(totalDirty);
+            markStrokeDirty(totalDirty);
         }
     }
 
+    // s12-F1/H3: 笔画已收尾, 迟到的镜像批一律按过期丢弃
+    m_mirrorStrokeSeq = 0;
+    m_mirrorLiveStarted = false;
     m_drawing = false;
 }
 
 void ReverieCore::touchStrokeCancel()
 {
+    // s12-F1/H3: 取消后迟到的镜像批一律按过期丢弃
+    m_mirrorStrokeSeq = 0;
+    m_mirrorLiveStarted = false;
     if (!m_document || !m_strokeBatchOpen) {
         m_drawing = false;
         m_strokeSamples.clear();
         m_strokeBatchOpen = false;
+        releaseMirrorBranchOps(); // s12-C4: 早退路径也释放分支 painter/paintop
         return;
     }
+
+    // 顺序: 先在图像仍被撤销宏锁住时回滚图层设备 (此时没有 worker), 再关宏, 最后才
+    // setDirty + recompositeProjection。关宏 (endMacro -> unlock) 会立刻派发锁住期间
+    // 入队的任务; 若先关宏, worker 会和 revert 并发读写同一图层设备。setDirty 也放到
+    // 回滚之后, 免得未锁时 (非对称笔画) 合并任务和 revert 并发。
+    // 锁住时 recompositeProjection 不会等 (会卡死), 所以它必须在关宏之后 (见 RenderLockGate.h)。
+    // revert 不产生撤销命令, 关宏前后宏里的内容不变。
+    QRect cancelTempDirty;
+    bool cancelReverted = false;
 
     KisPaintLayer *pl = (m_currentLayer >= 0 && m_currentLayer < m_layers.size())
         ? dynamic_cast<KisPaintLayer *>(m_layers[m_currentLayer].node)
@@ -250,12 +612,10 @@ void ReverieCore::touchStrokeCancel()
         KisPaintDeviceSP tempTarget = pl->temporaryTarget();
         const QRect ext = tempTarget->exactBounds();
         pl->setTemporaryTarget(nullptr);
+        m_indirectTempCompositeOp.clear();
         tempTarget->clear();
         if (!ext.isEmpty()) {
-            pl->setDirty(ext);
-            markRegionDirty(ext);
-            recompositeProjection();
-            markDirty();
+            cancelTempDirty = ext;
         }
     }
 
@@ -269,21 +629,30 @@ void ReverieCore::touchStrokeCancel()
         delete m_strokeTxn;
         m_strokeTxn = nullptr;
         m_strokeTxnActive = false;
-        // The reverted tiles changed the device back: recomposite so the
-        // ghost stroke disappears from the projection/display too
-        if (KisImageSP image = m_document) {
-            if (KisPaintDeviceSP target = currentPaintDevice()) {
-                target->setDirty();
-            }
-            recompositeProjection();
-            markDirty();
-        }
+        cancelReverted = true;
     }
+
     while (m_macroDepth > 0) {
         if (m_document && m_document->undoAdapter()) {
             m_document->undoAdapter()->endMacro();
         }
         m_macroDepth--;
+    }
+
+    if (!cancelTempDirty.isEmpty() && pl) {
+        pl->setDirty(cancelTempDirty);
+        markRegionDirty(cancelTempDirty);
+    }
+    // The reverted tiles changed the device back: recomposite so the
+    // ghost stroke disappears from the projection/display too
+    if (cancelReverted && m_document) {
+        if (KisPaintDeviceSP target = currentPaintDevice()) {
+            target->setDirty();
+        }
+    }
+    if (!cancelTempDirty.isEmpty() || cancelReverted) {
+        recompositeProjection();
+        markDirty();
     }
     m_snapshotPending = false;
     m_strokeSamples.clear();
@@ -344,14 +713,14 @@ bool ReverieCore::appendStrokeSample(const QPointF &imgPos, qreal pressure, qrea
         s.time = m_strokeTimer.elapsed() / 1000.0;
     }
     m_strokeSamples.append(s);
-    // 144Hz / 120Hz 高刷新率自适应刷新门槛：实时绘制 4ms / 32 样本；
+    // 实时绘制由 JNI touchStrokeMoveBatch 在本批样本全部入队后统一 flush 一次; 这里只在单批
+    // 攒到 32 个样本时分段防溢出。原先另有 ">= 4ms 提前 flush": 批内首个样本常常单独被冲掉,
+    // 一帧里 flush 两次 (第二次只有剩下的几个点), 白白多一轮 dab 渲染与脏区上报。
     // 回放模式按记录的仿真相对时间步进 (>8ms 或 32 样本)，确保 1x/32x/seek 分批完全确定性对齐。
-    const qint64 now = QDateTime::currentMSecsSinceEpoch();
     const bool shouldFlush = (timeSeconds >= 0.0)
         ? ((s.time - m_lastSimulatedFlushTime >= 0.008) || m_strokeSamples.size() >= 32)
-        : (now - m_lastFlushMs >= 4 || m_strokeSamples.size() >= 32);
+        : (m_strokeSamples.size() >= 32);
     if (shouldFlush) {
-        m_lastFlushMs = now;
         if (timeSeconds >= 0.0) {
             m_lastSimulatedFlushTime = s.time;
         }
@@ -440,6 +809,7 @@ bool ReverieCore::flushStrokeBatch()
             tempTarget->setParentNode(pl);
             pl->setTemporaryTarget(tempTarget);
             pl->setTemporaryCompositeOp(effectiveOp);
+            m_indirectTempCompositeOp = effectiveOp;
             pl->setTemporaryOpacity(qBound<qreal>(0.0, m_strokeOpacity, 1.0));
             pl->setTemporarySelection(m_selection);
             pl->setTemporaryChannelFlags(pl->alphaLocked() ? pl->channelLockFlags() : QBitArray());
@@ -470,6 +840,16 @@ bool ReverieCore::flushStrokeBatch()
     // Krita-style: reuse one KisPainter for the whole stroke.
     if (m_snapshotPending || (!m_strokePainter && !m_maskedStrokePainter) || m_strokeDevice != (void *)target.data()) {
         endStrokeBatch();
+        // interstrokeData (湿笔颜料厚度高度图) 跨笔保留 (见 endStrokeBatch), 所以换成
+        // 非 colorsmudge 笔刷时在这里丢弃: 留着会让下次切回湿笔时按陈旧高度图累积厚度。
+        // 换图层天然安全: 高度图挂在各自的 KisPaintDevice 上。
+        if (!isSmudgeOp && target->interstrokeData()) {
+            KUndo2Command *cmd = target->createChangeInterstrokeDataCommand(KisInterstrokeDataSP());
+            if (cmd) {
+                cmd->redo();
+                delete cmd;
+            }
+        }
         m_strokeDevice = (void *)target.data();
         // 特效笔刷 (deform/filter/spray/particle...) 无效果的排查埋点: 一条笔画只打一次,
         // 输出引擎 id / 增量绘制判定 / 间接绘制判定 / 绘制目标是否为临时图层。
@@ -500,15 +880,13 @@ bool ReverieCore::flushStrokeBatch()
             KisInterstrokeDataFactory *interstrokeDataFactory = nullptr;
             const bool isColorSmudge = (m_toolMode == ToolSmudge) ||
                 (m_brushPreset && m_brushPreset->paintOp().id() == QStringLiteral("colorsmudge"));
-            if (m_brushPreset) {
-                if (isColorSmudge) {
-                    KisPaintOpFactory *f = KisPaintOpRegistry::instance()->value(QStringLiteral("colorsmudge"));
-                    if (f) {
-                        interstrokeDataFactory = f->createInterstrokeDataFactory(m_brushPreset->settings(), m_brushPreset->resourcesInterface());
-                    }
-                }
-                if (!interstrokeDataFactory) {
-                    interstrokeDataFactory = KisPaintOpRegistry::instance()->createInterstrokeDataFactory(m_brushPreset);
+            // 只有 colorsmudge 实现了 createInterstrokeDataFactory (其余引擎的基类实现
+            // 返回 nullptr), 不再对所有笔刷在落笔首帧查一次注册表、构造临时配置。
+            if (m_brushPreset && isColorSmudge) {
+                KisPaintOpFactory *f = KisPaintOpRegistry::instance()->value(QStringLiteral("colorsmudge"));
+                if (f) {
+                    interstrokeDataFactory =
+                        f->createInterstrokeDataFactory(m_brushPreset->settings(), m_brushPreset->resourcesInterface());
                 }
             }
             KisInterstrokeDataTransactionWrapperFactory *wrapper = nullptr;
@@ -607,36 +985,28 @@ bool ReverieCore::flushStrokeBatch()
                 if (!factory) {
                     factory.reset(KisPaintOpRegistry::instance()->createInterstrokeDataFactory(m_brushPreset));
                 }
-                if (factory) {
+                if (factory && !target->interstrokeData()) {
+                    // 同一图层连续用同一支湿笔时复用既有高度图; 不兼容时的替换由上面
+                    // KisInterstrokeDataTransactionWrapperFactory 的兼容性判定负责。
                     KUndo2Command *cmd = target->createChangeInterstrokeDataCommand(toQShared(factory->create(target)));
                     if (cmd) {
                         cmd->redo();
                         delete cmd;
                     }
                 }
-                m_strokePainter->setRunnableStrokeJobsInterface(&m_fakeExecutor);
-                if (smudgeFactory) {
-                    m_strokeOp = smudgeFactory->createOp(m_brushPreset->settings(), m_strokePainter,
-                                                         KisNodeSP(m_layers[layerIndex].node), image);
-                }
-                if (!m_strokeOp) {
-                    m_strokeOp = KisPaintOpRegistry::instance()->paintOp(
-                        m_brushPreset, m_strokePainter,
-                        KisNodeSP(m_layers[layerIndex].node), image);
-                }
+                // s12: 建 op 的三档顺序 (colorsmudge 工厂 -> 注册表 -> KisBrushOp 兜底) 抽成
+                // createStrokePaintOp, 镜像分支用同一函数各建一个独立实例。
                 // 最后一档兜底: 引擎未注册时静默退化成 KisBrushOp 会让笔迹完全不对
                 // 且毫无提示 (本机 mypaintbrush / dynabrush 就是这种情况)。这里显式
                 // 打一条警告, 让"这支笔为什么画得不对"可以直接从 logcat 看出来。
-                const bool engineFellBack = !m_strokeOp;
-                if (!m_strokeOp) {
-                    m_strokeOp = new KisBrushOp(m_brushPreset->settings(), m_strokePainter,
-                                                KisNodeSP(m_layers[layerIndex].node), image);
-                }
+                bool engineFellBack = false;
+                m_strokeOp = createStrokePaintOp(m_strokePainter, image, layerIndex, &engineFellBack);
                 if (engineFellBack) {
                     RPC_LOG("RPC strokeOp UNSUPPORTED engine=%s -> fell back to KisBrushOp (engine not registered in this build)",
                             m_brushPreset->paintOp().id().toUtf8().constData());
                 }
-                const char *actualOpName = m_strokeOp ? typeid(*m_strokeOp).name() : "null";
+                const KisPaintOp *actualOp = m_strokeOp.data();
+                const char *actualOpName = actualOp ? typeid(*actualOp).name() : "null";
                 RPC_LOG("RPC strokeOp created: presetId=%s, actualOp=%s",
                         m_brushPreset->paintOp().id().toUtf8().constData(),
                         actualOpName);
@@ -680,10 +1050,7 @@ bool ReverieCore::flushStrokeBatch()
             while (true) {
                 QVector<KisRunnableStrokeJobData *> jobs;
                 auto result = m_maskedStrokePainter->doAsynchronousUpdate(jobs);
-                for (auto *j : jobs) {
-                    j->run();
-                    delete j;
-                }
+                runStrokeJobsBatch(jobs, m_brushSize);
                 if (jobs.isEmpty() || !result.second) {
                     break;
                 }
@@ -704,10 +1071,7 @@ bool ReverieCore::flushStrokeBatch()
             while (true) {
                 QVector<KisRunnableStrokeJobData *> jobs;
                 auto result = m_strokeOp->doAsynchronousUpdate(jobs);
-                for (auto *j : jobs) {
-                    j->run();
-                    delete j;
-                }
+                runStrokeJobsBatch(jobs, m_brushSize);
                 if (jobs.isEmpty() || !result.second) {
                     break;
                 }
@@ -724,13 +1088,21 @@ bool ReverieCore::flushStrokeBatch()
         }
         const QRect tr = QRect(int(p.x()) - tw, int(p.y()) - tw, 2 * tw, 2 * tw).intersected(
             QRect(0, 0, m_docWidth, m_docHeight));
-        markRegionDirty(strokeDirty.isNull() ? tr : strokeDirty);
+        markStrokeDirty(strokeDirty.isNull() ? tr : strokeDirty);
         bumpLayerThumbGen(m_layers[m_currentLayer].node);
         m_strokeCarryCount = 1;
         return true;
     }
 
     QRect strokeDirty;
+    // 本批每个 dab 的脏矩形先在本地有界列表里合并 (上限 8 块, 规则见 DirtyRectList.h),
+    // 批末逐块并入引擎脏区, 不再先合并成一个总包围盒。strokeDirty 仍是本批并集,
+    // 只用来判断本批是否落墨。
+    reverie::DirtyRectList batchDirty;
+    const auto addBatchDirty = [&](const QRect &r) {
+        strokeDirty = strokeDirty.isNull() ? r : strokeDirty.united(r);
+        reverie::appendOrCoalesce(batchDirty, reverie::DirtyRect{r.x(), r.y(), r.width(), r.height()});
+    };
     if (m_maskedStrokePainter) {
         const int firstNewSegment = qBound(1, m_strokeCarryCount, qMax(1, m_strokeSamples.size()));
         for (int i = firstNewSegment; i < m_strokeSamples.size(); ++i) {
@@ -755,10 +1127,7 @@ bool ReverieCore::flushStrokeBatch()
         while (true) {
             QVector<KisRunnableStrokeJobData *> jobs;
             auto result = m_maskedStrokePainter->doAsynchronousUpdate(jobs);
-            for (auto *j : jobs) {
-                j->run();
-                delete j;
-            }
+            runStrokeJobsBatch(jobs, m_brushSize);
             if (jobs.isEmpty() || !result.second) {
                 break;
             }
@@ -767,7 +1136,7 @@ bool ReverieCore::flushStrokeBatch()
             const QVector<QRect> exactDirty = m_maskedStrokePainter->takeDirtyRegion();
             for (const QRect &r : exactDirty) {
                 m_maskingBrushRenderer->updateProjection(r);
-                strokeDirty = strokeDirty.isNull() ? r : strokeDirty.united(r);
+                addBatchDirty(r);
             }
         }
     } else if (m_brushPreset && m_strokeOp && m_strokePainter) {
@@ -827,10 +1196,7 @@ bool ReverieCore::flushStrokeBatch()
         while (true) {
             QVector<KisRunnableStrokeJobData *> jobs;
             auto result = m_strokeOp->doAsynchronousUpdate(jobs);
-            for (auto *j : jobs) {
-                j->run();
-                delete j;
-            }
+            runStrokeJobsBatch(jobs, m_brushSize);
             if (jobs.isEmpty() || !result.second) {
                 break;
             }
@@ -866,31 +1232,40 @@ bool ReverieCore::flushStrokeBatch()
         if (isPathEngine) {
             const int margin = int(m_brushSize) + 8;
             const QRect pathDirty = m_accumulatedStrokeBounds.toAlignedRect().adjusted(-margin, -margin, margin, margin);
-            strokeDirty = strokeDirty.isNull() ? pathDirty : strokeDirty.united(pathDirty);
+            addBatchDirty(pathDirty);
         }
         const QVector<QRect> exactDirty = painter.takeDirtyRegion();
+        QRect exactUnion;
         for (const QRect &r : exactDirty) {
-            strokeDirty = strokeDirty.isNull() ? r : strokeDirty.united(r);
+            addBatchDirty(r);
+            if (!r.isEmpty()) {
+                exactUnion = exactUnion.isNull() ? r : exactUnion.united(r);
+            }
         }
-        if (!isPathEngine && (engineBypassesSelection || exactDirty.isEmpty())) {
+        // 部分引擎 (鬃毛/散布类) 的 takeDirtyRegion() 不为空, 却只回报几像素见方的中心块:
+        // 按它标脏, 运笔期间画布上缺墨, 要等抬笔整笔刷新才出现。并集明显小于笔径时
+        // 视为低报, 和"引擎不回报"同样按样本段兜底标脏。
+        const int minExpectedSpan = qMax(4, int(m_brushSize * 0.25));
+        const bool exactUnderReported = !exactDirty.isEmpty() && m_brushSize >= 6.0 &&
+            (exactUnion.width() < minExpectedSpan || exactUnion.height() < minExpectedSpan);
+        if (!isPathEngine && (engineBypassesSelection || exactDirty.isEmpty() || exactUnderReported)) {
+            // 逐段 (相邻两个样本) 各标一块, 不并成整批包围盒: 斜向长笔画的包围盒
+            // 远大于实际落墨, 而离散列表本身会按上限合并相邻块。
             const int startIndex = qMax(0, firstNewSegment - 1);
-            if (startIndex < m_strokeSamples.size()) {
-                qreal minX = m_strokeSamples[startIndex].imgPos.x();
-                qreal maxX = minX;
-                qreal minY = m_strokeSamples[startIndex].imgPos.y();
-                qreal maxY = minY;
+            const int w = int(m_brushSize) + 2;
+            if (startIndex + 1 < m_strokeSamples.size()) {
                 for (int si = startIndex + 1; si < m_strokeSamples.size(); ++si) {
-                    const qreal sx = m_strokeSamples[si].imgPos.x();
-                    const qreal sy = m_strokeSamples[si].imgPos.y();
-                    if (sx < minX) minX = sx;
-                    if (sx > maxX) maxX = sx;
-                    if (sy < minY) minY = sy;
-                    if (sy > maxY) maxY = sy;
+                    const QPointF &pa = m_strokeSamples[si - 1].imgPos;
+                    const QPointF &pb = m_strokeSamples[si].imgPos;
+                    const int minX = int(qMin(pa.x(), pb.x()));
+                    const int maxX = int(qMax(pa.x(), pb.x()));
+                    const int minY = int(qMin(pa.y(), pb.y()));
+                    const int maxY = int(qMax(pa.y(), pb.y()));
+                    addBatchDirty(QRect(minX - w, minY - w, (maxX - minX) + 2 * w, (maxY - minY) + 2 * w));
                 }
-                const int w = int(m_brushSize) + 2;
-                const QRect r(int(minX) - w, int(minY) - w,
-                              int(maxX - minX) + 2 * w, int(maxY - minY) + 2 * w);
-                strokeDirty = strokeDirty.isNull() ? r : strokeDirty.united(r);
+            } else if (startIndex < m_strokeSamples.size()) {
+                const QPointF &p0 = m_strokeSamples[startIndex].imgPos;
+                addBatchDirty(QRect(int(p0.x()) - w, int(p0.y()) - w, 2 * w, 2 * w));
             }
         }
     } else if (m_strokePainter) {
@@ -900,7 +1275,7 @@ bool ReverieCore::flushStrokeBatch()
             painter.paintEllipse(QRectF(p.x() - w / 2.0, p.y() - w / 2.0, w, w));
             const QRect r(int(p.x()) - int(w) - 1, int(p.y()) - int(w) - 1,
                           2 * int(w) + 2, 2 * int(w) + 2);
-            strokeDirty = strokeDirty.isNull() ? r : strokeDirty.united(r);
+            addBatchDirty(r);
         };
         QPointF prev = m_strokeSamples.first().imgPos;
         qreal prevP = m_strokeSamples.first().pressure;
@@ -966,12 +1341,19 @@ bool ReverieCore::flushStrokeBatch()
     // Hot path: propagate the dirty region for fast synchronous compositing without
     // scheduling background jobs in Krita's thread pool during active stroke
     if (!strokeDirty.isNull()) {
-        if (m_currentLayer >= 0 && m_currentLayer < m_layers.size() && m_layers[m_currentLayer].isStrokeLayer) {
-            const int extra = m_layers[m_currentLayer].strokeSize + 4;
-            strokeDirty = strokeDirty.adjusted(-extra, -extra, extra, extra).intersected(
-                QRect(0, 0, m_docWidth, m_docHeight));
+        const bool strokeLayer = m_currentLayer >= 0 && m_currentLayer < m_layers.size() &&
+                                 m_layers[m_currentLayer].isStrokeLayer;
+        const int extra = strokeLayer ? m_layers[m_currentLayer].strokeSize + 4 : 0;
+        const QRect docRect(0, 0, m_docWidth, m_docHeight);
+        for (int i = 0; i < batchDirty.count; ++i) {
+            const reverie::DirtyRect &d = batchDirty.rects[i];
+            const QRect r = QRect(d.x, d.y, d.w, d.h).adjusted(-extra, -extra, extra, extra).intersected(docRect);
+            if (!r.isEmpty()) {
+                m_dirtyRect = m_dirtyRect.isNull() ? r : m_dirtyRect.united(r);
+                addDirtyRegion(r);
+            }
         }
-        markRegionDirty(strokeDirty);
+        if (m_dirtyCb) m_dirtyCb(m_dirtyCtx);
         bumpLayerThumbGen(m_layers[m_currentLayer].node);
     }
     return !strokeDirty.isNull();
@@ -979,15 +1361,10 @@ bool ReverieCore::flushStrokeBatch()
 
 void ReverieCore::endStrokeBatch()
 {
-    if (KisPaintDeviceSP target = currentPaintDevice()) {
-        if (target->interstrokeData()) {
-            KUndo2Command *cmd = target->createChangeInterstrokeDataCommand(KisInterstrokeDataSP());
-            if (cmd) {
-                cmd->redo();
-                delete cmd;
-            }
-        }
-    }
+    // 不再在每笔结束时清空 interstrokeData: 原先同一图层连续画湿笔时每笔都要
+    // "销毁旧高度图 -> 分配新高度图", 既白付重建开销, 又破坏跨笔颜料厚度混合。
+    // 与 Krita 一致, 只在换笔刷引擎 (flushStrokeBatch 的笔画准备段) 或不兼容
+    // (KisInterstrokeDataTransactionWrapperFactory) 时丢弃。
     delete m_maskedStrokePainter;
     m_maskedStrokePainter = nullptr;
     delete m_strokeInfo;
@@ -996,6 +1373,10 @@ void ReverieCore::endStrokeBatch()
     m_maskInfo = nullptr;
     delete m_maskingBrushRenderer;
     m_maskingBrushRenderer = nullptr;
+
+    // s12: 镜像分支 painter/paintop 指向同一目标设备, 必须和主笔 painter 同生共死
+    // (切设备重建、结束、取消、换文档都走这里)。
+    releaseMirrorBranchOps();
 
     delete m_strokePainter;
     m_strokePainter = nullptr;
@@ -1114,6 +1495,10 @@ void ReverieCore::undo()
                                  dynamic_cast<const KisImageLayerRemoveCommand *>(cmd) != nullptr ||
                                  dynamic_cast<const KisImageLayerMoveCommand *>(cmd) != nullptr;
 
+    {
+        std::lock_guard<std::mutex> lock(m_asyncUpdateMutex);
+        m_lastAsyncUpdateRect = QRect();
+    }
     m_undoStore->undo();
     ++m_redoCount;
     m_document->waitForDone();
@@ -1127,7 +1512,7 @@ void ReverieCore::undo()
         m_docHeight = newH;
         m_renderBufW = -1;
         m_renderBufH = -1;
-        m_dirtyRect = QRect(0, 0, m_docWidth, m_docHeight);
+        setDirtyFullFrame();
         m_bitmapInited = false;
         m_lastDirty = QRect();
     }
@@ -1145,7 +1530,36 @@ void ReverieCore::undo()
     if (structureChanged) {
         recompositeProjection();
     }
-    markDirty();
+    for (const auto &e : m_layers) {
+        if (e.node) {
+            auto dev = e.node->paintDevice();
+            if (dev && dev->interstrokeData()) {
+                KUndo2Command *cmd = dev->createChangeInterstrokeDataCommand(KisInterstrokeDataSP());
+                if (cmd) {
+                    cmd->redo();
+                    delete cmd;
+                }
+            }
+        }
+    }
+
+    m_nativeProjectionValid = true;
+    QRect updateRect;
+    {
+        std::lock_guard<std::mutex> lock(m_asyncUpdateMutex);
+        updateRect = m_lastAsyncUpdateRect;
+        m_lastAsyncUpdateRect = QRect();
+    }
+    if (!updateRect.isEmpty() && !structureChanged) {
+        const QRect r = updateRect.intersected(QRect(0, 0, m_docWidth, m_docHeight));
+        invalidateStaticUnderlayRect(r);
+        markRegionDirty(r);
+        for (auto it = m_thumbCache.begin(); it != m_thumbCache.end(); ++it) {
+            ++it->gen;
+        }
+    } else {
+        markDirty();
+    }
     m_snapshotPending = false;
 }
 
@@ -1169,6 +1583,10 @@ void ReverieCore::redo()
         oldVisibilities.append(e.visible);
     }
 
+    {
+        std::lock_guard<std::mutex> lock(m_asyncUpdateMutex);
+        m_lastAsyncUpdateRect = QRect();
+    }
     m_undoStore->redo();
     --m_redoCount;
     m_document->waitForDone();
@@ -1182,7 +1600,7 @@ void ReverieCore::redo()
         m_docHeight = newH;
         m_renderBufW = -1;
         m_renderBufH = -1;
-        m_dirtyRect = QRect(0, 0, m_docWidth, m_docHeight);
+        setDirtyFullFrame();
         m_bitmapInited = false;
         m_lastDirty = QRect();
     }
@@ -1200,7 +1618,36 @@ void ReverieCore::redo()
     if (structureChanged) {
         recompositeProjection();
     }
-    markDirty();
+    for (const auto &e : m_layers) {
+        if (e.node) {
+            auto dev = e.node->paintDevice();
+            if (dev && dev->interstrokeData()) {
+                KUndo2Command *cmd = dev->createChangeInterstrokeDataCommand(KisInterstrokeDataSP());
+                if (cmd) {
+                    cmd->redo();
+                    delete cmd;
+                }
+            }
+        }
+    }
+
+    m_nativeProjectionValid = true;
+    QRect updateRect;
+    {
+        std::lock_guard<std::mutex> lock(m_asyncUpdateMutex);
+        updateRect = m_lastAsyncUpdateRect;
+        m_lastAsyncUpdateRect = QRect();
+    }
+    if (!updateRect.isEmpty() && !structureChanged) {
+        const QRect r = updateRect.intersected(QRect(0, 0, m_docWidth, m_docHeight));
+        invalidateStaticUnderlayRect(r);
+        markRegionDirty(r);
+        for (auto it = m_thumbCache.begin(); it != m_thumbCache.end(); ++it) {
+            ++it->gen;
+        }
+    } else {
+        markDirty();
+    }
     m_snapshotPending = false;
 }
 
@@ -1249,10 +1696,7 @@ bool ReverieCore::strokeAirbrushTick()
         while (true) {
             QVector<KisRunnableStrokeJobData *> jobs;
             auto result = m_maskedStrokePainter->doAsynchronousUpdate(jobs);
-            for (auto *j : jobs) {
-                j->run();
-                delete j;
-            }
+            runStrokeJobsBatch(jobs, m_brushSize);
             if (jobs.isEmpty() || !result.second) {
                 break;
             }
@@ -1269,10 +1713,7 @@ bool ReverieCore::strokeAirbrushTick()
         while (true) {
             QVector<KisRunnableStrokeJobData *> jobs;
             auto result = m_strokeOp->doAsynchronousUpdate(jobs);
-            for (auto *j : jobs) {
-                j->run();
-                delete j;
-            }
+            runStrokeJobsBatch(jobs, m_brushSize);
             if (jobs.isEmpty() || !result.second) {
                 break;
             }
@@ -1298,7 +1739,7 @@ bool ReverieCore::strokeAirbrushTick()
             tickDirty = tickDirty.adjusted(-extra, -extra, extra, extra).intersected(
                 QRect(0, 0, m_docWidth, m_docHeight));
         }
-        markRegionDirty(tickDirty);
+        markStrokeDirty(tickDirty);
     }
     return true;
 }

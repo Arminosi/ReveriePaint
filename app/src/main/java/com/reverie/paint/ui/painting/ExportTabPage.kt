@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -57,12 +58,23 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
 import com.reverie.paint.R
+import com.reverie.paint.core.TemplateManager
+import kotlinx.coroutines.launch
 import com.reverie.paint.core.AnimationExportOptions
 import com.reverie.paint.core.PaintViewModel
 import com.reverie.paint.core.exportAnimation
@@ -645,6 +657,299 @@ private fun StaticExportSection(
                 Text(stringResource(R.string.export_share_artwork), color = Morandi.text, fontSize = 12.sp, fontWeight = FontWeight.Medium)
             }
         }
+
+        HorizontalDivider(color = Morandi.border.copy(alpha = 0.5f), thickness = 0.8.dp)
+
+        // 存为模板卡片 (Issue #101)
+        var showSaveTemplateDialog by remember { mutableStateOf(false) }
+        val templateInteraction = remember { MutableInteractionSource() }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .pressScale(templateInteraction, pressedScale = 0.98f)
+                .clip(RoundedCornerShape(12.dp))
+                .background(Morandi.panelHi.copy(alpha = 0.6f))
+                .clickable(interactionSource = templateInteraction, indication = null) {
+                    showSaveTemplateDialog = true
+                }
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(34.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Morandi.accent.copy(alpha = 0.16f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_layers),
+                    contentDescription = null,
+                    tint = Morandi.accent,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.template_save_as_template),
+                    color = Morandi.text,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = stringResource(R.string.template_save_as_template_desc),
+                    color = Morandi.subText,
+                    fontSize = 11.sp,
+                )
+            }
+            Icon(
+                painter = painterResource(R.drawable.ic_chevron),
+                contentDescription = null,
+                tint = Morandi.subText,
+                modifier = Modifier.size(16.dp),
+            )
+        }
+
+        if (showSaveTemplateDialog) {
+            SaveAsTemplateDialog(
+                vm = vm,
+                onDismiss = { showSaveTemplateDialog = false },
+                onSuccess = {
+                    showSaveTemplateDialog = false
+                    Toast.makeText(context, context.resources.getString(R.string.template_save_success), Toast.LENGTH_SHORT).show()
+                    onClose()
+                },
+            )
+        }
+    }
+}
+
+/** 保存为模板对话框 */
+@Composable
+private fun SaveAsTemplateDialog(
+    vm: PaintViewModel,
+    onDismiss: () -> Unit,
+    onSuccess: () -> Unit,
+) {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    var templateName by remember { mutableStateOf(vm.docName.ifEmpty { "未命名模板" }) }
+    var selectedCategory by remember { mutableStateOf("插画") }
+    var customCategory by remember { mutableStateOf("") }
+    var isCustomCat by remember { mutableStateOf(false) }
+    var description by remember { mutableStateOf("") }
+    var isSaving by remember { mutableStateOf(false) }
+
+    val categories = remember {
+        val (cats, _) = TemplateManager.loadTemplateData(context)
+        cats.filter { it != TemplateManager.CATEGORY_ALL }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onDismiss,
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(360.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = {},
+                    )
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(Morandi.panel)
+                    .border(0.8.dp, Morandi.border, RoundedCornerShape(18.dp))
+                    .padding(22.dp),
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Text(
+                        text = stringResource(R.string.template_save_dialog_title),
+                        color = Morandi.text,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+
+                    // 模板名称输入
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = stringResource(R.string.template_save_name_label),
+                            color = Morandi.subText,
+                            fontSize = 12.sp,
+                        )
+                        BasicTextField(
+                            value = templateName,
+                            onValueChange = { templateName = it },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(38.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Morandi.panelHi)
+                                .border(0.8.dp, Morandi.border, RoundedCornerShape(8.dp))
+                                .padding(horizontal = 10.dp, vertical = 9.dp),
+                            singleLine = true,
+                            textStyle = LocalTextStyle.current.copy(color = Morandi.text, fontSize = 13.sp),
+                            cursorBrush = SolidColor(Morandi.accent),
+                        )
+                    }
+
+                    // 分类标签选择
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = stringResource(R.string.template_save_category_label),
+                            color = Morandi.subText,
+                            fontSize = 12.sp,
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            categories.take(3).forEach { cat ->
+                                val isSel = !isCustomCat && selectedCategory == cat
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(if (isSel) Morandi.accent.copy(alpha = 0.18f) else Morandi.panelHi)
+                                        .clickable {
+                                            isCustomCat = false
+                                            selectedCategory = cat
+                                        }
+                                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                                ) {
+                                    Text(
+                                        text = cat,
+                                        color = if (isSel) Morandi.accent else Morandi.text,
+                                        fontSize = 12.sp,
+                                        fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal,
+                                    )
+                                }
+                            }
+                            val isCustomSel = isCustomCat
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(if (isCustomSel) Morandi.accent.copy(alpha = 0.18f) else Morandi.panelHi)
+                                    .clickable { isCustomCat = true }
+                                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                            ) {
+                                Text(
+                                    text = "+ 自定义",
+                                    color = if (isCustomSel) Morandi.accent else Morandi.subText,
+                                    fontSize = 12.sp,
+                                )
+                            }
+                        }
+                        if (isCustomCat) {
+                            Spacer(Modifier.height(2.dp))
+                            BasicTextField(
+                                value = customCategory,
+                                onValueChange = { customCategory = it },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(34.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Morandi.panelHi)
+                                    .border(0.8.dp, Morandi.border, RoundedCornerShape(8.dp))
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                singleLine = true,
+                                textStyle = LocalTextStyle.current.copy(color = Morandi.text, fontSize = 12.sp),
+                                cursorBrush = SolidColor(Morandi.accent),
+                                decorationBox = { inner ->
+                                    if (customCategory.isEmpty()) {
+                                        Text(stringResource(R.string.template_category_input_hint), color = Morandi.subText, fontSize = 12.sp)
+                                    }
+                                    inner()
+                                },
+                            )
+                        }
+                    }
+
+                    // 描述输入
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = stringResource(R.string.template_save_desc_label),
+                            color = Morandi.subText,
+                            fontSize = 12.sp,
+                        )
+                        BasicTextField(
+                            value = description,
+                            onValueChange = { description = it },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(38.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Morandi.panelHi)
+                                .border(0.8.dp, Morandi.border, RoundedCornerShape(8.dp))
+                                .padding(horizontal = 10.dp, vertical = 9.dp),
+                            singleLine = true,
+                            textStyle = LocalTextStyle.current.copy(color = Morandi.text, fontSize = 13.sp),
+                            cursorBrush = SolidColor(Morandi.accent),
+                        )
+                    }
+
+                    // 规格说明展示
+                    Text(
+                        text = "${vm.docWidth} × ${vm.docHeight} • ${vm.docDpi} DPI • ${vm.layers.size} 图层",
+                        color = Morandi.subText,
+                        fontSize = 11.sp,
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        ReTextButton(
+                            text = stringResource(R.string.common_cancel),
+                            onClick = onDismiss,
+                            enabled = !isSaving,
+                            textColor = Morandi.subText,
+                            fontSize = 14.sp,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        ReTextButton(
+                            text = stringResource(R.string.common_confirm),
+                            onClick = {
+                                val finalCat = if (isCustomCat) customCategory.trim().ifEmpty { TemplateManager.CATEGORY_UNCATEGORIZED } else selectedCategory
+                                isSaving = true
+                                coroutineScope.launch {
+                                    val result = TemplateManager.saveCurrentAsTemplate(
+                                        context = context,
+                                        vm = vm,
+                                        name = templateName.trim(),
+                                        category = finalCat,
+                                        description = description.trim(),
+                                    )
+                                    isSaving = false
+                                    if (result != null) {
+                                        onSuccess()
+                                    } else {
+                                        Toast.makeText(context, context.resources.getString(R.string.template_save_failed), Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            },
+                            enabled = !isSaving && templateName.isNotBlank(),
+                            primary = true,
+                            containerColor = Morandi.accent,
+                            contentColor = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1165,10 +1470,11 @@ private fun AnimationExportSection(
 
     // 导出动画时的模态进度弹窗
     if (isExporting) {
+        val cancelingText = stringResource(R.string.export_anim_canceling)
         Dialog(
             onDismissRequest = {
                 exportCancelled = true
-                exportStage = context.getString(R.string.export_anim_canceling)
+                exportStage = cancelingText
             },
         ) {
             Column(
@@ -1223,11 +1529,11 @@ private fun AnimationExportSection(
                 }
                 Spacer(Modifier.height(4.dp))
                 ReTextButton(
-                    text = if (exportCancelled) stringResource(R.string.export_anim_canceling) else stringResource(R.string.export_anim_cancel_btn),
+                    text = if (exportCancelled) cancelingText else stringResource(R.string.export_anim_cancel_btn),
                     textColor = if (exportCancelled) Morandi.subText.copy(alpha = 0.5f) else Morandi.subText,
                     onClick = {
                         exportCancelled = true
-                        exportStage = context.getString(R.string.export_anim_canceling)
+                        exportStage = cancelingText
                     },
                 )
             }

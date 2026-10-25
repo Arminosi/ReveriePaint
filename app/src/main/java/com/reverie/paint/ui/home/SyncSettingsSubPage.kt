@@ -4,6 +4,7 @@
 
 package com.reverie.paint.ui.home
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -51,9 +52,16 @@ import androidx.compose.ui.unit.sp
 import com.reverie.paint.R
 import com.reverie.paint.core.*
 import com.reverie.paint.core.sync.SyncCredentials
+import com.reverie.paint.core.sync.SyncException
 import com.reverie.paint.core.sync.SyncTimeFormat
 import com.reverie.paint.ui.components.pressScale
 import com.reverie.paint.ui.theme.Theme
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -77,6 +85,22 @@ internal fun SyncSettingsSubPage(
             draftServer = state.serverUrl
             draftUser = state.username
             draftPass = ""
+        }
+    }
+
+    val createBackupLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/octet-stream"),
+    ) { uri: Uri? ->
+        if (uri != null) {
+            vm.executeExportBackup(uri)
+        }
+    }
+
+    val restoreBackupLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri: Uri? ->
+        if (uri != null) {
+            vm.startInspectBackup(uri)
         }
     }
 
@@ -140,21 +164,27 @@ internal fun SyncSettingsSubPage(
                         )
                     }
 
+                    val testing = state.status == SyncConnectionStatus.TESTING
                     Spacer(Modifier.height(8.dp))
                     SettingGroup {
                         SyncActionRow(
                             index = 0,
                             total = 2,
-                            text = stringResource(R.string.sync_connect_action),
+                            text = stringResource(if (testing) R.string.sync_status_testing else R.string.sync_connect_action),
                             color = colors.accent,
+                            enabled = !testing,
                         ) { vm.connectSync(draftServer, draftUser, draftPass) }
                         SyncActionRow(
                             index = 1,
                             total = 2,
                             text = stringResource(R.string.cancel),
                             color = colors.subText,
+                            enabled = !testing,
                         ) { vm.closeSyncEditor() }
                     }
+                    Spacer(Modifier.height(8.dp))
+                    // 编辑态同样要显示连接状态/失败原因, 否则连接失败时界面毫无反馈
+                    SyncStatusLine(vm)
                 }
 
                 state.connected -> {
@@ -289,6 +319,25 @@ internal fun SyncSettingsSubPage(
             SyncResultLine(vm)
 
             Spacer(Modifier.height(16.dp))
+            SettingCategoryTitle(stringResource(R.string.sync_category_local_backup))
+            SettingGroup {
+                SettingNavGroupItem(
+                    icon = R.drawable.ic_save_as,
+                    title = stringResource(R.string.backup_export_title),
+                    summary = stringResource(R.string.backup_export_summary),
+                    shape = settingGroupShape(0, 2),
+                    onClick = { vm.openExportBackupDialog() },
+                )
+                SettingNavGroupItem(
+                    icon = R.drawable.ic_import,
+                    title = stringResource(R.string.backup_restore_title),
+                    summary = stringResource(R.string.backup_restore_summary),
+                    shape = settingGroupShape(1, 2),
+                    onClick = { restoreBackupLauncher.launch(arrayOf("*/*")) },
+                )
+            }
+
+            Spacer(Modifier.height(16.dp))
             SettingInfoCard(
                 title = stringResource(R.string.sync_backup_info_title),
                 text = stringResource(R.string.sync_backup_info_text),
@@ -303,6 +352,27 @@ internal fun SyncSettingsSubPage(
             Spacer(Modifier.height(60.dp))
         }
     }
+
+    if (vm.localBackupState.showExportDialog) {
+        LocalBackupExportDialog(
+            vm = vm,
+            onConfirmExport = {
+                val timestamp = SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(Date())
+                createBackupLauncher.launch("ReveriePaint_Backup_$timestamp.revpbak")
+            },
+            onDismiss = { vm.closeExportBackupDialog() },
+        )
+    }
+
+    if (vm.localBackupState.showRestoreDialog) {
+        LocalBackupRestoreDialog(
+            vm = vm,
+            onConfirmRestore = { vm.executeRestoreBackup() },
+            onDismiss = { vm.closeRestoreBackupDialog() },
+        )
+    }
+
+    LocalBackupProgressDialog(vm = vm)
 }
 
 @Composable
@@ -468,12 +538,7 @@ private fun SyncStatusLine(vm: PaintViewModel) {
             SyncConnectionStatus.IDLE -> return
             SyncConnectionStatus.TESTING -> stringResource(R.string.sync_status_testing) to colors.subText
             SyncConnectionStatus.OK -> connected to colors.accent
-            SyncConnectionStatus.FAILED ->
-                if (state.statusDetail == SYNC_DETAIL_NOT_CONFIGURED) {
-                    stringResource(R.string.sync_error_not_configured) to Color(0xFFE05555)
-                } else {
-                    stringResource(R.string.sync_status_failed) + " (" + state.statusDetail + ")" to Color(0xFFE05555)
-                }
+            SyncConnectionStatus.FAILED -> syncFailureText(state.statusDetail) to Color(0xFFE05555)
         }
     Text(
         text = text,
@@ -482,6 +547,24 @@ private fun SyncStatusLine(vm: PaintViewModel) {
         modifier = Modifier.padding(start = 6.dp),
     )
 }
+
+/** 把 connectSync/testSyncConnection 写入的失败码翻译成可读原因。 */
+@Composable
+private fun syncFailureText(detail: String): String =
+    when (detail) {
+        SYNC_DETAIL_NOT_CONFIGURED -> stringResource(R.string.sync_error_not_configured)
+        SYNC_DETAIL_PASSWORD_REQUIRED -> stringResource(R.string.sync_error_password_required)
+        SyncException.Kind.AUTH.name -> stringResource(R.string.sync_error_auth)
+        SyncException.Kind.NETWORK.name -> stringResource(R.string.sync_error_network)
+        SyncException.Kind.NOT_FOUND.name -> stringResource(R.string.sync_error_not_found)
+        SyncException.Kind.PROTOCOL.name -> stringResource(R.string.sync_error_protocol)
+        else ->
+            if (detail.contains("SSL", ignoreCase = true) || detail.contains("Cert", ignoreCase = true)) {
+                stringResource(R.string.sync_error_tls)
+            } else {
+                stringResource(R.string.sync_status_failed) + " (" + detail + ")"
+            }
+    }
 
 @Composable
 private fun SyncResultLine(vm: PaintViewModel) {
@@ -528,8 +611,9 @@ private fun SyncResultLine(vm: PaintViewModel) {
                             fontSize = 12.sp,
                             modifier = Modifier.weight(1f, fill = false),
                         )
+                        val saveSuccessPattern = stringResource(R.string.diagnostics_save_success_toast)
                         Text(
-                            text = stringResource(R.string.diagnostics_copy_btn),
+                            text = stringResource(R.string.settings_export_log),
                             color = colors.accent,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.SemiBold,
@@ -537,10 +621,19 @@ private fun SyncResultLine(vm: PaintViewModel) {
                                 .clip(RoundedCornerShape(4.dp))
                                 .background(colors.panelHi)
                                 .clickable {
-                                    coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                    coroutineScope.launch(Dispatchers.IO) {
                                         val report = DiagnosticsManager.generateDiagnosticsReport(context)
-                                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                            DiagnosticsManager.copyReportToClipboard(context, report)
+                                        val path = DiagnosticsManager.exportReportToDownloads(context, report)
+                                        withContext(Dispatchers.Main) {
+                                            if (path != null) {
+                                                Toast.makeText(
+                                                    context,
+                                                    String.format(saveSuccessPattern, path),
+                                                    Toast.LENGTH_LONG,
+                                                ).show()
+                                            } else {
+                                                DiagnosticsManager.shareReport(context, report)
+                                            }
                                         }
                                     }
                                 }

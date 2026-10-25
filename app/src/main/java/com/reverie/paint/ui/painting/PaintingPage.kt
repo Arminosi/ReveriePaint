@@ -197,6 +197,7 @@ fun PaintingPage(
 
     var canvasEditMenuOpen by remember { mutableStateOf(false) }
     var canvasEditMenuCustomizeOpen by remember { mutableStateOf(false) }
+    var isZenMode by remember { mutableStateOf(false) }
 
     // Popup panels
     val indicatorState = remember { TransformIndicatorState() }
@@ -265,6 +266,27 @@ fun PaintingPage(
     // 快捷键触发的视口/面板命令 (VM 不持有视口状态, 只发一次性命令 token)
     LaunchedEffect(vm.uiCommandTick) {
         val cmd = vm.pendingUiCommand ?: return@LaunchedEffect
+        val viewportStep = com.reverie.paint.model.CanvasViewportStep.fromCommand(cmd)
+        if (viewportStep != null) {
+            val view = canvasTouchView
+            when {
+                vm.isViewTransformLocked ->
+                    vm.showActionToast(R.string.toast_view_locked, R.drawable.ic_lock)
+                // 绘画/多指手势进行中不插入视口变换, 与手势共用同一份视口状态
+                view == null || view.isInteracting || view.isTransformActive -> Unit
+                else -> viewportStep.apply(
+                    view.canvasZoom, view.canvasRotation,
+                    view.canvasPanX, view.canvasPanY, locked = false,
+                )?.let { next ->
+                    // 通过现有入口取消复位/吸附动画，避免下一帧又被旧动画覆盖。
+                    // 它会经 onTransform 回写 zoom/rotation/panX/panY, 无需在此重复赋值。
+                    view.applyViewTransform(next.zoom, next.rotation, next.panX, next.panY)
+                    flashIndicator()
+                }
+            }
+            vm.consumeUiCommand()
+            return@LaunchedEffect
+        }
         when (cmd) {
             "zoom_in" -> {
                 zoom = (zoom * 1.2f).coerceAtMost(16f)
@@ -293,6 +315,15 @@ fun PaintingPage(
             "open_edit_menu" -> {
                 vm.refreshCanvasEditCapabilities()
                 canvasEditMenuOpen = true
+            }
+            "close_edit_menu" -> {
+                canvasEditMenuOpen = false
+            }
+            "toggle_fullscreen" -> {
+                isZenMode = !isZenMode
+                vm.showActionToast(
+                    if (isZenMode) context.getString(R.string.gesture_action_fullscreen) else ""
+                )
             }
             "open_color" -> colorPanelOpen = true
             else -> {
@@ -389,6 +420,9 @@ fun PaintingPage(
                         )
                     } else {
                         vm.cancelTransformPreview()
+                        if (vm.hasSelection) {
+                            vm.stashAndClearSelection()
+                        }
                     }
                 }
             }
@@ -589,6 +623,9 @@ fun PaintingPage(
                             )
                         } else {
                             vm.cancelTransformPreview()
+                            if (vm.hasSelection && tool.group != ToolGroup.SELECTION) {
+                                vm.stashAndClearSelection()
+                            }
                         }
                     }
                 }
@@ -610,6 +647,9 @@ fun PaintingPage(
         }
         if (tool !in shapeTools && tool.group != ToolGroup.SHAPES && vm.shapeState.active) {
             vm.commitActiveShape()
+        }
+        if (tool != Tool.GRADIENT && vm.gradientState.active) {
+            vm.commitActiveGradient()
         }
         if (tool != Tool.TEXT && vm.isTypographyEditing) {
             if (vm.typographyConfig.text.isNotBlank()) {
@@ -878,7 +918,7 @@ fun PaintingPage(
         androidx.compose.runtime.CompositionLocalProvider(
             androidx.compose.ui.platform.LocalDensity provides scaledDensity
         ) {
-            if (filterController == null && !vm.isCanvasAdjustActive) {
+            if (!isZenMode && filterController == null && !vm.isCanvasAdjustActive) {
                 val floatingUi = vm.floatingUiConfig.enabled
                 if (floatingUi) {
                     val config = vm.floatingUiConfig
@@ -1544,6 +1584,7 @@ fun PaintingPage(
                                 SelectionMenuItem(stringResource(R.string.selection_invert)) { vm.invertSelectionAction() }
                                 SelectionMenuItem(stringResource(R.string.selection_history_title)) {
                                     selectionMenuOpen = false
+                                    vm.discardTransientTransformSelection()
                                     vm.savedSelectionsPopupOpen = true
                                 }
                                 SelectionMenuItem(stringResource(R.string.selection_clear), danger = true) { vm.clearSelectionAction() }

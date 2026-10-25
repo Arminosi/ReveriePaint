@@ -51,8 +51,8 @@ android {
         }
         minSdk = 23
         targetSdk = 33
-        versionCode = 40
-        versionName = "1.5.0"
+        versionCode = 46
+        versionName = "1.5.6"
 
         buildConfigField("String", "AIFADIAN_API_TOKEN", "\"$aifadianApiToken\"")
         buildConfigField("String", "AIFADIAN_USER_ID", "\"$aifadianUserId\"")
@@ -218,11 +218,6 @@ if (usePrebuiltJni) {
 
 dependencies {
     implementation(files("libs/Qt6Android.jar"))
-    // vivo/iQOO 手写笔 SDK (penengine-simplify 1.0.0.7) 随仓库内置:
-    // jar = 从官方 maven AAR 提取的 classes.jar; native 库 libtrack_prediction.so
-    // 位于 third_party/android-native-libs (与 OPPO libforecast.so 同规格随 jniLibs 打包),
-    // 预测参数资产 optparam*.cfg 位于 src/main/assets (SDK 运行时从 assets 读取)
-    implementation(files("libs/vivo-penengine-simplify-1.0.0.7.jar"))
     implementation(platform("androidx.compose:compose-bom:2026.05.00"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
@@ -243,4 +238,5 @@ dependencies {
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }

@@ -6,6 +6,10 @@ package com.reverie.paint.core
 
 import android.content.Context
 import android.content.res.Configuration
+import android.os.Build
+import android.util.DisplayMetrics
+import android.view.WindowManager
+import kotlin.math.min
 
 /**
  * Device capability and form-factor detection utilities.
@@ -27,9 +31,41 @@ object DeviceUtils {
     }
 
     /**
-     * Checks if the device is a tablet based on the given [Context]'s resources configuration.
+     * Determines whether the physical device is a tablet based on physical screen bounds,
+     * unaffected by multi-window, split-screen, or freeform window sizing.
+     */
+    fun isPhysicalTablet(context: Context): Boolean {
+        return try {
+            val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && windowManager != null) {
+                val bounds = windowManager.maximumWindowMetrics.bounds
+                val density = context.resources.displayMetrics.density
+                if (density > 0f) {
+                    val minDimensionDp = min(bounds.width(), bounds.height()) / density
+                    return minDimensionDp >= 600f
+                }
+            } else if (windowManager != null) {
+                val dm = DisplayMetrics()
+                @Suppress("DEPRECATION")
+                windowManager.defaultDisplay?.getRealMetrics(dm)
+                if (dm.density > 0f) {
+                    val minDimensionDp = min(dm.widthPixels, dm.heightPixels) / dm.density
+                    return minDimensionDp >= 600f
+                }
+            }
+            false
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    /**
+     * Checks if the device is a tablet based on physical dimensions or the given [Context]'s configuration.
      */
     fun isTablet(context: Context): Boolean {
+        if (isPhysicalTablet(context)) {
+            return true
+        }
         val config = context.resources.configuration
         val sw = config.smallestScreenWidthDp
         val layoutSize = config.screenLayout and Configuration.SCREENLAYOUT_SIZE_MASK

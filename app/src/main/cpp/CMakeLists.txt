@@ -99,6 +99,8 @@ set(KRITA_INCLUDES
     ${KRITA_SRC_DIR}/plugins/paintops/tangentnormal
     ${KRITA_SRC_DIR}/plugins/paintops/hairy
     ${KRITA_SRC_DIR}/plugins/paintops/hatching
+    ${KRITA_SRC_DIR}/plugins/paintops/mypaint
+    ${DEPS_DIR}/include/libmypaint
     ${KRITA_BIN_DIR}/plugins/paintops/libpaintop
     ${KRITA_BIN_DIR}/plugins/paintops/defaultpaintops
     ${KRITA_SRC_DIR}/libs/image/filter
@@ -198,6 +200,7 @@ set(KRITA_LIBS
     ${KRITA_BIN_DIR}/lib/libkritatangentnormalpaintop.so
     ${KRITA_BIN_DIR}/lib/libkritahairypaintop.so
     ${KRITA_BIN_DIR}/lib/libkritahatchingpaintop.so
+    ${KRITA_BIN_DIR}/lib/libkritamypaintop.so
 )
 
 # Some RGB8 Android pigment bundles have no OpenEXR/half exports even when
@@ -299,6 +302,8 @@ target_link_libraries(reverie_jni
     ${DEPS_DIR}/lib/libKF6Completion.so
     ${DEPS_DIR}/lib/libKF6GuiAddons.so
     ${DEPS_DIR}/lib/libKF6ConfigCore.so
+    ${DEPS_DIR}/lib/libmypaint.so
+    ${DEPS_DIR}/lib/libjson-c.so
     z
     log
     android

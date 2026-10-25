@@ -41,6 +41,33 @@ Java_com_reverie_paint_core_ReverieCoreBridge_gradientFill(JNIEnv *, jobject, ji
 }
 
 JNIEXPORT void JNICALL
+Java_com_reverie_paint_core_ReverieCoreBridge_gradientFillV3(
+    JNIEnv *env, jobject,
+    jint x1, jint y1, jint x2, jint y2,
+    jint type, jint repeat, jboolean reverse,
+    jfloat opacity, jstring jBlendMode, jboolean dither,
+    jfloatArray jStopPositions, jintArray jStopColors)
+{
+    const char *bmChars = jBlendMode ? env->GetStringUTFChars(jBlendMode, nullptr) : nullptr;
+    QString blendMode = bmChars ? QString::fromUtf8(bmChars) : QString();
+    if (bmChars) env->ReleaseStringUTFChars(jBlendMode, bmChars);
+
+    QVector<QPair<qreal, QColor>> stops;
+    if (jStopPositions && jStopColors) {
+        jsize count = env->GetArrayLength(jStopPositions);
+        jfloat *pos = env->GetFloatArrayElements(jStopPositions, nullptr);
+        jint *cols = env->GetIntArrayElements(jStopColors, nullptr);
+        stops.reserve(count);
+        for (jsize i = 0; i < count; ++i) {
+            stops.append(qMakePair((qreal)pos[i], QColor::fromRgba((QRgb)cols[i])));
+        }
+        env->ReleaseFloatArrayElements(jStopPositions, pos, JNI_ABORT);
+        env->ReleaseIntArrayElements(jStopColors, cols, JNI_ABORT);
+    }
+    core()->gradientFillV3(x1, y1, x2, y2, type, repeat, reverse, opacity, blendMode, dither, stops);
+}
+
+JNIEXPORT void JNICALL
 Java_com_reverie_paint_core_ReverieCoreBridge_moveLayerContent(JNIEnv *, jobject, jint dx, jint dy)
 {
     core()->moveLayerContent(dx, dy);

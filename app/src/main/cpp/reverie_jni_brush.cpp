@@ -132,11 +132,21 @@ JNIEXPORT jbyteArray JNICALL
 Java_com_reverie_paint_core_ReverieCoreBridge_brushPresetThumbData(JNIEnv *env, jobject, jint index)
 {
     const QByteArray data = core()->brushPresetThumbData(index);
-    jbyteArray arr = env->NewByteArray(data.size());
-    if (data.size() > 0) {
-        env->SetByteArrayRegion(arr, 0, data.size(),
-                                reinterpret_cast<const jbyte *>(data.constData()));
+    const int sz = data.size();
+    if (sz <= 0) {
+        jbyteArray emptyArr = env->NewByteArray(0);
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        return emptyArr;
     }
+    jbyteArray arr = env->NewByteArray(sz);
+    if (!arr || env->ExceptionCheck()) {
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        jbyteArray emptyArr = env->NewByteArray(0);
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        return emptyArr;
+    }
+    env->SetByteArrayRegion(arr, 0, sz,
+                            reinterpret_cast<const jbyte *>(data.constData()));
     return arr;
 }
 
@@ -395,6 +405,37 @@ JNIEXPORT jboolean JNICALL
 Java_com_reverie_paint_core_ReverieCoreBridge_touchStrokeKickIdle(JNIEnv *, jobject)
 {
     return core()->touchStrokeKickIdle() ? JNI_TRUE : JNI_FALSE;
+}
+
+// 对称实时镜像: 把一条镜像折线画进当前已经打开的原生笔触。
+// 缓冲固定为 7 元 [x,y,p,tiltX,tiltY,rotation,timeSeconds], 长度必须精确等于
+// count * 7, 避免和实时 6 元缓冲混用。
+// s12-F1: strokeSeq 是这批点所属笔画的笔画号; 返回 1 = 接受, 0 = 拒绝 (Kotlin 走抬笔重放),
+// -1 = 过期 (引擎当前没有打开这一笔)。参数非法时报 0 (与旧版 false 一致)。
+JNIEXPORT jint JNICALL
+Java_com_reverie_paint_core_ReverieCoreBridge_touchStrokeMirrorBatch(
+    JNIEnv *env, jobject, jfloatArray coords, jint count, jint branchIndex, jint strokeSeq)
+{
+    if (!coords || count <= 0) {
+        return 0;
+    }
+    const jsize len = env->GetArrayLength(coords);
+    if (len != count * 7) {
+        return 0;
+    }
+    jfloat *c = env->GetFloatArrayElements(coords, nullptr);
+    if (!c) {
+        return 0;
+    }
+    const reverie::MirrorBatchAction action = core()->paintMirrorPolyline(c, count, 7, branchIndex, strokeSeq);
+    env->ReleaseFloatArrayElements(coords, c, JNI_ABORT);
+    return reverie::mirrorBatchResultCode(action);
+}
+
+JNIEXPORT void JNICALL
+Java_com_reverie_paint_core_ReverieCoreBridge_setMirrorStrokeSeq(JNIEnv *, jobject, jint strokeSeq)
+{
+    core()->setMirrorStrokeSeq(strokeSeq);
 }
 
 JNIEXPORT void JNICALL

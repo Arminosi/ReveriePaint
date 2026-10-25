@@ -91,4 +91,12 @@ class OklchColorTest {
         val sampled1 = OklchColor.sampleMaxChromaFromLUT(lut, 1f)
         assertTrue(sampledHalf in minOf(sampled0, sampled1)..maxOf(sampled0, sampled1))
     }
+
+    @Test
+    fun `hue 360 degrees matches 0 degrees`() {
+        val color0 = OklchColor(0.7f, 0.15f, 0f)
+        val color360 = OklchColor(0.7f, 0.15f, 360f)
+        assertEquals(color0.toRgbInt(), color360.toRgbInt())
+        assertEquals(color0.toHex(), color360.toHex())
+    }
 }

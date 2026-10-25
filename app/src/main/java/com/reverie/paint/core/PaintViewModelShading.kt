@@ -107,13 +107,16 @@ internal fun PaintViewModel.openShadingAssist() {
         }
 
         val modelFile = ShadingModelManager.getActiveModelFile(appContext)
+        var modelFallback = false
         val rawDepth = if (modelFile != null) {
-            ShadingAssistEngine.estimateRawDepth(
+            val res = ShadingAssistEngine.estimateRawDepth(
                 baseBitmap = baseBmp,
                 lineBitmap = lineBmp,
                 modelFile = modelFile,
                 targetResolution = previewW
             )
+            if (res == null) modelFallback = true
+            res
         } else {
             null
         }
@@ -147,6 +150,9 @@ internal fun PaintViewModel.openShadingAssist() {
                 shadingAssistPreviewBitmap?.recycle()
                 shadingAssistPreviewBitmap = preview
                 shadingAssistIsProcessing = false
+                if (modelFallback) {
+                    Toast.makeText(appContext, R.string.shading_assist_model_fallback_toast, Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }
@@ -201,13 +207,16 @@ internal fun PaintViewModel.updateShadingConfig(
 
             val curLineBmp = shadingAssistLineBitmap
             val modelFile = ShadingModelManager.getActiveModelFile(appContext)
+            var modelFallback = false
             val rawDepth = if (modelFile != null && newConfig.useAiModel) {
-                ShadingAssistEngine.estimateRawDepth(
+                val res = ShadingAssistEngine.estimateRawDepth(
                     baseBitmap = baseBmp,
                     lineBitmap = curLineBmp,
                     modelFile = modelFile,
                     targetResolution = baseBmp.width
                 )
+                if (res == null) modelFallback = true
+                res
             } else {
                 null
             }
@@ -238,6 +247,9 @@ internal fun PaintViewModel.updateShadingConfig(
                     shadingAssistPreviewBitmap?.recycle()
                     shadingAssistPreviewBitmap = preview
                     shadingAssistIsProcessing = false
+                    if (modelFallback) {
+                        Toast.makeText(appContext, R.string.shading_assist_model_fallback_toast, Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
         }
@@ -469,3 +481,20 @@ private suspend fun PaintViewModel.renderLayerPixels(layerIndex: Int, bitmap: Bi
             }
         }
     }
+
+/**
+ * 切换选中的神经网络预设模型
+ */
+internal fun PaintViewModel.switchShadingModelPreset(preset: com.reverie.paint.model.ShadingModelPreset) {
+    ShadingModelManager.selectPreset(preset, appContext)
+    updateShadingConfig(shadingAssistConfig, reloadLineart = true)
+}
+
+/**
+ * 切换为已导入的自定义模型
+ */
+internal fun PaintViewModel.switchShadingCustomModel() {
+    ShadingModelManager.selectCustomModel(appContext)
+    updateShadingConfig(shadingAssistConfig, reloadLineart = true)
+}
+

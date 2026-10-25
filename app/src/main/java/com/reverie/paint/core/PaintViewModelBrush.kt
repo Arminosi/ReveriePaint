@@ -134,6 +134,19 @@ import kotlinx.coroutines.withContext
         saveBrushOrder()
     }
 
+    internal fun PaintViewModel.reorderBrushInView(fromName: String, toName: String) {
+        if (fromName == toName) return
+        val curList = brushPresets.toMutableList()
+        val fromIdx = curList.indexOfFirst { it.name == fromName }
+        val toIdx = curList.indexOfFirst { it.name == toName }
+        if (fromIdx < 0 || toIdx < 0) return
+        val item = curList.removeAt(fromIdx)
+        curList.add(toIdx, item)
+        brushPresets = curList
+        brushOrder = curList.map { it.name }
+        saveBrushOrder()
+    }
+
     internal fun PaintViewModel.saveCategoryOrder() {
         try {
             val arr = org.json.JSONArray()
@@ -157,18 +170,38 @@ import kotlinx.coroutines.withContext
         if (from == to || from !in list.indices || to !in list.indices) return
         val item = list.removeAt(from)
         list.add(to, item)
-        categoryOrder = list
+        val pinned = listOf("全部", "常用", "最近")
+        categoryOrder = list.filter { it !in pinned }
+        saveCategoryOrder()
+    }
+
+    internal fun PaintViewModel.reorderCategoryByName(fromCat: String, toCat: String, allCategories: List<String>) {
+        if (fromCat == toCat) return
+        val pinned = listOf("全部", "常用", "最近")
+        if (fromCat in pinned || toCat in pinned) return
+        val list = allCategories.toMutableList()
+        val fromIdx = list.indexOf(fromCat)
+        val toIdx = list.indexOf(toCat)
+        if (fromIdx < 0 || toIdx < 0) return
+        val item = list.removeAt(fromIdx)
+        list.add(toIdx, item)
+        categoryOrder = list.filter { it !in pinned }
         saveCategoryOrder()
     }
 
     internal fun PaintViewModel.moveCategoryUp(cat: String, allCategories: List<String>) {
+        val pinned = listOf("全部", "常用", "最近")
+        if (cat in pinned) return
         val idx = allCategories.indexOf(cat)
-        if (idx > 0) {
+        val minIdx = allCategories.indexOfFirst { it !in pinned }
+        if (idx > minIdx && minIdx >= 0) {
             reorderCategory(idx, idx - 1, allCategories)
         }
     }
 
     internal fun PaintViewModel.moveCategoryDown(cat: String, allCategories: List<String>) {
+        val pinned = listOf("全部", "常用", "最近")
+        if (cat in pinned) return
         val idx = allCategories.indexOf(cat)
         if (idx >= 0 && idx < allCategories.size - 1) {
             reorderCategory(idx, idx + 1, allCategories)
@@ -550,27 +583,54 @@ import kotlinx.coroutines.withContext
     }
 
     /** Reset all parameters for the current brush back to factory defaults */
+    private fun PaintViewModel.resetSingleBrushPresetState(presetName: String) {
+        val dir = File(appContext.filesDir, "paintoppresets")
+        val isMyb = File(dir, "$presetName.myb").exists() || (appContext.assets.list("paintoppresets")?.contains("$presetName.myb") == true)
+        val ext = if (isMyb) "myb" else "kpp"
+        val target = File(dir, "$presetName.$ext")
+        val assetNames = appContext.assets.list("paintoppresets") ?: emptyArray()
+        val isAssetPreset = assetNames.contains("$presetName.$ext")
+        if (isAssetPreset) {
+            try {
+                appContext.assets.open("paintoppresets/$presetName.$ext").use { input ->
+                    target.outputStream().use { output -> input.copyTo(output) }
+                }
+            } catch (_: Exception) {}
+            brushParams.remove(presetName)
+        } else {
+            // 外部导入预设 (ABR / Bundle): assets 里无母本, 绝不能直接 remove 导致 tipAsset 与出厂尺寸蒸发
+            val parsed = if (target.exists()) KppHelper.parseKppFile(target) else null
+            val pIdx = brushPresets.firstOrNull { it.name == presetName }?.index ?: -1
+            val d = if (pIdx >= 0) ReverieCoreBridge.brushPresetDefaults(pIdx) else DoubleArray(0)
+            val baseSize = parsed?.paintOpSize ?: d.getOrNull(0) ?: 20.0
+            val baseTip = parsed?.tipAsset ?: brushParams[presetName]?.tipAsset ?: ""
+            val defaultParams = BrushParams(
+                size = if (baseSize > 0.0) baseSize else 20.0,
+                opacity = d.getOrNull(1)?.coerceIn(0.0, 1.0) ?: 1.0,
+                flow = d.getOrNull(2)?.coerceIn(0.0, 1.0) ?: 1.0,
+                spacing = d.getOrNull(3)?.coerceIn(0.01, 2.5) ?: 0.15,
+                angle = d.getOrNull(8) ?: 0.0,
+                ratio = parsed?.ratio ?: d.getOrNull(11) ?: 1.0,
+                tipAsset = baseTip,
+                fade = parsed?.fade ?: KppHelper.FADE_SOLID,
+                softness = parsed?.softness ?: KppHelper.SOFTNESS_NEUTRAL,
+                isCustomized = true,
+                dynamicsCustomized = parsed?.sensorXml?.isNotEmpty() == true,
+            )
+            brushParams[presetName] = defaultParams
+        }
+        persistBrushParams()
+        toolBrushStates = toolBrushStates.mapValues { (_, s) ->
+            s.copy(paramMemory = s.paramMemory - presetName)
+        }
+        persistToolBrushStates()
+    }
+
     internal fun PaintViewModel.resetBrushParams() {
         val index = brushPresetIndex
         val preset = brushPresets.firstOrNull { it.index == index }
         if (preset != null) {
-            val dir = File(appContext.filesDir, "paintoppresets")
-            val target = File(dir, "${preset.name}.kpp")
-            try {
-                val assetNames = appContext.assets.list("paintoppresets") ?: emptyArray()
-                if (assetNames.contains("${preset.name}.kpp")) {
-                    appContext.assets.open("paintoppresets/${preset.name}.kpp").use { input ->
-                        target.outputStream().use { output -> input.copyTo(output) }
-                    }
-                }
-            } catch (_: Exception) {}
-
-            brushParams.remove(preset.name)
-            persistBrushParams()
-            toolBrushStates = toolBrushStates.mapValues { (_, s) ->
-                s.copy(paramMemory = s.paramMemory - preset.name)
-            }
-            persistToolBrushStates()
+            resetSingleBrushPresetState(preset.name)
         }
         if (index >= 0) {
             selectBrushPreset(index)
@@ -629,6 +689,11 @@ import kotlinx.coroutines.withContext
             runCatching { kppFile.writeBytes(kppBytes) }
         }
         persistBrushParams()
+        toolBrushStates = toolBrushStates.mapValues { (_, s) ->
+            if (initial != null) s.copy(paramMemory = s.paramMemory + (preset.name to listOf(initial.size, initial.opacity, initial.flow)))
+            else s.copy(paramMemory = s.paramMemory - preset.name)
+        }
+        persistToolBrushStates()
         brushDynamicOptions.clear()
         selectBrushPreset(preset.index)
         return true
@@ -636,23 +701,7 @@ import kotlinx.coroutines.withContext
 
     /** Reset a brush preset back to factory default parameters */
     internal fun PaintViewModel.resetBrushPresetToDefault(presetName: String) {
-        val dir = File(appContext.filesDir, "paintoppresets")
-        val target = File(dir, "$presetName.kpp")
-        try {
-            val assetNames = appContext.assets.list("paintoppresets") ?: emptyArray()
-            if (assetNames.contains("$presetName.kpp")) {
-                appContext.assets.open("paintoppresets/$presetName.kpp").use { input ->
-                    target.outputStream().use { output -> input.copyTo(output) }
-                }
-            }
-        } catch (_: Exception) {}
-
-        brushParams.remove(presetName)
-        persistBrushParams()
-        toolBrushStates = toolBrushStates.mapValues { (_, s) ->
-            s.copy(paramMemory = s.paramMemory - presetName)
-        }
-        persistToolBrushStates()
+        resetSingleBrushPresetState(presetName)
 
         val preset = brushPresets.firstOrNull { it.name == presetName }
         if (preset != null && preset.index == brushPresetIndex) {
@@ -698,8 +747,8 @@ import kotlinx.coroutines.withContext
 
     internal fun resolvePresetSize(engineSize: Double, savedSize: Double?): Double {
         if (engineSize.isFinite() && engineSize > 1.0) return engineSize
-        if (savedSize == null || !savedSize.isFinite() || savedSize <= 1.0) return engineSize
-        return savedSize
+        if (savedSize != null && savedSize.isFinite() && savedSize > 1.0) return savedSize
+        return if (engineSize.isFinite()) engineSize else 20.0
     }
 
     internal fun PaintViewModel.selectBrushPreset(index: Int) {
@@ -826,8 +875,8 @@ import kotlinx.coroutines.withContext
                 brushSmudgeMode = saved.smudgeMode
                 val kppFile = preset?.name?.let { File(File(appContext.filesDir, "paintoppresets"), "$it.kpp") }
                 val parsed = if (kppFile?.exists() == true) KppHelper.parseKppFile(kppFile) else KppHelper.KppParsedAttributes()
-                val effectiveSensors = if (saved.dynamicOptions.isNotEmpty()) saved.dynamicOptions else parsed.sensorXml
-                applySensorXmlToDynamicOptions(effectiveSensors)
+                val effectiveSensors = if (saved.dynamicsCustomized && saved.dynamicOptions.isNotEmpty()) saved.dynamicOptions else parsed.sensorXml
+                applySensorXmlToDynamicOptions(effectiveSensors, parsed)
             } else {
                 // 原生 Krita 预设: 读取预设自身在引擎中解析得到的默认参数与 XML 原生配置
                 val d = ReverieCoreBridge.brushPresetDefaults(index)
@@ -835,7 +884,7 @@ import kotlinx.coroutines.withContext
                 val parsed = if (kppFile?.exists() == true) KppHelper.parseKppFile(kppFile) else KppHelper.KppParsedAttributes()
 
                 if (d.size >= 8) {
-                    brushSize = resolvePresetSize(d[0], saved?.size)
+                    brushSize = resolvePresetSize(d[0], saved?.size ?: parsed.paintOpSize)
                     brushOpacity = d[1].coerceIn(0.0, 1.0)
                     brushFlow = d[2].coerceIn(0.0, 1.0)
                     val rawSp = d[3]
@@ -848,7 +897,7 @@ import kotlinx.coroutines.withContext
                     brushColorRate = d[6]
                     brushSmudgeMode = 0
                 } else if (d.size >= 3) {
-                    brushSize = resolvePresetSize(d[0], saved?.size)
+                    brushSize = resolvePresetSize(d[0], saved?.size ?: parsed.paintOpSize)
                     brushOpacity = d[1].coerceIn(0.0, 1.0)
                     brushFlow = d[2].coerceIn(0.0, 1.0)
                     brushSpacing = 0.1
@@ -859,10 +908,11 @@ import kotlinx.coroutines.withContext
                 // SoftnessValue 缺省即 1.0(neutral/不改动笔尖羽化)；引擎侧兜底报告的是 0.5，
                 // 那是"半羽化"而不是中性值，所以这里不拿 d[10] 兜底，直接落到 neutral。
                 brushSoftness = parsed.softness ?: KppHelper.SOFTNESS_NEUTRAL
-                applySensorXmlToDynamicOptions(parsed.sensorXml)
+                applySensorXmlToDynamicOptions(parsed.sensorXml, parsed)
                 brushRatio = parsed.ratio ?: d.getOrNull(11) ?: 1.0
                 brushSharpness = d.getOrNull(12) ?: 0.0
-                brushRotation = d.getOrNull(13) ?: 0.0
+                // 附加旋转偏角默认初始为 0.0 度，不读取 Krita 的 RotationValue 强度乘数 (1.0)
+                brushRotation = 0.0
                 brushPressureSize = parsed.pressureSize ?: d.getOrNull(14) ?: 1.0
                 brushPressureOpacity = parsed.pressureOpacity ?: d.getOrNull(15) ?: 0.0
                 brushPressureFlow = parsed.pressureFlow ?: d.getOrNull(16) ?: 0.0
@@ -937,14 +987,29 @@ import kotlinx.coroutines.withContext
                 } catch (_: Exception) {
                 }
             }
+            val kppFile = preset?.name?.let { File(File(appContext.filesDir, "paintoppresets"), "$it.kpp") }
+            val parsed = if (kppFile?.exists() == true) KppHelper.parseKppFile(kppFile) else KppHelper.KppParsedAttributes()
+            val d = if (index >= 0) ReverieCoreBridge.brushPresetDefaults(index) else DoubleArray(0)
+            val mem = toolBrushStates[currentToolId]?.paramMemory?.get(preset?.name)
+            val effSize = mem?.getOrNull(0) ?: (if (isCustomized) saved?.size else null)
+            val finalSize = effSize ?: resolvePresetSize(d.getOrNull(0) ?: 0.0, saved?.size ?: parsed.paintOpSize)
+            if (finalSize.isFinite() && finalSize > 0.0) {
+                ReverieCoreBridge.setBrushSize(finalSize)
+            }
+            val effOpacity = mem?.getOrNull(1) ?: (if (isCustomized) saved?.opacity else null) ?: d.getOrNull(1)?.takeIf { it.isFinite() }
+            val effFlow = mem?.getOrNull(2) ?: (if (isCustomized) saved?.flow else null) ?: d.getOrNull(2)?.takeIf { it.isFinite() }
+            if (effOpacity != null && effOpacity.isFinite()) {
+                ReverieCoreBridge.setBrushOpacity(effOpacity.coerceIn(0.0, 1.0))
+            }
+            if (effFlow != null && effFlow.isFinite()) {
+                ReverieCoreBridge.setBrushFlow(effFlow.coerceIn(0.0, 1.0))
+            }
             if (saved != null && isCustomized) {
-                ReverieCoreBridge.setBrushSize(saved.size)
-                ReverieCoreBridge.setBrushOpacity(saved.opacity)
-                ReverieCoreBridge.setBrushFlow(saved.flow)
                 if (saved.spacingCustomized) {
                     ReverieCoreBridge.setBrushSpacing(saved.spacing)
                 }
-                ReverieCoreBridge.setBrushAngle(saved.angle)
+                val effAngle = ((saved.angle + saved.rotation) % 360.0).let { if (it < 0.0) it + 360.0 else it }
+                ReverieCoreBridge.setBrushAngle(effAngle)
                 if (saved.dynamicsCustomized) {
                     ReverieCoreBridge.setBrushScatter(saved.scatter)
                 }
@@ -959,13 +1024,15 @@ import kotlinx.coroutines.withContext
                         for ((opt, xml) in saved.dynamicOptions) {
                             val sensorId = Regex("""id="([^"]+)"""").find(xml)?.groupValues?.getOrNull(1) ?: "pressure"
                             val curve = Regex("""<curve>([^<]*)</curve>""").find(xml)?.groupValues?.getOrNull(1) ?: "0,0;1,1;"
-                            val strength = when (opt.lowercase()) {
+                            val enabledAttr = Regex("""enabled="([^"]+)"""").find(xml)?.groupValues?.getOrNull(1)?.toBooleanStrictOrNull()
+                            val strengthAttr = Regex("""strength="([^"]+)"""").find(xml)?.groupValues?.getOrNull(1)?.toDoubleOrNull()
+                            val strength = strengthAttr ?: when (opt.lowercase()) {
                                 "size" -> saved.pressureSize
                                 "opacity" -> saved.pressureOpacity
                                 "flow" -> saved.pressureFlow
                                 else -> 1.0
                             }
-                            val isEnabled = when (opt.lowercase()) {
+                            val isEnabled = enabledAttr ?: when (opt.lowercase()) {
                                 "size" -> saved.pressureEnabled && saved.pressureSize > 0.001
                                 "opacity" -> saved.pressureEnabled && saved.pressureOpacity > 0.001
                                 "flow" -> saved.pressureEnabled && saved.pressureFlow > 0.001
@@ -989,7 +1056,11 @@ import kotlinx.coroutines.withContext
                         )
                     }
                 }
-                ReverieCoreBridge.setBrushFollowDirection(saved.followDirection)
+                if (saved.followDirection) {
+                    ReverieCoreBridge.setBrushFollowDirection(true)
+                } else if (saved.dynamicsCustomized && brushRotationSensor.isBlank()) {
+                    ReverieCoreBridge.setBrushFollowDirection(false)
+                }
                 ReverieCoreBridge.setBrushJitter(saved.jitterAngle, saved.jitterSize)
                 ReverieCoreBridge.setBrushMirror(saved.randomFlipX, saved.randomFlipY)
                 ReverieCoreBridge.setBrushAntiAliasing(saved.antiAliasing)
@@ -1013,10 +1084,48 @@ import kotlinx.coroutines.withContext
                 )
             } else {
                 ReverieCoreBridge.setBrushCompositeOp(effectiveCompOp)
-                if (saved?.tipAsset?.isNotEmpty() == true) {
-                    ReverieCoreBridge.setBrushTipAsset(saved.tipAsset)
+                val effTip = saved?.tipAsset?.takeIf { it.isNotEmpty() } ?: parsed.tipAsset
+                if (!effTip.isNullOrEmpty()) {
+                    ReverieCoreBridge.setBrushTipAsset(effTip)
                 } else {
                     ReverieCoreBridge.setBrushTipAsset("")
+                }
+                if (saved?.dynamicsCustomized == true) {
+                    if (saved.dynamicOptions.isNotEmpty()) {
+                        for ((opt, xml) in saved.dynamicOptions) {
+                            val sensorId = Regex("""id="([^"]+)"""").find(xml)?.groupValues?.getOrNull(1) ?: "pressure"
+                            val curve = Regex("""<curve>([^<]*)</curve>""").find(xml)?.groupValues?.getOrNull(1) ?: "0,0;1,1;"
+                            val enabledAttr = Regex("""enabled="([^"]+)"""").find(xml)?.groupValues?.getOrNull(1)?.toBooleanStrictOrNull()
+                            val strengthAttr = Regex("""strength="([^"]+)"""").find(xml)?.groupValues?.getOrNull(1)?.toDoubleOrNull()
+                            val strength = strengthAttr ?: when (opt.lowercase()) {
+                                "size" -> saved.pressureSize
+                                "opacity" -> saved.pressureOpacity
+                                "flow" -> saved.pressureFlow
+                                else -> 1.0
+                            }
+                            val isEnabled = enabledAttr ?: when (opt.lowercase()) {
+                                "size" -> saved.pressureEnabled && saved.pressureSize > 0.001
+                                "opacity" -> saved.pressureEnabled && saved.pressureOpacity > 0.001
+                                "flow" -> saved.pressureEnabled && saved.pressureFlow > 0.001
+                                else -> true
+                            }
+                            ReverieCoreBridge.setBrushOptionDynamics(
+                                opt,
+                                isEnabled,
+                                sensorId,
+                                curve,
+                                strength,
+                            )
+                        }
+                    } else {
+                        ReverieCoreBridge.setBrushPressureDynamics(
+                            saved.pressureEnabled,
+                            saved.pressureSize,
+                            saved.pressureOpacity,
+                            saved.pressureFlow,
+                            saved.pressureCurve,
+                        )
+                    }
                 }
             }
             fetchBrushOutlinePolygons()
@@ -1067,7 +1176,8 @@ import kotlinx.coroutines.withContext
                 if (saved.spacingCustomized) {
                     ReverieCoreBridge.setBrushSpacing(saved.spacing)
                 }
-                ReverieCoreBridge.setBrushAngle(saved.angle)
+                val effAngle = ((saved.angle + saved.rotation) % 360.0).let { if (it < 0.0) it + 360.0 else it }
+                ReverieCoreBridge.setBrushAngle(effAngle)
                 if (saved.dynamicsCustomized) {
                     ReverieCoreBridge.setBrushScatter(saved.scatter)
                 }
@@ -1082,13 +1192,15 @@ import kotlinx.coroutines.withContext
                         for ((opt, xml) in saved.dynamicOptions) {
                             val sensorId = Regex("""id="([^"]+)"""").find(xml)?.groupValues?.getOrNull(1) ?: "pressure"
                             val curve = Regex("""<curve>([^<]*)</curve>""").find(xml)?.groupValues?.getOrNull(1) ?: "0,0;1,1;"
-                            val strength = when (opt.lowercase()) {
+                            val enabledAttr = Regex("""enabled="([^"]+)"""").find(xml)?.groupValues?.getOrNull(1)?.toBooleanStrictOrNull()
+                            val strengthAttr = Regex("""strength="([^"]+)"""").find(xml)?.groupValues?.getOrNull(1)?.toDoubleOrNull()
+                            val strength = strengthAttr ?: when (opt.lowercase()) {
                                 "size" -> saved.pressureSize
                                 "opacity" -> saved.pressureOpacity
                                 "flow" -> saved.pressureFlow
                                 else -> 1.0
                             }
-                            val isEnabled = when (opt.lowercase()) {
+                            val isEnabled = enabledAttr ?: when (opt.lowercase()) {
                                 "size" -> saved.pressureEnabled && saved.pressureSize > 0.001
                                 "opacity" -> saved.pressureEnabled && saved.pressureOpacity > 0.001
                                 "flow" -> saved.pressureEnabled && saved.pressureFlow > 0.001
@@ -1112,7 +1224,11 @@ import kotlinx.coroutines.withContext
                         )
                     }
                 }
-                ReverieCoreBridge.setBrushFollowDirection(saved.followDirection)
+                if (saved.followDirection) {
+                    ReverieCoreBridge.setBrushFollowDirection(true)
+                } else if (saved.dynamicsCustomized && brushRotationSensor.isBlank()) {
+                    ReverieCoreBridge.setBrushFollowDirection(false)
+                }
                 ReverieCoreBridge.setBrushJitter(saved.jitterAngle, saved.jitterSize)
                 ReverieCoreBridge.setBrushMirror(saved.randomFlipX, saved.randomFlipY)
                 ReverieCoreBridge.setBrushAntiAliasing(saved.antiAliasing)
@@ -1185,11 +1301,12 @@ import kotlinx.coroutines.withContext
             lastDrawingToolId
         }
         val name = brushPresets.firstOrNull { it.index == brushPresetIndex }?.name ?: return
-        val currentMap = toolBrushStates[targetToolId] ?: return
+        val currentMap = toolBrushStates[targetToolId] ?: PaintViewModel.ToolBrushState(presetIndex = brushPresetIndex)
         toolBrushStates = toolBrushStates.toMutableMap().apply {
             put(
                 targetToolId,
                 currentMap.copy(
+                    presetIndex = if (currentMap.presetIndex >= 0) currentMap.presetIndex else brushPresetIndex,
                     paramMemory = currentMap.paramMemory.toMutableMap().apply {
                         put(name, listOf(brushSize, brushOpacity, brushFlow))
                     }
@@ -1308,7 +1425,7 @@ import kotlinx.coroutines.withContext
                     BrushPresetInfo(
                         index = i,
                         name = nm,
-                        thumbBytes = ReverieCoreBridge.brushPresetThumbData(i),
+                        thumbBytes = ReverieCoreBridge.brushPresetThumbData(i) ?: ByteArray(0),
                         group = userBrushGroups[nm] ?: inferBrushGroup(nm),
                         isBuiltIn = builtInNames.contains(nm),
                     ),
@@ -1332,25 +1449,36 @@ import kotlinx.coroutines.withContext
         val src = brushPresets.firstOrNull { it.index == presetIndex } ?: return false
         val cleanName = newName?.trim()?.ifEmpty { null } ?: "${src.name} 副本"
         val dir = File(appContext.filesDir, "paintoppresets")
-        val srcFile = File(dir, "${src.name}.kpp")
-        val dstFile = File(dir, "$cleanName.kpp")
-        if (srcFile.exists()) {
-            srcFile.copyTo(dstFile, overwrite = true)
-        }
-        val srcCustomized = brushParams[src.name]
-        if (srcCustomized != null) {
-            val cleanParams = srcCustomized.copy(
-                author = if (src.isBuiltIn) "Krita (副本)" else srcCustomized.author,
-                isAuthorLocked = false,
-            )
-            brushParams[cleanName] = cleanParams
-            if (dstFile.exists()) {
-                KppHelper.updateKppFile(dstFile, cleanName, cleanParams)
+        val srcMyb = File(dir, "${src.name}.myb")
+        val isMyb = srcMyb.exists()
+        if (isMyb) {
+            val dstMyb = File(dir, "$cleanName.myb")
+            srcMyb.copyTo(dstMyb, overwrite = true)
+            val srcPrev = File(dir, "${src.name}_prev.png")
+            if (srcPrev.exists()) {
+                srcPrev.copyTo(File(dir, "${cleanName}_prev.png"), overwrite = true)
             }
         } else {
-            // 源笔刷未自定义: 仅更新 XML 内预设名称, 绝不拿空默认参数覆写破坏原预设内容 (引擎类型/笔尖/纹理/蒙版/动态等)
-            if (dstFile.exists()) {
-                KppHelper.updatePresetName(dstFile, cleanName)
+            val srcFile = File(dir, "${src.name}.kpp")
+            val dstFile = File(dir, "$cleanName.kpp")
+            if (srcFile.exists()) {
+                srcFile.copyTo(dstFile, overwrite = true)
+            }
+            val srcCustomized = brushParams[src.name]
+            if (srcCustomized != null) {
+                val cleanParams = srcCustomized.copy(
+                    author = if (src.isBuiltIn) "Krita (副本)" else srcCustomized.author,
+                    isAuthorLocked = false,
+                )
+                brushParams[cleanName] = cleanParams
+                if (dstFile.exists()) {
+                    KppHelper.updateKppFile(dstFile, cleanName, cleanParams)
+                }
+            } else {
+                // 源笔刷未自定义: 仅更新 XML 内预设名称, 绝不拿空默认参数覆写破坏原预设内容 (引擎类型/笔尖/纹理/蒙版/动态等)
+                if (dstFile.exists()) {
+                    KppHelper.updatePresetName(dstFile, cleanName)
+                }
             }
         }
         persistBrushParams()
@@ -1372,6 +1500,10 @@ import kotlinx.coroutines.withContext
         val dir = File(appContext.filesDir, "paintoppresets")
         val file = File(dir, "${preset.name}.kpp")
         if (file.exists()) file.delete()
+        val mybFile = File(dir, "${preset.name}.myb")
+        if (mybFile.exists()) mybFile.delete()
+        val prevFile = File(dir, "${preset.name}_prev.png")
+        if (prevFile.exists()) prevFile.delete()
         brushParams.remove(preset.name)
         persistBrushParams()
         userBrushGroups = userBrushGroups - preset.name
@@ -1397,6 +1529,10 @@ import kotlinx.coroutines.withContext
             for (p in customPresets) {
                 val file = File(dir, "${p.name}.kpp")
                 if (file.exists()) file.delete()
+                val mybFile = File(dir, "${p.name}.myb")
+                if (mybFile.exists()) mybFile.delete()
+                val prevFile = File(dir, "${p.name}_prev.png")
+                if (prevFile.exists()) prevFile.delete()
                 brushParams.remove(p.name)
             }
             if (deletedNames.isNotEmpty()) {
@@ -1550,7 +1686,7 @@ import kotlinx.coroutines.withContext
 
             val chosenGroup = targetGroup?.trim()?.takeIf { it.isNotEmpty() }
 
-            if (filename.endsWith(".kpp", ignoreCase = true)) {
+            if (filename.endsWith(".kpp", ignoreCase = true) || filename.endsWith(".myb", ignoreCase = true)) {
                 val target = File(presetDir, filename)
                 resolver.openInputStream(uri)?.use { input ->
                     target.outputStream().use { output -> input.copyTo(output) }
@@ -1758,7 +1894,7 @@ import kotlinx.coroutines.withContext
                         author = "外部创作者 (ABR)",
                         isAuthorLocked = true,
                         description = "导入自 Photoshop ABR 笔刷包: $packBaseName",
-                        isCustomized = false,
+                        isCustomized = true,
                         dynamicsCustomized = hasDynamics,
                         smudgeCustomized = false,
                     )

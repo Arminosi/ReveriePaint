@@ -26,8 +26,11 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asAndroidPath
@@ -181,9 +184,13 @@ internal fun CanvasOverlay(
         val hasActiveSelection = (vm.hasSelection && !isTransform) || isSelecting
         val animFraction = if (hasActiveSelection) selAnimFraction.value else 0f
 
+        val tiles = vm.displayTiles.drawable()
+        val displayBmp = if (tiles != null) null else vm.displayBitmap?.takeIf { !it.isRecycled }
+        val bmpW = tiles?.grid?.width ?: displayBmp?.width ?: vm.docWidth.takeIf { it > 0 } ?: 1
+        val bmpH = tiles?.grid?.height ?: displayBmp?.height ?: vm.docHeight.takeIf { it > 0 } ?: 1
         val bmp = object {
-            val width: Int = if (vm.renderW > 0) vm.renderW else vm.docWidth
-            val height: Int = if (vm.renderH > 0) vm.renderH else vm.docHeight
+            val width: Int = bmpW
+            val height: Int = bmpH
         }
         val imgW = bmp.width.toFloat()
         val imgH = bmp.height.toFloat()
@@ -590,11 +597,7 @@ internal fun CanvasOverlay(
                                 )
                             )
                         }
-                        Tool.GRADIENT -> {
-                            drawLine(Color.White, s, e, strokeWidth = 2.dp.toPx() / currentScale)
-                            drawCircle(Color.White, radius = 5.dp.toPx() / currentScale, center = s)
-                            drawCircle(Morandi.accent, radius = 5.dp.toPx() / currentScale, center = e)
-                        }
+                        Tool.GRADIENT -> Unit
                         else -> Unit
                     }
                 }
@@ -924,6 +927,185 @@ internal fun CanvasOverlay(
                     }
                 }
 
+                // Interactive Gradient Tool Rendering (Handles + High Fidelity Live Preview)
+                val gradientState = vm.gradientState
+                if (gradientState.active && gradientState.p1 != gradientState.p2) {
+                    val scX = if (vm.docWidth > 0) bmp.width.toFloat() / vm.docWidth else 1f
+                    val scY = if (vm.docHeight > 0) bmp.height.toFloat() / vm.docHeight else 1f
+                    val bx = { p: Offset -> Offset(p.x * scX - bmp.width / 2f, p.y * scY - bmp.height / 2f) }
+                    val currentScale = zoom.value * fitScale
+
+                    val fgColor = try {
+                        Color(android.graphics.Color.parseColor(vm.brushColor))
+                    } catch (_: Exception) {
+                        Color.Black
+                    }
+                    val bgColor = try {
+                        Color(android.graphics.Color.parseColor(vm.brushSecondaryColor))
+                    } catch (_: Exception) {
+                        Color.White
+                    }
+
+                    var effectiveStops = gradientState.getEffectiveStops(fgColor, bgColor)
+                    if (gradientState.reverse) {
+                        effectiveStops = effectiveStops.map {
+                            GradientColorStop(1f - it.position, it.colorArgb)
+                        }.sortedBy { it.position }
+                    }
+
+                    val colorStops = if (effectiveStops.size >= 2) {
+                        effectiveStops.map { it.position.coerceIn(0f, 1f) to Color(it.colorArgb) }.toTypedArray()
+                    } else {
+                        arrayOf(0f to Color.Black, 1f to Color.White)
+                    }
+
+                    val tileMode = when (gradientState.repeat) {
+                        GradientRepeat.LOOP -> TileMode.Repeated
+                        GradientRepeat.MIRROR -> TileMode.Mirror
+                        else -> TileMode.Clamp
+                    }
+
+                    val composeBlendMode = when (gradientState.blendMode) {
+                        "multiply" -> BlendMode.Multiply
+                        "screen" -> BlendMode.Screen
+                        "overlay" -> BlendMode.Overlay
+                        "soft_light" -> BlendMode.Softlight
+                        "hard_light" -> BlendMode.Hardlight
+                        "dodge" -> BlendMode.ColorDodge
+                        "burn" -> BlendMode.ColorBurn
+                        else -> BlendMode.SrcOver
+                    }
+
+                    val p1Canvas = bx(gradientState.p1)
+                    val p2Canvas = bx(gradientState.p2)
+
+                    val previewBrush = when (gradientState.type) {
+                        GradientType.RADIAL -> {
+                            val r = maxOf(1f, (p2Canvas - p1Canvas).getDistance())
+                            Brush.radialGradient(colorStops = colorStops, center = p1Canvas, radius = r, tileMode = tileMode)
+                        }
+                        GradientType.CONICAL -> {
+                            Brush.sweepGradient(colorStops = colorStops, center = p1Canvas)
+                        }
+                        GradientType.SYMMETRIC -> {
+                            val dir = p2Canvas - p1Canvas
+                            val symStops = mutableListOf<Pair<Float, Color>>()
+                            effectiveStops.forEach { s ->
+                                val orig = s.position.coerceIn(0f, 1f)
+                                symStops.add(0.5f + orig * 0.5f to Color(s.colorArgb))
+                                symStops.add(0.5f - orig * 0.5f to Color(s.colorArgb))
+                            }
+                            symStops.sortBy { it.first }
+                            Brush.linearGradient(colorStops = symStops.toTypedArray(), start = p1Canvas - dir, end = p2Canvas, tileMode = tileMode)
+                        }
+                        GradientType.DIAMOND -> {
+                            val r = maxOf(1f, (p2Canvas - p1Canvas).getDistance())
+                            Brush.radialGradient(colorStops = colorStops, center = p1Canvas, radius = r, tileMode = tileMode)
+                        }
+                        else -> { // LINEAR
+                            Brush.linearGradient(colorStops = colorStops, start = p1Canvas, end = p2Canvas, tileMode = tileMode)
+                        }
+                    }
+
+                    // 1. 全幅画布渐变预览
+                    drawRect(
+                        brush = previewBrush,
+                        topLeft = Offset(-bmp.width / 2f, -bmp.height / 2f),
+                        size = androidx.compose.ui.geometry.Size(bmp.width.toFloat(), bmp.height.toFloat()),
+                        alpha = gradientState.opacity,
+                        blendMode = composeBlendMode,
+                    )
+
+                    // 2. 渐变轴线与手柄
+                    drawLine(
+                        Color.Black.copy(alpha = 0.6f),
+                        p1Canvas,
+                        p2Canvas,
+                        strokeWidth = 3.5.dp.toPx() / currentScale,
+                    )
+                    drawLine(
+                        Color.White,
+                        p1Canvas,
+                        p2Canvas,
+                        strokeWidth = 1.5.dp.toPx() / currentScale,
+                    )
+
+                    // 轴中点平移手柄
+                    val midPt = (p1Canvas + p2Canvas) / 2f
+                    drawCircle(
+                        Color.Black.copy(alpha = 0.7f),
+                        radius = 7.dp.toPx() / currentScale,
+                        center = midPt,
+                    )
+                    drawCircle(
+                        if (gradientState.activeHandle == GradientHandleId.MID_BODY) Morandi.accent else Color.White,
+                        radius = 5.dp.toPx() / currentScale,
+                        center = midPt,
+                    )
+                    drawCircle(
+                        if (gradientState.activeHandle == GradientHandleId.MID_BODY) Color.White else Morandi.accent,
+                        radius = 2.5.dp.toPx() / currentScale,
+                        center = midPt,
+                    )
+
+                    // 轴上多色标小手柄
+                    effectiveStops.forEachIndexed { idx, s ->
+                        val stopPt = p1Canvas + (p2Canvas - p1Canvas) * s.position
+                        val isSelected = gradientState.activeHandle == GradientHandleId.STOP_BASE + idx
+                        drawCircle(
+                            Color.Black.copy(alpha = 0.7f),
+                            radius = 6.dp.toPx() / currentScale,
+                            center = stopPt,
+                        )
+                        drawCircle(
+                            if (isSelected) Morandi.accent else Color.White,
+                            radius = 4.5.dp.toPx() / currentScale,
+                            center = stopPt,
+                        )
+                        drawCircle(
+                            Color(s.colorArgb),
+                            radius = 3.dp.toPx() / currentScale,
+                            center = stopPt,
+                        )
+                    }
+
+                    // 起点手柄 (P1)
+                    val firstCol = effectiveStops.firstOrNull()?.colorArgb?.let { Color(it) } ?: Color.Black
+                    drawCircle(
+                        Color.Black.copy(alpha = 0.7f),
+                        radius = 9.dp.toPx() / currentScale,
+                        center = p1Canvas,
+                    )
+                    drawCircle(
+                        if (gradientState.activeHandle == GradientHandleId.START) Morandi.accent else Color.White,
+                        radius = 7.dp.toPx() / currentScale,
+                        center = p1Canvas,
+                    )
+                    drawCircle(
+                        firstCol,
+                        radius = 5.dp.toPx() / currentScale,
+                        center = p1Canvas,
+                    )
+
+                    // 终点手柄 (P2)
+                    val lastCol = effectiveStops.lastOrNull()?.colorArgb?.let { Color(it) } ?: Color.White
+                    drawCircle(
+                        Color.Black.copy(alpha = 0.7f),
+                        radius = 9.dp.toPx() / currentScale,
+                        center = p2Canvas,
+                    )
+                    drawCircle(
+                        if (gradientState.activeHandle == GradientHandleId.END) Morandi.accent else Color.White,
+                        radius = 7.dp.toPx() / currentScale,
+                        center = p2Canvas,
+                    )
+                    drawCircle(
+                        lastCol,
+                        radius = 5.dp.toPx() / currentScale,
+                        center = p2Canvas,
+                    )
+                }
+
                 // Interactive Typography Tool Rendering (Handles + WYSIWYG Preview)
                 if (vm.isTypographyEditing) {
                     val cfg = vm.typographyConfig
@@ -1039,7 +1221,7 @@ internal fun CanvasOverlay(
                 // 1. Procreate 风格：仅在选区工具内显示未选区 45 度动态流动斑马纹；切到非选区工具（画笔、橡皮擦等）时自动隐藏遮罩，保持画布视野干净
                 val isTransform = (tool == Tool.TRANSFORM)
                 val isSelectionTool = tool.group == ToolGroup.SELECTION
-                val shouldShowZebra = isSelectionTool && !isTransform && (vm.hasSelection || isSelecting)
+                val shouldShowZebra = isSelectionTool && !isTransform && !vm.transientTransformSelectionPending && (vm.hasSelection || isSelecting)
                 val selBmp = if (vm.hasSelection) vm.selectionOverlayBitmap else null
                 if (shouldShowZebra) {
                     val nativeCanvas = drawContext.canvas.nativeCanvas
@@ -1186,7 +1368,7 @@ internal fun CanvasOverlay(
                 }
 
                 // 2. 选区边界动态黑白交替流动蚂蚁线：无论在选区工具内还是切到其他工具（画笔、橡皮擦等），只要存在活动选区，选区边缘均显示动态流动的黑白相间蚂蚁线
-                val shouldShowOutline = !isTransform && vm.hasSelection && (!isSelecting || vm.selectionMode != 0)
+                val shouldShowOutline = !isTransform && vm.hasSelection && !vm.transientTransformSelectionPending && (!isSelecting || vm.selectionMode != 0)
                 if (shouldShowOutline) {
                     vm.selectionOutlinePath?.let { outlinePath ->
                         val currentScale = (zoom.value * fitScale).coerceAtLeast(0.001f)
@@ -1412,7 +1594,7 @@ internal fun CanvasOverlay(
             }
 
             drawColorLoupe(
-                pickerActive = pickerActive.value,
+                pickerActive = pickerActive.value && (tool == Tool.PICKER || isCursorTouching.value),
                 pickerScreenPos = pickerScreenPos.value,
                 pickerInitialColor = pickerInitialColor.value,
                 pickerCurrentColor = pickerCurrentColor.value,

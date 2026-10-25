@@ -19,11 +19,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -67,7 +70,7 @@ fun DrawingGuidePanel(
     Box(
         modifier = modifier
             .width(320.dp)
-            .shadow(16.dp, panelShape, spotColor = Color.Black.copy(alpha = 0.5f))
+            .shadow(16.dp, panelShape, spotColor = Color.Black.copy(alpha = 0.45f))
             .clip(panelShape)
             .then(
                 if (vm.blurBackground && hazeState != null) {
@@ -79,7 +82,13 @@ fun DrawingGuidePanel(
             .glassBorder(panelShape)
             .padding(14.dp),
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 520.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
             // Header
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -91,7 +100,7 @@ fun DrawingGuidePanel(
                         painter = painterResource(R.drawable.ic_canvas_resize),
                         contentDescription = null,
                         tint = Morandi.accent,
-                        modifier = Modifier.size(18.dp),
+                        modifier = Modifier.size(17.dp),
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
@@ -115,39 +124,14 @@ fun DrawingGuidePanel(
 
             QuickShapeSettingRow(vm)
 
-            // Mode Selector
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                GuideModeChip(
-                    label = androidx.compose.ui.res.stringResource(R.string.guide_mode_off),
-                    selected = guide.mode == GuideMode.OFF,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    vm.drawingGuide = guide.copy(mode = GuideMode.OFF, assistedDrawing = false)
-                    onDismiss()
-                }
-                GuideModeChip(
-                    label = androidx.compose.ui.res.stringResource(R.string.guide_mode_2d_grid),
-                    selected = guide.mode == GuideMode.GRID_2D,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    vm.drawingGuide = guide.copy(mode = GuideMode.GRID_2D, assistedDrawing = true)
-                }
-                GuideModeChip(
-                    label = androidx.compose.ui.res.stringResource(R.string.guide_mode_isometric),
-                    selected = guide.mode == GuideMode.ISOMETRIC,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    vm.drawingGuide = guide.copy(mode = GuideMode.ISOMETRIC, assistedDrawing = true)
-                }
-                GuideModeChip(
-                    label = androidx.compose.ui.res.stringResource(R.string.guide_mode_perspective),
-                    selected = guide.mode == GuideMode.PERSPECTIVE,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    if (guide.mode == GuideMode.PERSPECTIVE) {
+            // Mode Selector: 现代胶囊分段器
+            SegmentedModeSelector(
+                currentMode = guide.mode,
+                onSelectMode = { newMode ->
+                    if (newMode == GuideMode.OFF) {
+                        vm.drawingGuide = guide.copy(mode = GuideMode.OFF, assistedDrawing = false)
+                        onDismiss()
+                    } else if (newMode == guide.mode) {
                         vm.drawingGuide = guide.copy(mode = GuideMode.OFF, assistedDrawing = false)
                         onDismiss()
                     } else {
@@ -155,112 +139,202 @@ fun DrawingGuidePanel(
                             listOf(Point2D(vm.docWidth * 0.5f, vm.docHeight * 0.35f))
                         } else guide.perspectiveVanishingPoints
                         vm.drawingGuide = guide.copy(
-                            mode = GuideMode.PERSPECTIVE,
+                            mode = newMode,
                             assistedDrawing = true,
                             perspectiveVanishingPoints = pts,
                         )
                     }
                 }
-                GuideModeChip(
-                    label = androidx.compose.ui.res.stringResource(R.string.guide_mode_symmetry),
-                    selected = guide.mode == GuideMode.SYMMETRY,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    if (guide.mode == GuideMode.SYMMETRY) {
-                        vm.drawingGuide = guide.copy(mode = GuideMode.OFF, assistedDrawing = false)
-                        onDismiss()
-                    } else {
-                        vm.drawingGuide = guide.copy(mode = GuideMode.SYMMETRY, assistedDrawing = true)
-                    }
-                }
-            }
+            )
 
             if (guide.mode != GuideMode.OFF) {
-                // Assisted Drawing Switch
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(Morandi.border.copy(alpha = 0.25f))
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column {
-                        Text(androidx.compose.ui.res.stringResource(R.string.guide_assist_title), color = Morandi.text, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                // 辅助吸附开关 (仅在非 3D 透视模式下呈现)
+                if (guide.mode != GuideMode.PERSPECTIVE || !guide.perspective3d) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Morandi.border.copy(alpha = 0.22f))
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Text(
-                            if (guide.mode == GuideMode.SYMMETRY) androidx.compose.ui.res.stringResource(R.string.guide_assist_symmetry_desc) else androidx.compose.ui.res.stringResource(R.string.guide_assist_align_desc),
-                            color = Morandi.subText,
-                            fontSize = 11.sp,
+                            text = androidx.compose.ui.res.stringResource(R.string.guide_assist_title),
+                            color = Morandi.text,
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        Switch(
+                            checked = guide.assistedDrawing,
+                            onCheckedChange = { vm.drawingGuide = guide.copy(assistedDrawing = it) },
+                            modifier = Modifier.height(28.dp),
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = Morandi.accent,
+                                uncheckedThumbColor = Morandi.subText,
+                                uncheckedTrackColor = Morandi.border,
+                            ),
                         )
                     }
-                    Switch(
-                        checked = guide.assistedDrawing,
-                        onCheckedChange = {
-                            vm.drawingGuide = guide.copy(assistedDrawing = it)
-                        },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = Morandi.accent,
-                            uncheckedThumbColor = Morandi.subText,
-                            uncheckedTrackColor = Morandi.border,
-                        ),
-                    )
                 }
 
-                // Perspective vanishing point presets (1-point, 2-point, 3-point)
+                // 1. PERSPECTIVE 模式
                 if (guide.mode == GuideMode.PERSPECTIVE) {
-                    Text(androidx.compose.ui.res.stringResource(R.string.guide_perspective_config), color = Morandi.subText, fontSize = 12.sp)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        val ptCount = guide.perspectiveVanishingPoints.size.coerceIn(1, 3)
-                        SymmetryChip(androidx.compose.ui.res.stringResource(R.string.guide_perspective_1pt), selected = ptCount == 1, Modifier.weight(1f)) {
-                            vm.drawingGuide = guide.copy(
-                                perspectiveVanishingPoints = listOf(
-                                    Point2D(vm.docWidth * 0.5f, vm.docHeight * 0.35f)
-                                )
+                    // 3D 空间网格 vs 传统灭点射线 子分段器
+                    PerspectiveSubModeSelector(
+                        is3d = guide.perspective3d,
+                        onToggle = { is3d ->
+                            vm.drawingGuide = guide.copy(perspective3d = is3d, assistedDrawing = !is3d)
+                        }
+                    )
+
+                    if (guide.perspective3d) {
+                        // 地面网格 / 立体立方体 开关
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            CompactToggleChip(
+                                label = androidx.compose.ui.res.stringResource(R.string.guide_perspective_ground),
+                                selected = guide.perspectiveShowGround,
+                                onClick = { vm.drawingGuide = guide.copy(perspectiveShowGround = !guide.perspectiveShowGround) },
+                                modifier = Modifier.weight(1f),
+                            )
+                            CompactToggleChip(
+                                label = androidx.compose.ui.res.stringResource(R.string.guide_perspective_cube),
+                                selected = guide.perspectiveShowCube,
+                                onClick = { vm.drawingGuide = guide.copy(perspectiveShowCube = !guide.perspectiveShowCube) },
+                                modifier = Modifier.weight(1f),
                             )
                         }
-                        SymmetryChip(androidx.compose.ui.res.stringResource(R.string.guide_perspective_2pt), selected = ptCount == 2, Modifier.weight(1f)) {
-                            val horizonY = vm.docHeight * 0.38f
-                            vm.drawingGuide = guide.copy(
-                                perspectiveVanishingPoints = listOf(
-                                    Point2D(vm.docWidth * 0.1f, horizonY),
-                                    Point2D(vm.docWidth * 0.9f, horizonY),
-                                )
+
+                        // 3D 参数卡片: 双列紧凑网格
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            CompactSliderItem(
+                                label = androidx.compose.ui.res.stringResource(R.string.guide_perspective_pitch),
+                                valueText = "${guide.perspectivePitchDeg.roundToInt()}°",
+                                range = -85f..85f,
+                                value = guide.perspectivePitchDeg,
+                                onValue = { vm.drawingGuide = guide.copy(perspectivePitchDeg = it) },
+                                modifier = Modifier.weight(1f),
+                            )
+                            CompactSliderItem(
+                                label = androidx.compose.ui.res.stringResource(R.string.guide_perspective_yaw),
+                                valueText = "${guide.perspectiveYawDeg.roundToInt()}°",
+                                range = -180f..180f,
+                                value = guide.perspectiveYawDeg,
+                                onValue = { vm.drawingGuide = guide.copy(perspectiveYawDeg = it) },
+                                modifier = Modifier.weight(1f),
                             )
                         }
-                        SymmetryChip(androidx.compose.ui.res.stringResource(R.string.guide_perspective_3pt), selected = ptCount == 3, Modifier.weight(1f)) {
-                            val horizonY = vm.docHeight * 0.35f
-                            vm.drawingGuide = guide.copy(
-                                perspectiveVanishingPoints = listOf(
-                                    Point2D(vm.docWidth * 0.15f, horizonY),
-                                    Point2D(vm.docWidth * 0.85f, horizonY),
-                                    Point2D(vm.docWidth * 0.5f, vm.docHeight * 0.95f),
-                                )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            CompactSliderItem(
+                                label = androidx.compose.ui.res.stringResource(R.string.guide_perspective_roll),
+                                valueText = "${guide.perspectiveRollDeg.roundToInt()}°",
+                                range = -90f..90f,
+                                value = guide.perspectiveRollDeg,
+                                onValue = { vm.drawingGuide = guide.copy(perspectiveRollDeg = it) },
+                                modifier = Modifier.weight(1f),
+                            )
+                            CompactSliderItem(
+                                label = androidx.compose.ui.res.stringResource(R.string.guide_perspective_fov),
+                                valueText = "${guide.perspectiveFovDeg.roundToInt()}°",
+                                range = 20f..110f,
+                                value = guide.perspectiveFovDeg,
+                                onValue = { vm.drawingGuide = guide.copy(perspectiveFovDeg = it) },
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            CompactSliderItem(
+                                label = androidx.compose.ui.res.stringResource(R.string.guide_perspective_grid_div),
+                                valueText = "${guide.perspectiveGridDensity}",
+                                range = 4f..24f,
+                                value = guide.perspectiveGridDensity.toFloat(),
+                                onValue = { vm.drawingGuide = guide.copy(perspectiveGridDensity = it.roundToInt()) },
+                                modifier = Modifier.weight(1f),
+                            )
+                            CompactSliderItem(
+                                label = androidx.compose.ui.res.stringResource(R.string.guide_line_opacity),
+                                valueText = "${(guide.opacity * 100f).roundToInt()}%",
+                                range = 0.1f..1f,
+                                value = guide.opacity,
+                                onValue = { vm.drawingGuide = guide.copy(opacity = it) },
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    } else {
+                        // 传统 1~3 点灭点预设分段器
+                        SegmentedOptionSelector(
+                            options = listOf(
+                                1 to androidx.compose.ui.res.stringResource(R.string.guide_perspective_1pt),
+                                2 to androidx.compose.ui.res.stringResource(R.string.guide_perspective_2pt),
+                                3 to androidx.compose.ui.res.stringResource(R.string.guide_perspective_3pt),
+                            ),
+                            selectedKey = guide.perspectiveVanishingPoints.size.coerceIn(1, 3),
+                            onSelect = { cnt ->
+                                val pts = when (cnt) {
+                                    1 -> listOf(Point2D(vm.docWidth * 0.5f, vm.docHeight * 0.35f))
+                                    2 -> listOf(Point2D(vm.docWidth * 0.1f, vm.docHeight * 0.38f), Point2D(vm.docWidth * 0.9f, vm.docHeight * 0.38f))
+                                    else -> listOf(
+                                        Point2D(vm.docWidth * 0.15f, vm.docHeight * 0.35f),
+                                        Point2D(vm.docWidth * 0.85f, vm.docHeight * 0.35f),
+                                        Point2D(vm.docWidth * 0.5f, vm.docHeight * 0.95f),
+                                    )
+                                }
+                                vm.drawingGuide = guide.copy(perspectiveVanishingPoints = pts)
+                            }
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            CompactSliderItem(
+                                label = androidx.compose.ui.res.stringResource(R.string.guide_perspective_ray_density),
+                                valueText = "${guide.perspectiveRayCount}",
+                                range = 2f..96f,
+                                value = guide.perspectiveRayCount.toFloat(),
+                                onValue = { vm.drawingGuide = guide.copy(perspectiveRayCount = it.roundToInt()) },
+                                modifier = Modifier.weight(1f),
+                            )
+                            CompactSliderItem(
+                                label = androidx.compose.ui.res.stringResource(R.string.guide_line_opacity),
+                                valueText = "${(guide.opacity * 100f).roundToInt()}%",
+                                range = 0.1f..1f,
+                                value = guide.opacity,
+                                onValue = { vm.drawingGuide = guide.copy(opacity = it) },
+                                modifier = Modifier.weight(1f),
                             )
                         }
                     }
-
-                    ToolFloatSlider(
-                        label = androidx.compose.ui.res.stringResource(R.string.guide_perspective_ray_density),
-                        valueText = "${guide.perspectiveRayCount}",
-                        range = 6f..24f,
-                        value = guide.perspectiveRayCount.toFloat(),
-                        onValue = { vm.drawingGuide = guide.copy(perspectiveRayCount = it.roundToInt()) },
-                    )
                 }
 
-                // Symmetry Type Selector
+                // 2. SYMMETRY 模式
                 if (guide.mode == GuideMode.SYMMETRY) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(androidx.compose.ui.res.stringResource(R.string.guide_symmetry_type), color = Morandi.subText, fontSize = 12.sp)
+                        Text(
+                            androidx.compose.ui.res.stringResource(R.string.guide_symmetry_type),
+                            color = Morandi.subText,
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
                         Text(
                             text = androidx.compose.ui.res.stringResource(R.string.guide_symmetry_reset_center),
                             color = Morandi.accent,
@@ -274,128 +348,306 @@ fun DrawingGuidePanel(
                                 .padding(horizontal = 6.dp, vertical = 2.dp),
                         )
                     }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        SymmetryChip(androidx.compose.ui.res.stringResource(R.string.guide_symmetry_vertical), selected = guide.symmetryType == SymmetryType.VERTICAL, Modifier.weight(1f)) {
-                            vm.drawingGuide = guide.copy(symmetryType = SymmetryType.VERTICAL)
-                        }
-                        SymmetryChip(androidx.compose.ui.res.stringResource(R.string.guide_symmetry_horizontal), selected = guide.symmetryType == SymmetryType.HORIZONTAL, Modifier.weight(1f)) {
-                            vm.drawingGuide = guide.copy(symmetryType = SymmetryType.HORIZONTAL)
-                        }
-                        SymmetryChip(androidx.compose.ui.res.stringResource(R.string.guide_symmetry_quadrant), selected = guide.symmetryType == SymmetryType.QUADRANT, Modifier.weight(1f)) {
-                            vm.drawingGuide = guide.copy(symmetryType = SymmetryType.QUADRANT)
-                        }
-                        SymmetryChip(androidx.compose.ui.res.stringResource(R.string.guide_symmetry_radial), selected = guide.symmetryType == SymmetryType.RADIAL, Modifier.weight(1f)) {
-                            vm.drawingGuide = guide.copy(symmetryType = SymmetryType.RADIAL)
-                        }
-                    }
 
-                    ToolFloatSlider(
-                        label = androidx.compose.ui.res.stringResource(R.string.guide_symmetry_rotation),
-                        valueText = "${((guide.symmetryRotationDeg % 180f + 180f) % 180f).roundToInt()}°",
-                        range = 0f..180f,
-                        value = (guide.symmetryRotationDeg % 180f + 180f) % 180f,
-                        onValue = { vm.drawingGuide = guide.copy(symmetryRotationDeg = it) },
+                    SegmentedOptionSelector(
+                        options = listOf(
+                            SymmetryType.VERTICAL to androidx.compose.ui.res.stringResource(R.string.guide_symmetry_vertical),
+                            SymmetryType.HORIZONTAL to androidx.compose.ui.res.stringResource(R.string.guide_symmetry_horizontal),
+                            SymmetryType.QUADRANT to androidx.compose.ui.res.stringResource(R.string.guide_symmetry_quadrant),
+                            SymmetryType.RADIAL to androidx.compose.ui.res.stringResource(R.string.guide_symmetry_radial),
+                        ),
+                        selectedKey = guide.symmetryType,
+                        onSelect = { vm.drawingGuide = guide.copy(symmetryType = it) }
+                    )
+
+                    SegmentedOptionSelector(
+                        options = listOf(
+                            0 to "0°",
+                            45 to "45°",
+                            90 to "90°",
+                            135 to "135°",
+                        ),
+                        selectedKey = ((guide.symmetryRotationDeg % 180f + 180f) % 180f).roundToInt(),
+                        onSelect = { vm.drawingGuide = guide.copy(symmetryRotationDeg = it.toFloat()) }
                     )
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        listOf(0f, 45f, 90f, 135f).forEach { deg ->
-                            val isSelected = ((guide.symmetryRotationDeg % 180f + 180f) % 180f).roundToInt() == deg.roundToInt()
-                            SymmetryChip(
-                                label = "${deg.roundToInt()}°",
-                                selected = isSelected,
-                                modifier = Modifier.weight(1f),
-                            ) {
-                                vm.drawingGuide = guide.copy(symmetryRotationDeg = deg)
-                            }
-                        }
+                        CompactSliderItem(
+                            label = androidx.compose.ui.res.stringResource(R.string.guide_symmetry_rotation),
+                            valueText = "${((guide.symmetryRotationDeg % 180f + 180f) % 180f).roundToInt()}°",
+                            range = 0f..180f,
+                            value = (guide.symmetryRotationDeg % 180f + 180f) % 180f,
+                            onValue = { vm.drawingGuide = guide.copy(symmetryRotationDeg = it) },
+                            modifier = Modifier.weight(1f),
+                        )
+                        CompactSliderItem(
+                            label = androidx.compose.ui.res.stringResource(R.string.guide_symmetry_center),
+                            valueText = "${(guide.symmetryCenterX * 100f).roundToInt()}%",
+                            range = 0.1f..0.9f,
+                            value = guide.symmetryCenterX,
+                            onValue = {
+                                val newY = if (guide.symmetryType == SymmetryType.VERTICAL) 0.5f else it
+                                vm.drawingGuide = guide.copy(symmetryCenterX = it, symmetryCenterY = newY)
+                            },
+                            modifier = Modifier.weight(1f),
+                        )
                     }
 
-                    ToolFloatSlider(
-                        label = androidx.compose.ui.res.stringResource(R.string.guide_symmetry_center),
-                        valueText = "${(guide.symmetryCenterX * 100f).roundToInt()}%",
-                        range = 0.1f..0.9f,
-                        value = guide.symmetryCenterX,
-                        onValue = {
-                            val newY = if (guide.symmetryType == SymmetryType.VERTICAL) 0.5f else it
-                            vm.drawingGuide = guide.copy(symmetryCenterX = it, symmetryCenterY = newY)
-                        },
+                    CompactSliderItem(
+                        label = androidx.compose.ui.res.stringResource(R.string.guide_line_opacity),
+                        valueText = "${(guide.opacity * 100f).roundToInt()}%",
+                        range = 0.1f..1f,
+                        value = guide.opacity,
+                        onValue = { vm.drawingGuide = guide.copy(opacity = it) },
+                        modifier = Modifier.fillMaxWidth(),
                     )
                 }
 
-                // Grid Size / Density
+                // 3. GRID_2D & ISOMETRIC 模式
                 if (guide.mode == GuideMode.GRID_2D || guide.mode == GuideMode.ISOMETRIC) {
-                    ToolFloatSlider(
-                        label = androidx.compose.ui.res.stringResource(R.string.guide_grid_size),
-                        valueText = "${guide.gridSize.roundToInt()}px",
-                        range = 16f..240f,
-                        value = guide.gridSize,
-                        onValue = { vm.drawingGuide = guide.copy(gridSize = it) },
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        CompactSliderItem(
+                            label = androidx.compose.ui.res.stringResource(R.string.guide_grid_size),
+                            valueText = "${guide.gridSize.roundToInt()}px",
+                            range = 16f..240f,
+                            value = guide.gridSize,
+                            onValue = { vm.drawingGuide = guide.copy(gridSize = it) },
+                            modifier = Modifier.weight(1f),
+                        )
+                        CompactSliderItem(
+                            label = androidx.compose.ui.res.stringResource(R.string.guide_line_opacity),
+                            valueText = "${(guide.opacity * 100f).roundToInt()}%",
+                            range = 0.1f..1f,
+                            value = guide.opacity,
+                            onValue = { vm.drawingGuide = guide.copy(opacity = it) },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
                 }
+            }
+        }
+    }
+}
 
-                // Opacity Slider
-                ToolFloatSlider(
-                    label = androidx.compose.ui.res.stringResource(R.string.guide_line_opacity),
-                    valueText = "${(guide.opacity * 100f).roundToInt()}%",
-                    range = 0.1f..1f,
-                    value = guide.opacity,
-                    onValue = { vm.drawingGuide = guide.copy(opacity = it) },
+/**
+ * 现代分段模式选择器 (胶囊底槽 + 浮起选中态)
+ */
+@Composable
+private fun SegmentedModeSelector(
+    currentMode: GuideMode,
+    onSelectMode: (GuideMode) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val modes = listOf(
+        GuideMode.OFF to androidx.compose.ui.res.stringResource(R.string.guide_mode_off),
+        GuideMode.GRID_2D to androidx.compose.ui.res.stringResource(R.string.guide_mode_2d_grid),
+        GuideMode.ISOMETRIC to androidx.compose.ui.res.stringResource(R.string.guide_mode_isometric),
+        GuideMode.PERSPECTIVE to androidx.compose.ui.res.stringResource(R.string.guide_mode_perspective),
+        GuideMode.SYMMETRY to androidx.compose.ui.res.stringResource(R.string.guide_mode_symmetry),
+    )
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(Morandi.border.copy(alpha = 0.25f))
+            .padding(3.dp),
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        for ((m, label) in modes) {
+            val isSelected = currentMode == m
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(if (isSelected) Morandi.accent else Color.Transparent)
+                    .clickable { onSelectMode(m) }
+                    .padding(vertical = 6.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = label,
+                    color = if (isSelected) Color.White else Morandi.text,
+                    fontSize = 11.sp,
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                    maxLines = 1,
                 )
             }
         }
     }
 }
 
+/**
+ * 透视子模式胶囊分段器 (3D 空间网格 / 传统灭点射线)
+ */
 @Composable
-private fun GuideModeChip(
-    label: String,
-    selected: Boolean,
+private fun PerspectiveSubModeSelector(
+    is3d: Boolean,
+    onToggle: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
-    onClick: () -> Unit,
 ) {
-    Box(
+    Row(
         modifier = modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(if (selected) Morandi.accent else Morandi.border.copy(alpha = 0.35f))
-            .clickable(onClick = onClick)
-            .padding(vertical = 6.dp),
-        contentAlignment = Alignment.Center,
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(Morandi.border.copy(alpha = 0.22f))
+            .padding(3.dp),
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
     ) {
-        Text(
-            text = label,
-            color = if (selected) Color.White else Morandi.text,
-            fontSize = 11.sp,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+        val options = listOf(
+            true to androidx.compose.ui.res.stringResource(R.string.guide_perspective_mode_3d),
+            false to androidx.compose.ui.res.stringResource(R.string.guide_perspective_mode_vanish),
         )
+        for ((flag, label) in options) {
+            val isSelected = is3d == flag
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(if (isSelected) Morandi.accent.copy(alpha = 0.9f) else Color.Transparent)
+                    .clickable { onToggle(flag) }
+                    .padding(vertical = 5.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = label,
+                    color = if (isSelected) Color.White else Morandi.text,
+                    fontSize = 11.5.sp,
+                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                    maxLines = 1,
+                )
+            }
+        }
     }
 }
 
+/**
+ * 通用分段选择器
+ */
 @Composable
-private fun SymmetryChip(
+private fun <T> SegmentedOptionSelector(
+    options: List<Pair<T, String>>,
+    selectedKey: T,
+    onSelect: (T) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(Morandi.border.copy(alpha = 0.22f))
+            .padding(3.dp),
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        for ((key, label) in options) {
+            val isSelected = selectedKey == key
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(if (isSelected) Morandi.accent.copy(alpha = 0.9f) else Color.Transparent)
+                    .clickable { onSelect(key) }
+                    .padding(vertical = 5.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = label,
+                    color = if (isSelected) Color.White else Morandi.text,
+                    fontSize = 11.5.sp,
+                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 紧凑型开关药丸
+ */
+@Composable
+private fun CompactToggleChip(
     label: String,
     selected: Boolean,
-    modifier: Modifier = Modifier,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(8.dp))
-            .background(if (selected) Morandi.accent.copy(alpha = 0.25f) else Morandi.panelHi.copy(alpha = 0.5f))
+            .background(if (selected) Morandi.accent.copy(alpha = 0.22f) else Morandi.border.copy(alpha = 0.16f))
             .clickable(onClick = onClick)
-            .padding(vertical = 5.dp),
+            .padding(vertical = 6.dp, horizontal = 8.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text = label,
-            color = if (selected) Morandi.accent else Morandi.text,
-            fontSize = 11.sp,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            if (selected) {
+                Text("✓", color = Morandi.accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+            Text(
+                text = label,
+                color = if (selected) Morandi.accent else Morandi.text,
+                fontSize = 11.5.sp,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+/**
+ * 紧凑卡片式滑块项 (上排标签+数值，下排滑轨，两列并排布局友好)
+ */
+@Composable
+private fun CompactSliderItem(
+    label: String,
+    valueText: String,
+    range: ClosedFloatingPointRange<Float>,
+    value: Float,
+    onValue: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val span = maxOf(0.001f, range.endInclusive - range.start)
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(Morandi.border.copy(alpha = 0.22f))
+            .padding(horizontal = 9.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = label,
+                color = Morandi.subText,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+            )
+            Text(
+                text = valueText,
+                color = Morandi.accent,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+            )
+        }
+        com.reverie.paint.ui.components.ReSlider(
+            value = ((value - range.start) / span).coerceIn(0f, 1f),
+            onValue = { frac -> onValue(range.start + frac * span) },
+            modifier = Modifier.fillMaxWidth(),
         )
     }
 }

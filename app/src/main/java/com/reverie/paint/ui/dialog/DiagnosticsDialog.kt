@@ -223,23 +223,12 @@ fun DiagnosticsDialog(
                         }
                     }
 
-                    // 底部操作按钮栏
+                    // 底部操作按钮栏 (仅支持文件导出与分享)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        // 复制
-                        ReTextButton(
-                            text = stringResource(R.string.diagnostics_copy_btn),
-                            onClick = {
-                                DiagnosticsManager.copyReportToClipboard(context, content)
-                            },
-                            modifier = Modifier.weight(1f),
-                            textColor = Morandi.text,
-                            fontSize = 13.sp,
-                        )
-
                         // 保存到下载
                         ReTextButton(
                             text = stringResource(R.string.diagnostics_save_downloads_btn),
@@ -264,7 +253,7 @@ fun DiagnosticsDialog(
                             fontSize = 13.sp,
                         )
 
-                        // 分享
+                        // 分享文件
                         ReTextButton(
                             text = stringResource(R.string.diagnostics_share_btn),
                             onClick = {

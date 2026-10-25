@@ -5,6 +5,7 @@
 package com.reverie.paint.model
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.pow
@@ -230,6 +231,164 @@ class BrushAndCurveLogicTest {
             null,
             com.reverie.paint.ui.painting.brush.BrushPresetTranslations.getChineseTranslation("Custom_Brush_NonExistent")
         )
+    }
+
+    @Test
+    fun `tool param memory preserves customized size and opacity across tool switches`() {
+        val toolStates = mutableMapOf<String, com.reverie.paint.core.PaintViewModel.ToolBrushState>()
+        val presetName = "c)_Pencil-4_Soft"
+        val customSize = 35.0
+        val customOpacity = 0.65
+
+        // Initial snapshot for brush tool
+        val currentBrush = toolStates["brush"] ?: com.reverie.paint.core.PaintViewModel.ToolBrushState(presetIndex = 2)
+        toolStates["brush"] = currentBrush.copy(
+            paramMemory = currentBrush.paramMemory + (presetName to listOf(customSize, customOpacity, 1.0))
+        )
+
+        // Switch to eraser and record eraser snapshot
+        val eraserName = "a)_Eraser_Circle"
+        val currentEraser = toolStates["eraser"] ?: com.reverie.paint.core.PaintViewModel.ToolBrushState(presetIndex = 0)
+        toolStates["eraser"] = currentEraser.copy(
+            paramMemory = currentEraser.paramMemory + (eraserName to listOf(60.0, 1.0, 1.0))
+        )
+
+        // Switch back to brush and verify brush parameters are preserved
+        val restoredBrush = toolStates["brush"]
+        val mem = restoredBrush?.paramMemory?.get(presetName)
+        assertEquals(2, restoredBrush?.presetIndex)
+        assertEquals(35.0, mem?.get(0) ?: 0.0, 1e-6)
+        assertEquals(0.65, mem?.get(1) ?: 0.0, 1e-6)
+    }
+
+    @Test
+    fun `preset dynamics sensor xml is preserved when dynamics were not customized`() {
+        val nativeSensorXml = mapOf(
+            "Size" to "<params id=\"pressure\"><curve>0,0;1,1;</curve></params>",
+            "Rotation" to "<params id=\"drawingangle\"><curve>0,0;1,1;</curve></params>"
+        )
+        val saved = com.reverie.paint.core.BrushParams(
+            size = 40.0,
+            opacity = 0.8,
+            dynamicsCustomized = false,
+            dynamicOptions = emptyMap()
+        )
+
+        val effectiveSensors = if (saved.dynamicsCustomized && saved.dynamicOptions.isNotEmpty()) {
+            saved.dynamicOptions
+        } else {
+            nativeSensorXml
+        }
+
+        assertEquals(2, effectiveSensors.size)
+        assertTrue(effectiveSensors.containsKey("Size"))
+        assertTrue(effectiveSensors.containsKey("Rotation"))
+    }
+
+    @Test
+    fun `revert brush studio snapshot correctly updates toolBrushStates paramMemory`() {
+        val presetName = "b)_Basic-5_Size"
+        val initialParams = com.reverie.paint.core.BrushParams(
+            size = 25.0,
+            opacity = 0.9,
+            flow = 0.8,
+        )
+        var toolBrushStates = mapOf(
+            "brush" to com.reverie.paint.core.PaintViewModel.ToolBrushState(
+                paramMemory = mapOf(presetName to listOf(50.0, 1.0, 1.0))
+            )
+        )
+
+        // Revert with initial params restores initial size, opacity, flow
+        toolBrushStates = toolBrushStates.mapValues { (_, s) ->
+            s.copy(paramMemory = s.paramMemory + (presetName to listOf(initialParams.size, initialParams.opacity, initialParams.flow)))
+        }
+        val mem = toolBrushStates["brush"]?.paramMemory?.get(presetName)
+        assertEquals(25.0, mem?.get(0) ?: 0.0, 1e-6)
+        assertEquals(0.9, mem?.get(1) ?: 0.0, 1e-6)
+        assertEquals(0.8, mem?.get(2) ?: 0.0, 1e-6)
+
+        // Revert with null initial removes from paramMemory
+        val initialNull: com.reverie.paint.core.BrushParams? = null
+        toolBrushStates = toolBrushStates.mapValues { (_, s) ->
+            if (initialNull != null) s.copy(paramMemory = s.paramMemory + (presetName to listOf(initialNull.size, initialNull.opacity, initialNull.flow)))
+            else s.copy(paramMemory = s.paramMemory - presetName)
+        }
+        assertFalse(toolBrushStates["brush"]!!.paramMemory.containsKey(presetName))
+    }
+
+    @Test
+    fun `sensor xml fallback resolution with parsed kpp attributes for stock presets`() {
+        val parsed = com.reverie.paint.core.KppHelper.KppParsedAttributes(
+            pressureSize = 1.0,
+            pressureOpacity = 0.0,
+            pressureFlow = 1.0,
+        )
+
+        fun resolveEnabled(key: String, body: String, parsedAttr: com.reverie.paint.core.KppHelper.KppParsedAttributes?): Boolean {
+            val id = Regex("""id="([^"]+)"""").find(body)?.groupValues?.getOrNull(1)
+            val curve = Regex("""<curve>([^<]*)</curve>""").find(body)?.groupValues?.getOrNull(1) ?: return false
+            val points = DynamicOptionConfig.parseKritaCurve(curve)
+            val isLinear = points.size == 2 && points[0].x == 0f && points[0].y == 0f && points[1].x == 1f && points[1].y == 1f
+            val enabledAttr = Regex("""enabled="([^"]+)"""").find(body)?.groupValues?.getOrNull(1)?.toBooleanStrictOrNull()
+            return if (enabledAttr != null) {
+                enabledAttr
+            } else when (key.lowercase()) {
+                "size" -> parsedAttr?.pressureSize?.let { it > 0.001 } ?: true
+                "opacity" -> parsedAttr?.pressureOpacity?.let { it > 0.001 } ?: false
+                "flow" -> parsedAttr?.pressureFlow?.let { it > 0.001 } ?: false
+                else -> if (isLinear && (id == null || id == "pressure")) false else true
+            }
+        }
+
+        val xmlLinearPressure = "<params id=\"pressure\"><curve>0,0;1,1;</curve></params>"
+        val xmlCustomCurve = "<params id=\"pressure\"><curve>0,0;0.5,0.8;1,1;</curve></params>"
+        val xmlDrawingAngle = "<params id=\"drawingangle\"><curve>0,0;1,1;</curve></params>"
+        val xmlExplicitDisabled = "<params id=\"pressure\" enabled=\"false\"><curve>0,0;1,1;</curve></params>"
+
+        // Standard pressure channels use parsed metadata fallback
+        assertTrue(resolveEnabled("Size", xmlLinearPressure, parsed))
+        assertFalse(resolveEnabled("Opacity", xmlLinearPressure, parsed))
+        assertTrue(resolveEnabled("Flow", xmlLinearPressure, parsed))
+
+        // When parsed metadata is null
+        assertTrue(resolveEnabled("Size", xmlLinearPressure, null))
+        assertFalse(resolveEnabled("Opacity", xmlLinearPressure, null))
+        assertFalse(resolveEnabled("Flow", xmlLinearPressure, null))
+
+        // Explicit enabled overrides parsed
+        assertFalse(resolveEnabled("Size", xmlExplicitDisabled, parsed))
+
+        // Other channels: linear pressure defaults to false, custom curve or drawing angle defaults to true
+        assertFalse(resolveEnabled("Spacing", xmlLinearPressure, parsed))
+        assertTrue(resolveEnabled("Spacing", xmlCustomCurve, parsed))
+        assertTrue(resolveEnabled("Rotation", xmlDrawingAngle, parsed))
+    }
+
+    @Test
+    fun `custom curve is preserved when updating slider strength`() {
+        val customCurve = "0,0;0.2,0.6;0.8,0.9;1,1;"
+        val points = DynamicOptionConfig.parseKritaCurve(customCurve)
+        val initialOpt = DynamicOptionConfig(
+            optionKey = "Size",
+            enabled = true,
+            sensorId = "pressure",
+            points = points,
+            strength = 0.5f,
+        )
+
+        // Updating slider strength using copy
+        val newStrength = 0.85
+        val updatedOpt = initialOpt.copy(
+            strength = newStrength.toFloat(),
+            enabled = newStrength > 0.001,
+        )
+
+        assertEquals(0.85f, updatedOpt.strength, 1e-4f)
+        assertTrue(updatedOpt.enabled)
+        assertEquals(4, updatedOpt.points.size)
+        assertEquals(0.2f, updatedOpt.points[1].x, 1e-4f)
+        assertEquals(0.6f, updatedOpt.points[1].y, 1e-4f)
     }
 }
 

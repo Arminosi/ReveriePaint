@@ -12,22 +12,18 @@ import android.util.Log
 import android.view.KeyEvent
 import android.view.MotionEvent
 import com.reverie.paint.core.PaintViewModel
-import com.vivo.penengine.impl.VivoStylusGestureManagerImpl
-import com.vivo.penengine.impl.VivoStylusManagerImpl
 import java.lang.ref.WeakReference
 
 /**
  * Dedicated Stylus Adapter for vivo Pencil / iQOO Pencil series (vivo Pad / iQOO Pad).
  *
- * Integrates the official vivo penengine-simplify SDK (vendored under app/libs + assets + jniLibs):
- *  - 双击切换 / 按键切换: [VivoStylusGestureManagerImpl] binder callbacks (gestureType 2 = 双击主键/笔身,
- *    3 = 单击主键, 4 = 单击副键), 返回值语义遵循官方文档: 触发业务逻辑才返回 true
- *  - 书写振动: [VivoStylusManagerImpl].enableWritingVibrate, 经 [StylusFeedbackManager.vivoWritingVibrateHook]
- *    挂在既有落笔/抬笔调用点上 (SDK 内部再受系统「书写振动」总开关与强度等级门控)
- *  - 笔迹预测: [com.vivo.penengine.impl.VivoAlgorithmManagerImpl] 由 CanvasTouchView 持有并驱动
- *    (与 OPPO 预测管线同一消费路径), 详见 [isVivoDeviceSupported] 注释
+ * Dynamically resolves vivo stylus penengine service via reflection on vivo ROMs:
+ *  - 双击切换 / 按键切换: VivoStylusGestureManagerImpl binder callbacks (gestureType 2 = 双击主键/笔身,
+ *    3 = 单击主键, 4 = 单击副键), 返回值语义遵循官方规范: 触发业务逻辑才返回 true
+ *  - 书写振动: VivoStylusManagerImpl.enableWritingVibrate, 经 [StylusFeedbackManager.vivoWritingVibrateHook]
+ *    挂在既有落笔/抬笔调用点上 (受系统「书写振动」总开关与强度等级门控)
  *
- * 非 vivo/iQOO 设备上本适配器零副作用: 不注册回调、不绑定系统服务。
+ * 非 vivo/iQOO 设备或系统服务未内置时本适配器零副作用: 不注册回调、不绑定系统服务。
  */
 class VivoStylusAdapter : StylusBrandAdapter {
     override val brand: StylusBrand = StylusBrand.VIVO_PENCIL
@@ -41,8 +37,7 @@ class VivoStylusAdapter : StylusBrandAdapter {
         const val GESTURE_SECONDARY_CLICK = 4
 
         /**
-         * 当前设备是否为 vivo / iQOO (SDK 的预测算法内部仅在 Build.BRAND == "vivo" 且为平板时启用,
-         * 其余品牌设备上 computeEstimatePoint 会退化为返回当前点, 因此直接以品牌判断做零开销门控)。
+         * 当前设备是否为 vivo / iQOO
          */
         fun isVivoDeviceSupported(): Boolean {
             val manufacturer = Build.MANUFACTURER.lowercase()
@@ -55,11 +50,16 @@ class VivoStylusAdapter : StylusBrandAdapter {
     private var currentVm: PaintViewModel? = null
     private var currentFeedbackManager: StylusFeedbackManager? = null
 
-    private var gestureManager: VivoStylusGestureManagerImpl? = null
-    private var gestureCallback: VivoStylusGestureManagerImpl.OnGestureCallback? = null
+    private var gestureManager: Any? = null
+    private var gestureCallbackProxy: Any? = null
+    private var unregisterGestureCallbackMethod: java.lang.reflect.Method? = null
+    private var registerLifecycleMethod: java.lang.reflect.Method? = null
+    private var unregisterLifecycleMethod: java.lang.reflect.Method? = null
 
     /** 书写振动管理器 (VivoStylusManagerImpl), 惰性 init (官方要求 init 后才能 enableWritingVibrate) */
-    private var stylusManager: VivoStylusManagerImpl? = null
+    private var stylusManager: Any? = null
+    private var enableWritingVibrateMethod: java.lang.reflect.Method? = null
+    private var destroyStylusManagerMethod: java.lang.reflect.Method? = null
     private var writingVibrateActive = false
     private var vibrationHookAttached = false
 
@@ -81,25 +81,54 @@ class VivoStylusAdapter : StylusBrandAdapter {
         vibrationHookAttached = true
 
         try {
-            val manager = VivoStylusGestureManagerImpl.getInstance(appCtx)
+            val gmClass = Class.forName("com.vivo.penengine.impl.VivoStylusGestureManagerImpl")
+            val getInstanceMethod = gmClass.getMethod("getInstance", Context::class.java)
+            val manager = getInstanceMethod.invoke(null, appCtx)
             gestureManager = manager
-            val callback = gestureCallback ?: run {
-                val created = VivoStylusGestureManagerImpl.OnGestureCallback { gestureType ->
-                    handleGesture(gestureType)
+
+            val cbInterface = Class.forName("com.vivo.penengine.impl.VivoStylusGestureManagerImpl\$OnGestureCallback")
+            val callback = gestureCallbackProxy ?: run {
+                val proxy = java.lang.reflect.Proxy.newProxyInstance(
+                    cbInterface.classLoader,
+                    arrayOf(cbInterface)
+                ) { _, method, args ->
+                    if (method.name == "onGesture" && args != null && args.isNotEmpty()) {
+                        handleGesture((args[0] as? Number)?.toInt() ?: 0)
+                    } else {
+                        false
+                    }
                 }
-                gestureCallback = created
-                created
+                gestureCallbackProxy = proxy
+                proxy
             }
-            manager.registerGestureCallback(callback)
+            val regMethod = gmClass.getMethod("registerGestureCallback", cbInterface)
+            regMethod.invoke(manager, callback)
+
+            unregisterGestureCallbackMethod = try {
+                gmClass.getMethod("unregisterGestureCallback", cbInterface)
+            } catch (_: Throwable) { null }
+            registerLifecycleMethod = try {
+                gmClass.getMethod("registerLifecycle", Activity::class.java)
+            } catch (_: Throwable) { null }
+            unregisterLifecycleMethod = try {
+                gmClass.getMethod("unregisterLifecycle", Activity::class.java)
+            } catch (_: Throwable) { null }
         } catch (t: Throwable) {
             Log.w(TAG, "vivo 手势管理器注册失败 (非 vivo 平板或服务缺失): ${t.message}")
         }
 
         try {
             // init 仅登记回调 + 置位初始化标记; 真正的振动开关由 enableWritingVibrate 逐笔驱动
-            val sm = VivoStylusManagerImpl.getInstance(appCtx)
-            sm.init()
+            val smClass = Class.forName("com.vivo.penengine.impl.VivoStylusManagerImpl")
+            val smGetInstance = smClass.getMethod("getInstance", Context::class.java)
+            val sm = smGetInstance.invoke(null, appCtx)
+            val smInit = smClass.getMethod("init")
+            smInit.invoke(sm)
             stylusManager = sm
+            enableWritingVibrateMethod = smClass.getMethod("enableWritingVibrate", Boolean::class.javaPrimitiveType)
+            destroyStylusManagerMethod = try {
+                smClass.getMethod("destroy")
+            } catch (_: Throwable) { null }
         } catch (t: Throwable) {
             Log.w(TAG, "vivo 书写振动管理器初始化失败: ${t.message}")
         }
@@ -108,17 +137,18 @@ class VivoStylusAdapter : StylusBrandAdapter {
     override fun onActivityResume(activity: Activity) {
         if (!isVivoDeviceSupported()) return
         val manager = gestureManager ?: return
+        val regMethod = registerLifecycleMethod ?: return
         // 同一 Activity 实例只注册一次 (SDK 内部以 Application.ActivityLifecycleCallbacks 跟踪前台,
         // 重复注册会叠加回调); 换实例时先撤旧再注新
         val registered = lifecycleActivityRef?.get()
         if (registered === activity) return
         if (registered != null) {
             try {
-                manager.unregisterLifecycle(registered)
+                unregisterLifecycleMethod?.invoke(manager, registered)
             } catch (_: Throwable) {}
         }
         try {
-            manager.registerLifecycle(activity)
+            regMethod.invoke(manager, activity)
             lifecycleActivityRef = WeakReference(activity)
         } catch (t: Throwable) {
             Log.w(TAG, "vivo registerLifecycle 失败: ${t.message}")
@@ -164,8 +194,9 @@ class VivoStylusAdapter : StylusBrandAdapter {
         if (desired == writingVibrateActive) return
         writingVibrateActive = desired
         val manager = stylusManager ?: return
+        val method = enableWritingVibrateMethod ?: return
         try {
-            manager.enableWritingVibrate(desired)
+            method.invoke(manager, desired)
         } catch (t: Throwable) {
             Log.w(TAG, "vivo 书写振动切换失败: ${t.message}")
         }
@@ -277,34 +308,49 @@ class VivoStylusAdapter : StylusBrandAdapter {
     /** 释放全部 SDK 资源 (unregister / release 双入口, 幂等) */
     private fun cleanup() {
         // destroy 不会停止书写振动, 必须先显式关闭再注销 (官方文档要求振动必须有开有关)
-        val manager = stylusManager
-        if (manager != null) {
-            try {
-                manager.enableWritingVibrate(false)
-            } catch (_: Throwable) {}
-            writingVibrateActive = false
-            try {
-                manager.destroy()
-            } catch (_: Throwable) {}
-        }
-        stylusManager = null
-
-        val gesture = gestureManager
-        if (gesture != null) {
-            gestureCallback?.let {
+        val sm = stylusManager
+        if (sm != null) {
+            enableWritingVibrateMethod?.let {
                 try {
-                    gesture.unregisterGestureCallback(it)
+                    it.invoke(sm, false)
                 } catch (_: Throwable) {}
             }
-            lifecycleActivityRef?.get()?.let {
+            writingVibrateActive = false
+            destroyStylusManagerMethod?.let {
                 try {
-                    gesture.unregisterLifecycle(it)
+                    it.invoke(sm)
                 } catch (_: Throwable) {}
+            }
+        }
+        stylusManager = null
+        enableWritingVibrateMethod = null
+        destroyStylusManagerMethod = null
+
+        val gm = gestureManager
+        if (gm != null) {
+            val cb = gestureCallbackProxy
+            if (cb != null) {
+                unregisterGestureCallbackMethod?.let {
+                    try {
+                        it.invoke(gm, cb)
+                    } catch (_: Throwable) {}
+                }
+            }
+            val act = lifecycleActivityRef?.get()
+            if (act != null) {
+                unregisterLifecycleMethod?.let {
+                    try {
+                        it.invoke(gm, act)
+                    } catch (_: Throwable) {}
+                }
             }
         }
         lifecycleActivityRef = null
-        gestureCallback = null
+        gestureCallbackProxy = null
         gestureManager = null
+        unregisterGestureCallbackMethod = null
+        registerLifecycleMethod = null
+        unregisterLifecycleMethod = null
 
         if (vibrationHookAttached) {
             currentFeedbackManager?.vivoWritingVibrateHook = null

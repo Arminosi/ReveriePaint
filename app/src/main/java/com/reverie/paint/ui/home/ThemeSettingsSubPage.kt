@@ -40,8 +40,10 @@ import androidx.compose.material.icons.rounded.Opacity
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Wallpaper
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -59,6 +61,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalConfiguration
 import com.reverie.paint.R
 import com.reverie.paint.core.PaintViewModel
 import com.reverie.paint.model.UiAnimationSpeed
@@ -80,6 +83,7 @@ internal fun ThemeSettingsSubPage(
     var showCustomCanvasBgDialog by remember { mutableStateOf(false) }
     var customCanvasBgAnchorBounds by remember { mutableStateOf<Rect?>(null) }
     var showFloatingLayoutDialog by remember { mutableStateOf(false) }
+    var showSmallScreenWarningDialog by remember { mutableStateOf(false) }
     val presetSwatches = listOf(
         "#5A6E8A", "#5A8A86", "#5A8A6A", "#768A5A", "#8A7A5A",
         "#8A665A", "#8A5A66", "#825A8A", "#625A8A"
@@ -489,10 +493,11 @@ internal fun ThemeSettingsSubPage(
             }
 
             // Section 4: 工作区与布局
-            val isTabletDevice = com.reverie.paint.core.DeviceUtils.isTablet(androidx.compose.ui.platform.LocalContext.current)
+            val configuration = LocalConfiguration.current
+            val isSmallScreen = configuration.smallestScreenWidthDp < 600 || configuration.screenWidthDp < 600
             SettingCategoryTitle(stringResource(R.string.theme_category_workspace_layout))
             SettingGroup {
-                val layoutCount = if (isTabletDevice && vm.floatingUiConfig.enabled) 5 else if (isTabletDevice) 2 else 1
+                val layoutCount = if (vm.floatingUiConfig.enabled) 5 else 2
                 // 1. 默认贴边布局单选
                 SettingRadioGroupItem(
                     title = stringResource(R.string.theme_layout_docked),
@@ -503,49 +508,55 @@ internal fun ThemeSettingsSubPage(
                     onClick = { vm.updateFloatingUiEnabled(false) },
                 )
 
-                // 2. 自由悬浮模式 (平板专属)
-                if (isTabletDevice) {
-                    SettingRadioGroupItem(
-                        title = stringResource(R.string.theme_layout_floating),
-                        summary = stringResource(R.string.theme_layout_floating_desc),
-                        selected = vm.floatingUiConfig.enabled,
-                        shape = settingGroupShape(1, layoutCount),
-                        indentStart = 16.dp,
-                        onClick = { vm.updateFloatingUiEnabled(true) },
+                // 2. 自由悬浮模式
+                SettingRadioGroupItem(
+                    title = stringResource(R.string.theme_layout_floating),
+                    summary = stringResource(R.string.theme_layout_floating_desc),
+                    selected = vm.floatingUiConfig.enabled,
+                    shape = settingGroupShape(1, layoutCount),
+                    indentStart = 16.dp,
+                    onClick = {
+                        if (!vm.floatingUiConfig.enabled) {
+                            if (isSmallScreen) {
+                                showSmallScreenWarningDialog = true
+                            } else {
+                                vm.updateFloatingUiEnabled(true)
+                            }
+                        }
+                    },
+                )
+
+                if (vm.floatingUiConfig.enabled) {
+                    // 专属可视化排布调整入口
+                    SettingNavGroupItem(
+                        icon = Icons.AutoMirrored.Rounded.ViewSidebar,
+                        title = stringResource(R.string.panel_dock_dialog_title),
+                        summary = stringResource(R.string.panel_dock_dialog_tip),
+                        shape = settingGroupShape(2, layoutCount),
+                        onClick = { showFloatingLayoutDialog = true },
                     )
 
-                    if (vm.floatingUiConfig.enabled) {
-                        // 专属可视化排布调整入口
-                        SettingNavGroupItem(
-                            icon = Icons.AutoMirrored.Rounded.ViewSidebar,
-                            title = stringResource(R.string.panel_dock_dialog_title),
-                            summary = stringResource(R.string.panel_dock_dialog_tip),
-                            shape = settingGroupShape(2, layoutCount),
-                            onClick = { showFloatingLayoutDialog = true },
-                        )
+                    // 独立大小调整
+                    SettingSliderGroupItem(
+                        icon = Icons.Rounded.AspectRatio,
+                        title = stringResource(R.string.panel_dock_scale_title),
+                        summary = stringResource(R.string.panel_dock_scale_desc),
+                        valueText = "${(vm.floatingUiConfig.scale * 100).roundToInt()}%",
+                        sliderFraction = ((vm.floatingUiConfig.scale - 0.70f) / (1.40f - 0.70f)).coerceIn(0f, 1f),
+                        shape = settingGroupShape(3, layoutCount),
+                        onValueChange = { fraction ->
+                            val newScale = 0.70f + fraction * 0.70f
+                            vm.updateFloatingUiScale(newScale)
+                        },
+                    )
 
-                        // 独立大小调整
-                        SettingSliderGroupItem(
-                            icon = Icons.Rounded.AspectRatio,
-                            title = stringResource(R.string.panel_dock_scale_title),
-                            summary = stringResource(R.string.panel_dock_scale_desc),
-                            valueText = "${(vm.floatingUiConfig.scale * 100).roundToInt()}%",
-                            sliderFraction = ((vm.floatingUiConfig.scale - 0.70f) / (1.40f - 0.70f)).coerceIn(0f, 1f),
-                            shape = settingGroupShape(3, layoutCount),
-                            onValueChange = { fraction ->
-                                val newScale = 0.70f + fraction * 0.70f
-                                vm.updateFloatingUiScale(newScale)
-                            },
-                        )
-
-                        // 一键恢复默认停靠
-                        SettingNavGroupItem(
-                            icon = R.drawable.ic_undo,
-                            title = stringResource(R.string.panel_dock_reset),
-                            shape = settingGroupShape(4, layoutCount),
-                            onClick = { vm.resetFloatingUiEdges() },
-                        )
-                    }
+                    // 一键恢复默认停靠
+                    SettingNavGroupItem(
+                        icon = R.drawable.ic_undo,
+                        title = stringResource(R.string.panel_dock_reset),
+                        shape = settingGroupShape(4, layoutCount),
+                        onClick = { vm.resetFloatingUiEdges() },
+                    )
                 }
             }
 
@@ -624,6 +635,30 @@ internal fun ThemeSettingsSubPage(
         com.reverie.paint.ui.painting.FloatingLayoutConfigDialog(
             vm = vm,
             onDismiss = { showFloatingLayoutDialog = false },
+        )
+    }
+
+    if (showSmallScreenWarningDialog) {
+        AlertDialog(
+            onDismissRequest = { showSmallScreenWarningDialog = false },
+            containerColor = colors.bg,
+            titleContentColor = colors.text,
+            textContentColor = colors.subText,
+            title = { Text(stringResource(R.string.theme_floating_small_screen_title)) },
+            text = { Text(stringResource(R.string.theme_floating_small_screen_msg)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    showSmallScreenWarningDialog = false
+                    vm.updateFloatingUiEnabled(true)
+                }) {
+                    Text(stringResource(R.string.common_confirm_enable), color = colors.accent)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSmallScreenWarningDialog = false }) {
+                    Text(stringResource(R.string.common_cancel), color = colors.text)
+                }
+            },
         )
     }
 }

@@ -10,6 +10,7 @@
 #include "ReverieCoreInternal.h"
 #include "ReverieCoreColorSpaceHook.h"
 #include "ReverieCoreUndoStore.h"
+#include "RenderLockGate.h"
 
 #include <future>
 #include <QSet>
@@ -33,8 +34,27 @@ ReverieCore::ReverieCore()
     ensureRgbU8DifferenceHook();
 }
 
+void ReverieCore::setupDocumentConnections(KisImageSP image)
+{
+    if (m_sigImageUpdatedConn) {
+        QObject::disconnect(m_sigImageUpdatedConn);
+    }
+    if (!image) {
+        return;
+    }
+    m_sigImageUpdatedConn = QObject::connect(image.data(), &KisImage::sigImageUpdated, [this](const QRect &rc) {
+        if (!rc.isEmpty()) {
+            std::lock_guard<std::mutex> lock(m_asyncUpdateMutex);
+            m_lastAsyncUpdateRect = m_lastAsyncUpdateRect.isNull() ? rc : m_lastAsyncUpdateRect.united(rc);
+        }
+    });
+}
+
 ReverieCore::~ReverieCore()
 {
+    if (m_sigImageUpdatedConn) {
+        QObject::disconnect(m_sigImageUpdatedConn);
+    }
     endStrokeBatch();
     m_layers.clear();
     m_canvasClipboard = nullptr;
@@ -65,7 +85,8 @@ bool ReverieCore::newDocument(int width, int height, bool infiniteCanvas)
     // full bitmap copy.
     m_renderBufW = -1;
     m_renderBufH = -1;
-    m_dirtyRect = QRect();
+    clearDirtyRegions();
+    invalidateStaticUnderlay();
     m_bitmapInited = false;
     m_lastDirty = QRect();
     // Reset ALL per-document engine state. g_core is a process-lifetime
@@ -130,6 +151,7 @@ bool ReverieCore::newDocument(int width, int height, bool infiniteCanvas)
     KisPaintLayerSP paint = new KisPaintLayer(image, QStringLiteral("颜料图层 1"), 255, cs);
     if (!paint) {
         m_document = image.data();
+        setupDocumentConnections(image);
         m_docWidth = width;
         m_docHeight = height;
         syncLayersFromImage();
@@ -139,6 +161,7 @@ bool ReverieCore::newDocument(int width, int height, bool infiniteCanvas)
     image->addNode(paint, image->rootLayer());
 
     m_document = image.data();
+    setupDocumentConnections(image);
     m_docWidth = width;
     m_docHeight = height;
     // Must run AFTER m_document is set (recompositeProjection reads it)
@@ -180,6 +203,14 @@ void ReverieCore::closeDocument()
     // frees all layers and their tiles.
     m_canvasClipboard = nullptr;
     waitForDocumentTasks();
+    if (m_sigImageUpdatedConn) {
+        QObject::disconnect(m_sigImageUpdatedConn);
+    }
+    m_nativeProjectionValid = false;
+    {
+        std::lock_guard<std::mutex> lock(m_asyncUpdateMutex);
+        m_lastAsyncUpdateRect = QRect();
+    }
     m_document.clear();
     m_undoStore = nullptr;
     m_macroDepth = 0;
@@ -196,7 +227,8 @@ void ReverieCore::closeDocument()
     // Display pipeline: force full re-init on the next open (same as newDocument)
     m_renderBufW = -1;
     m_renderBufH = -1;
-    m_dirtyRect = QRect();
+    clearDirtyRegions();
+    invalidateStaticUnderlay();
     m_bitmapInited = false;
     m_lastDirty = QRect();
 
@@ -332,8 +364,16 @@ void ReverieCore::recompositeProjection()
     if (!image) {
         return;
     }
+    // 走到这里说明有图层改了像素或属性 (图层操作/撤销/滤镜), 底图不再可信
+    invalidateStaticUnderlay();
     image->refreshGraphAsync();
-    image->waitForDone();
+    // 图像被撤销宏锁住时只入队不等: 锁住的调度器排不空队列, waitForDone 会卡死
+    // (见 RenderLockGate.h)。任务在 endMacro -> unlock 时派发, 解锁后的第一帧
+    // 看到调度器忙会先 waitForDone 再出图。调用方不得在锁住期间指望投影已刷新。
+    if (reverie::mayWaitForImage(image->locked())) {
+        image->waitForDone();
+        m_nativeProjectionValid = true;
+    }
 }
 
 void ReverieCore::waitForDocumentTasks()
@@ -347,12 +387,23 @@ void ReverieCore::waitForDocumentTasks()
     if (!m_document) {
         return;
     }
+    // 文档要被替换/释放: 先关掉还开着的撤销宏 (对称笔画), 解除 barrierLock,
+    // 否则锁住的调度器排不空队列, 下面的 waitForDone 会卡死 (见 RenderLockGate.h);
+    // 也避免 m_macroDepth 残留到下一份文档。
+    while (m_macroDepth > 0) {
+        if (m_document->undoAdapter()) {
+            m_document->undoAdapter()->endMacro();
+        }
+        m_macroDepth--;
+    }
     m_document->requestStrokeEnd();
     m_document->waitForDone();
 }
 
 void ReverieCore::syncLayersFromImage()
 {
+    // 图层表重建 (结构/顺序/属性可能都变了): 静态底图的上界与像素都不再可信
+    invalidateStaticUnderlay();
     QHash<KisNode *, LayerEntry> oldEntries;
     for (const LayerEntry &e : m_layers) {
         if (e.node) oldEntries.insert(e.node, e);
@@ -547,6 +598,8 @@ void ReverieCore::markBlendChanged(int index)
     // Blend-mode change recomposites the whole canvas but only alters the
     // merged view: bump thumbs just for the node's ancestor groups (their
     // thumbs show composite) instead of stamping every cached thumb stale.
+    // 混合模式可能在运笔中途被改 (markRegionDirty 此时不作废底图), 这里显式整体作废。
+    invalidateStaticUnderlay();
     markRegionDirty(QRect(0, 0, m_docWidth, m_docHeight));
     if (index > 0 && index < m_layers.size() && m_layers[index].node) {
         KisNode *n = m_layers[index].node->parent().data();

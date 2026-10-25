@@ -36,19 +36,23 @@ enum class CelSteps(val count: Int) {
  * 智能阴影辅助核心配置模型
  */
 data class ShadingAssistConfig(
-    val lightAzimuthDeg: Float = 150f,
-    val lightElevationDeg: Float = 50f,
+    val lightAzimuthDeg: Float = 135f,
+    val lightElevationDeg: Float = 55f,
     val mode: ShadingMode = ShadingMode.CEL,
     val celSteps: CelSteps = CelSteps.ONE_STEP,
     val threshold1: Float = 0.50f,
-    val threshold2: Float = 0.25f,
+    val threshold2: Float = 0.30f,
     val softness: Float = 0.05f,
     val shadowColor: Long = 0xFF6E4D5AL,
-    val shadowOpacity: Float = 0.55f,
-    val lineArtOcclusion: Boolean = true,
-    val lineCastDistance: Float = 22.0f,
-    val lineCastIntensity: Float = 1.2f,
+    val shadowOpacity: Float = 0.60f,
+    val lineArtOcclusion: Boolean = false,
+    val lineCastDistance: Float = 10.0f,
+    val lineCastIntensity: Float = 0.35f,
     val volumeSmoothness: Float = 30.0f,
+    val colorEdgeSnapping: Boolean = true,
+    val colorEdgeSnapTolerance: Float = 0.50f,
+    val morphologicalSmoothRadius: Int = 2,
+    val ambientOcclusionIntensity: Float = 0.15f,
     val referenceLineLayerId: Int? = null,
     val useAiModel: Boolean = true,
     val downsampleTargetSize: Int = 1024
@@ -60,13 +64,13 @@ data class ShadingAssistConfig(
     fun computeLightVector(): FloatArray {
         val azRad = Math.toRadians(lightAzimuthDeg.toDouble())
         val elRad = Math.toRadians(lightElevationDeg.coerceIn(30f, 85f).toDouble())
-        val cosEl = cos(elRad)
-        val lx = (cosEl * cos(azRad)).toFloat()
+        val cosEl = kotlin.math.cos(elRad)
+        val lx = (cosEl * kotlin.math.cos(azRad)).toFloat()
         // 图像 Y 轴向下，方位角顺时针旋转
-        val ly = -(cosEl * sin(azRad)).toFloat()
-        val lz = sin(elRad).toFloat()
+        val ly = -(cosEl * kotlin.math.sin(azRad)).toFloat()
+        val lz = kotlin.math.sin(elRad).toFloat()
 
-        val len = sqrt(lx * lx + ly * ly + lz * lz)
+        val len = kotlin.math.sqrt(lx * lx + ly * ly + lz * lz)
         return if (len > 1e-6f) {
             floatArrayOf(lx / len, ly / len, lz / len)
         } else {
@@ -76,11 +80,27 @@ data class ShadingAssistConfig(
 }
 
 /**
+ * 智能阴影模型预设
+ */
+enum class ShadingModelPreset(
+    val id: String,
+    val fileName: String,
+    val defaultSizeBytes: Long,
+    val isNormalMap: Boolean
+) {
+    DEPTH_ANYTHING("depth_anything", "depth_anything_v2_small.onnx", 35_615_956L, false);
+
+    companion object {
+        fun fromId(id: String): ShadingModelPreset = DEPTH_ANYTHING
+    }
+}
+
+/**
  * 模型下载与加载状态
  */
 sealed class ModelStatus {
     object NotDownloaded : ModelStatus()
     data class Downloading(val progressPercent: Int, val downloadedBytes: Long, val totalBytes: Long) : ModelStatus()
-    data class Ready(val modelPath: String, val isCustom: Boolean, val fileName: String) : ModelStatus()
+    data class Ready(val modelPath: String, val isCustom: Boolean, val fileName: String, val preset: ShadingModelPreset? = null) : ModelStatus()
     data class Error(val message: String) : ModelStatus()
 }

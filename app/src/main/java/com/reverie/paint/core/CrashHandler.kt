@@ -15,6 +15,7 @@ import android.os.Debug
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
+import androidx.core.content.FileProvider
 import com.reverie.paint.BuildConfig
 import com.reverie.paint.MainActivity
 import java.io.File
@@ -322,10 +323,20 @@ object CrashHandler : Thread.UncaughtExceptionHandler {
         prefs.edit().putLong(KEY_LAST_SEEN_CRASH_TIME, timestamp).apply()
     }
 
+    const val MAX_COPYABLE_CRASH_CHARS = 3000
+
     /**
-     * 复制崩溃日志到剪贴板
+     * 判断崩溃日志是否允许复制 (仅当长度不长时允许复制)
+     */
+    fun canCopy(content: String): Boolean {
+        return content.length <= MAX_COPYABLE_CRASH_CHARS
+    }
+
+    /**
+     * 复制崩溃日志到剪贴板 (仅当长度不超过阈值时允许复制)
      */
     fun copyToClipboard(context: Context, text: String): Boolean {
+        if (!canCopy(text)) return false
         return try {
             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
             val clip = ClipData.newPlainText("ReveriePaint Crash Log", text)
@@ -370,21 +381,40 @@ object CrashHandler : Thread.UncaughtExceptionHandler {
     }
 
     /**
-     * 调用系统分享面板分享崩溃日志
+     * 调用系统分享面板分享崩溃日志文件 (通过 FileProvider 进行真实文件分享)
+     */
+    fun shareCrashLog(context: Context, logFile: File, title: String = "分享崩溃诊断日志") {
+        try {
+            val authority = "${context.packageName}.fileprovider"
+            val uri = FileProvider.getUriForFile(context, authority, logFile)
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_SUBJECT, "ReveriePaint 崩溃诊断报告")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            val chooser = Intent.createChooser(intent, title).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(chooser)
+        } catch (e: Throwable) {
+            Log.e(TAG, "Failed to share crash log file", e)
+        }
+    }
+
+    /**
+     * 兼容接口：通过内容分享，优先写入临时日志文件并以文件形式调起分享
      */
     fun shareCrashLog(context: Context, logContent: String, title: String = "分享崩溃诊断日志") {
         try {
-            val intent = Intent(Intent.ACTION_SEND).apply {
-                type = "text/plain"
-                putExtra(Intent.EXTRA_SUBJECT, "ReveriePaint 崩溃诊断报告")
-                putExtra(Intent.EXTRA_TEXT, logContent)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            context.startActivity(Intent.createChooser(intent, title).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            })
+            val cacheDir = File(context.cacheDir, "crash_reports").apply { if (!exists()) mkdirs() }
+            val fileName = "crash_share_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}.log"
+            val file = File(cacheDir, fileName)
+            file.writeText(logContent)
+            shareCrashLog(context, file, title)
         } catch (e: Throwable) {
-            Log.e(TAG, "Failed to share crash log", e)
+            Log.e(TAG, "Failed to cache and share crash log", e)
         }
     }
 

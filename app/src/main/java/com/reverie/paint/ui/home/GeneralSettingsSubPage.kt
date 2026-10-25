@@ -22,6 +22,7 @@ import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Save
 import androidx.compose.material.icons.rounded.Schedule
+import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -199,6 +200,29 @@ internal fun GeneralSettingsSubPage(
             // Section 3: 存储与撤销性能
             SettingCategoryTitle(stringResource(R.string.settings_category_storage_perf))
             SettingGroup {
+                val scheduleModeOptions = listOf(
+                    com.reverie.paint.model.RenderScheduleMode.PERFORMANCE.id to stringResource(R.string.settings_schedule_mode_perf),
+                    com.reverie.paint.model.RenderScheduleMode.BALANCED.id to stringResource(R.string.settings_schedule_mode_balanced),
+                    com.reverie.paint.model.RenderScheduleMode.POWER_SAVER.id to stringResource(R.string.settings_schedule_mode_saver),
+                )
+                val scheduleModeSummary = when (vm.renderScheduleMode) {
+                    com.reverie.paint.model.RenderScheduleMode.PERFORMANCE -> stringResource(R.string.settings_schedule_mode_perf_desc)
+                    com.reverie.paint.model.RenderScheduleMode.BALANCED -> stringResource(R.string.settings_schedule_mode_balanced_desc)
+                    com.reverie.paint.model.RenderScheduleMode.POWER_SAVER -> stringResource(R.string.settings_schedule_mode_saver_desc)
+                }
+
+                SettingSegmentGroupItem(
+                    icon = Icons.Rounded.Speed,
+                    title = stringResource(R.string.settings_render_schedule_mode),
+                    summary = scheduleModeSummary,
+                    options = scheduleModeOptions,
+                    selected = vm.renderScheduleMode.id,
+                    shape = settingGroupShape(0, 3),
+                    onSelect = { id ->
+                        vm.updateRenderScheduleMode(com.reverie.paint.model.RenderScheduleMode.fromId(id))
+                    },
+                )
+
                 SettingDropdownGroupItem(
                     icon = Icons.Rounded.History,
                     title = stringResource(R.string.settings_max_undo_steps),
@@ -206,7 +230,7 @@ internal fun GeneralSettingsSubPage(
                     currentText = undoOptions.find { it.first == vm.maxUndoSteps }?.second
                         ?: stringResource(R.string.settings_step_unit, vm.maxUndoSteps),
                     options = undoOptions.map { it.second },
-                    shape = settingGroupShape(0, 2),
+                    shape = settingGroupShape(1, 3),
                     onSelect = { idx ->
                         vm.updateMaxUndoSteps(undoOptions[idx].first)
                     },
@@ -214,7 +238,7 @@ internal fun GeneralSettingsSubPage(
 
                 ReferenceCacheSettings(
                     vm = vm,
-                    shape = settingGroupShape(1, 2),
+                    shape = settingGroupShape(2, 3),
                     showTitle = false,
                 )
             }

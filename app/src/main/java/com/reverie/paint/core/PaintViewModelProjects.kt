@@ -120,6 +120,7 @@ internal fun PaintViewModel.saveProject(
             referenceStore.bind(targetFile.absolutePath, referenceProfile)
             initialStrokeCount = totalStrokes
             isModified = false
+            selectionDirty = false
             docName = name
 
             // 显式保存成功后，才清理对应的自动保存草稿
@@ -223,6 +224,7 @@ internal fun PaintViewModel.autoSaveProject(isPeriodic: Boolean = true) {
             lastAutoSaveTimeMs = android.os.SystemClock.elapsedRealtime()
             strokesSinceLastAutoSave = 0
             hasPendingMajorOp = false
+            selectionDirty = false // 这次快照已经把 selectedLayerIndex 一起写进去了
             isAutoSaving = false
             if (isPeriodic && autoSaveToastEnabled) {
                 showActionToast(R.string.toast_project_autosaved, R.drawable.ic_save)
@@ -419,6 +421,20 @@ internal fun PaintViewModel.loadProject(p: com.reverie.paint.model.Project) {
     resetProjectReferences(loading = true)
     releaseReclaimableCaches(aggressive = true)
     val referenceLoadSession = referenceSession
+    // 进画面前先作废上一份文档的瓦片网格, 并把尺寸镜像同步成新文档的声明尺寸:
+    // 否则首帧 CanvasView.onSizeChanged 会拿旧 coreW/coreH 算 fitScale, 与渲染线程的
+    // newDocument(w, h) 并发覆写 renderW/renderH, 画布按旧尺寸拼出新文档的瓦片。
+    discardTileGridForDocumentSwitch()
+    val preW = if (p.width > 0) p.width else docWidth
+    val preH = if (p.height > 0) p.height else docHeight
+    if (preW > 0 && preH > 0) {
+        docWidth = preW
+        docHeight = preH
+        coreW = preW
+        coreH = preH
+        renderW = preW
+        renderH = preH
+    }
     // Navigate to painting page first, then show loading overlay while reading native file
     currentPage = Page.PAINTING
     isBlockingLoading = true
@@ -455,6 +471,7 @@ internal fun PaintViewModel.loadProject(p: com.reverie.paint.model.Project) {
             initialStrokeCount = p.strokeCount
             totalStrokes = p.strokeCount
             isModified = isRecovered || isHealed // 异常恢复或自愈的工程标记为未保存
+            selectionDirty = false // 刚读出来的选中层就是磁盘上的状态
             docWidth = if (coreW > 0) coreW else p.width
             docHeight = if (coreH > 0) coreH else p.height
             docDpi = if (p.dpi > 0) p.dpi else 300
@@ -484,6 +501,10 @@ internal fun PaintViewModel.loadProject(p: com.reverie.paint.model.Project) {
             }
             isBlockingLoading = false
             startPaintingTimer()
+            val curPreset = brushPresetIndex
+            if (curPreset >= 0) {
+                selectBrushPreset(curPreset)
+            }
             if (isRecovered) {
                 showActionToast(R.string.toast_project_restored_autosave, R.drawable.ic_save)
             } else if (isHealed) {
@@ -1291,6 +1312,7 @@ internal fun PaintViewModel.goHome() {
     currentProjectFile = null
     docName = ""
     isModified = false
+    selectionDirty = false
     initialStrokeCount = 0
     totalStrokes = 0
     lastAutoSaveTimeMs = 0L
@@ -1357,12 +1379,23 @@ internal fun PaintViewModel.startPainting(
     currentProjectFile = null // Reset so new artwork won't overwrite previous project file
     docName = actualName
     isModified = false
+    selectionDirty = false
     lastAutoSaveTimeMs = 0L
     totalStrokes = 0
     elapsedSeconds = 0L
     canvasCreatedTime = System.currentTimeMillis()
     stopPaintingTimer()
     resetAnimationState()
+    // 同 loadProject: 进画面前作废旧网格, 尺寸镜像按新画布先同步好。
+    discardTileGridForDocumentSwitch()
+    if (w > 0 && h > 0) {
+        docWidth = w
+        docHeight = h
+        coreW = w
+        coreH = h
+        renderW = w
+        renderH = h
+    }
     currentPage = Page.PAINTING
     isBlockingLoading = true
     blockingLoadingMessage = getString(R.string.project_creating_canvas)
@@ -1376,8 +1409,15 @@ internal fun PaintViewModel.startPainting(
             docDpi = dpi
             docName = actualName
             checkBrushSizeLimit()
+            // 加载层关掉之后用户才能落笔。前缓冲要再静默一段时间，见 frontBufferQuietUntilMs。
+            frontBufferQuietUntilMs =
+                android.os.SystemClock.uptimeMillis() + PaintViewModel.NEW_CANVAS_FRONT_BUFFER_QUIET_MS
             isBlockingLoading = false
             startPaintingTimer()
+            val curPreset = brushPresetIndex
+            if (curPreset >= 0) {
+                selectBrushPreset(curPreset)
+            }
             if (animation) {
                 anim.enabled = true
                 anim.panelOpen = true

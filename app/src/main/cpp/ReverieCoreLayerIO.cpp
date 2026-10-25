@@ -266,9 +266,16 @@ bool ReverieCore::loadLayersXmlTree(const QByteArray &xmlData, KisImageSP image,
             const QString nodeName = r.attributes().value("name").toString();
             KisNodeSP node;
             bool isGroup = false;
+            // 有些分支需要在 stage 之前就应用属性 (见 paintlayer 分支的 offset 时序说明)
+            bool attrsApplied = false;
 
             if (name == QLatin1String("paintlayer")) {
                 KisPaintLayerSP pl = new KisPaintLayer(image, nodeName.isEmpty() ? QStringLiteral("图层") : nodeName, 255, cs);
+                // 必须先应用 x/y 等属性再 stage: stage 可能在批次满 8 层时立即 flush,
+                // 而 LayerPixelLoader 写回用的是画布坐标 (convertFromQImage)。
+                // 若 offset 晚于写像素生效, 内容会被再平移一次 offset (见 t35 实证)。
+                applyCommonAttrs(pl);
+                attrsApplied = true;
                 const QString fn = r.attributes().value("filename").toString();
                 QByteArray png;
                 if (!fn.isEmpty() && store->open(fn)) {
@@ -321,6 +328,9 @@ bool ReverieCore::loadLayersXmlTree(const QByteArray &xmlData, KisImageSP image,
                     // A damaged/oversized pattern must not turn white or leave a partial tree.
                     // Use the layer's saved raster backup, just like unsupported clone layers.
                     KisPaintLayerSP fallback = new KisPaintLayer(image, nodeName, 255, cs);
+                    // offset 必须先于像素写回 (见 paintlayer 分支说明)
+                    applyCommonAttrs(fallback);
+                    attrsApplied = true;
                     const QString filename = a.value("filename").toString();
                     if (!filename.isEmpty() && store->open(filename)) {
                         PendingLayerPixels job;
@@ -342,6 +352,9 @@ bool ReverieCore::loadLayersXmlTree(const QByteArray &xmlData, KisImageSP image,
                     store->close();
                 }
                 KisPaintLayerSP pl = new KisPaintLayer(image, nodeName, 255, cs);
+                // offset 必须先于像素写回 (见 paintlayer 分支说明)
+                applyCommonAttrs(pl);
+                attrsApplied = true;
                 if (!png.isEmpty()) {
                     PendingLayerPixels job;
                     job.dev = pl->original();
@@ -361,6 +374,9 @@ bool ReverieCore::loadLayersXmlTree(const QByteArray &xmlData, KisImageSP image,
                 // 在现代架构中，透明度蒙版作为 KisPaintLayer 挂载在图层树中
                 KisPaintLayerSP tmask = new KisPaintLayer(image, nodeName.isEmpty() ? QStringLiteral("蒙版") : nodeName, 255, cs);
                 tmask->setProperty("reverie_is_transparency_mask", true);
+                // offset 必须先于像素写回 (见 paintlayer 分支说明)
+                applyCommonAttrs(tmask);
+                attrsApplied = true;
                 if (!png.isEmpty()) {
                     PendingLayerPixels job;
                     job.dev = tmask->original();
@@ -400,7 +416,9 @@ bool ReverieCore::loadLayersXmlTree(const QByteArray &xmlData, KisImageSP image,
             }
 
             if (node) {
-                applyCommonAttrs(node);
+                if (!attrsApplied) {
+                    applyCommonAttrs(node);
+                }
                 image->addNode(node, parents.last());
                 if (isGroup) parents.append(node);
                 any = true;

@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D 空间透视网格演示 - ReveriePaint</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        body {
+            background-color: #1a1c1e;
+            color: #dbe2e8;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            overflow: hidden;
+            height: 100vh;
+            display: flex;
+        }
+        #canvas-container {
+            flex: 1;
+            position: relative;
+            background: #141618;
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            cursor: grab;
+        }
+        canvas:active {
+            cursor: grabbing;
+        }
+        canvas.drawing-mode {
+            cursor: crosshair;
+        }
+        #sidebar {
+            width: 320px;
+            background: #202428;
+            border-left: 1px solid #2d3339;
+            display: flex;
+            flex-direction: column;
+            padding: 16px;
+            gap: 16px;
+            overflow-y: auto;
+            z-index: 10;
+        }
+        h2 {
+            font-size: 15px;
+            font-weight: 600;
+            color: #8da4b8;
+            margin-bottom: 4px;
+        }
+        .section {
+            background: #272d33;
+            border-radius: 8px;
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .section-title {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #7b8893;
+        }
+        .control-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 12px;
+        }
+        .control-row label {
+            color: #a4b3bf;
+        }
+        .control-row .val {
+            color: #dbe2e8;
+            font-family: monospace;
+            font-size: 11px;
+            background: #1e2226;
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+        input[type="range"] {
+            width: 100%;
+            accent-color: #8da4b8;
+            cursor: pointer;
+            margin-top: 4px;
+        }
+        .btn-group {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 6px;
+        }
+        button {
+            background: #313840;
+            border: 1px solid #3d454f;
+            color: #c5d0da;
+            padding: 8px 10px;
+            font-size: 12px;
+            font-weight: 500;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        button:hover {
+            background: #3b444e;
+            color: #fff;
+        }
+        button.active {
+            background: #5b7388;
+            border-color: #7c98b0;
+            color: #fff;
+        }
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            color: #c2cdd8;
+            cursor: pointer;
+        }
+        .checkbox-label input[type="checkbox"] {
+            accent-color: #8da4b8;
+            cursor: pointer;
+        }
+        #hud {
+            position: absolute;
+            top: 14px;
+            left: 14px;
+            background: rgba(26, 30, 34, 0.85);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 8px;
+            padding: 10px 14px;
+            font-size: 11px;
+            line-height: 1.6;
+            color: #a4b3bf;
+            pointer-events: none;
+        }
+        #hud b {
+            color: #8da4b8;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-weight: 600;
+            font-size: 10px;
+            margin-left: 6px;
+        }
+        .badge-adjust {
+            background: #3c4b57;
+            color: #a9c6dc;
+        }
+        .badge-lock {
+            background: #473842;
+            color: #e0a3b8;
+        }
+    </style>
+</head>
+<body>
+    <div id="canvas-container">
+        <canvas id="view"></canvas>
+        <div id="hud">
+            <div>模式状态: <span id="mode-badge" class="status-badge badge-adjust">调整相机视角</span></div>
+            <div>透视类型: <b id="hud-pt-type">三点透视</b></div>
+            <div>视平线倾角: <span id="hud-horizon-angle">0.0°</span></div>
+            <div>灭点可见性: <span id="hud-vps">X / Y / Z</span></div>
+            <div style="margin-top: 4px; font-size: 10px; color: #738290;">提示: 单指/左键拖拽旋转空间，滚轮缩放视距</div>
+        </div>
+    </div>
+
+    <div id="sidebar">
+        <div>
+            <h2>3D 空间透视参考 Demo</h2>
+            <div style="font-size: 11px; color: #788590; margin-top: 2px;">交互式验证：相机旋转 vs 消失点参数化</div>
+        </div>
+
+        <div class="section">
+            <div class="section-title">核心状态流转</div>
+            <div class="btn-group">
+                <button id="btn-mode-adjust" class="active">① 调整相机视角</button>
+                <button id="btn-mode-lock">② 锁定作画吸附</button>
+            </div>
+            <button id="btn-clear-draw" style="display: none; grid-column: span 2;">清空测试画笔轨迹</button>
+        </div>
+
+        <div class="section">
+            <div class="section-title">透视类型约束</div>
+            <div class="btn-group">
+                <button id="btn-lock-2pt">锁定两点透视 (平视)</button>
+                <button id="btn-free-3pt" class="active">自由三点透视</button>
+            </div>
+            <div class="btn-group" style="grid-template-columns: repeat(3, 1fr); margin-top: 4px;">
+                <button id="btn-view-top">俯视</button>
+                <button id="btn-view-front">正视</button>
+                <button id="btn-view-reset">复位 45°</button>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-title">视觉元素对比 (直击群聊争论)</div>
+            <label class="checkbox-label">
+                <input type="checkbox" id="chk-ground" checked>
+                <span>地面网格 (仅 X-Z 轴)</span>
+            </label>
+            <label class="checkbox-label">
+                <input type="checkbox" id="chk-cube" checked>
+                <span>原点参考立方体 (提供 Z/Y 轴深度)</span>
+            </label>
+            <label class="checkbox-label">
+                <input type="checkbox" id="chk-full3d">
+                <span>开启全空间 3D 晶格 (体验线条爆炸)</span>
+            </label>
+            <label class="checkbox-label">
+                <input type="checkbox" id="chk-vps" checked>
+                <span>显示解算的灭点与视平线</span>
+            </label>
+        </div>
+
+        <div class="section">
+            <div class="section-title">相机微调</div>
+            <div>
+                <div class="control-row">
+                    <label>俯仰角 (Pitch)</label>
+                    <span class="val" id="val-pitch">-20°</span>
+                </div>
+                <input type="range" id="slider-pitch" min="-85" max="85" value="-20">
+            </div>
+            <div>
+                <div class="control-row">
+                    <label>偏航角 (Yaw)</label>
+                    <span class="val" id="val-yaw">45°</span>
+                </div>
+                <input type="range" id="slider-yaw" min="-180" max="180" value="45">
+            </div>
+            <div>
+                <div class="control-row">
+                    <label>透视角度 / FOV 焦距</label>
+                    <span class="val" id="val-fov">60°</span>
+                </div>
+                <input type="range" id="slider-fov" min="20" max="110" value="60">
+            </div>
+            <div>
+                <div class="control-row">
+                    <label>网格密度 (格数)</label>
+                    <span class="val" id="val-density">12</span>
+                </div>
+                <input type="range" id="slider-density" min="4" max="32" value="12">
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('view');
+        const ctx = canvas.getContext('2d');
+        const container = document.getElementById('canvas-container');
+
+        // 相机模型参数
+        const camera = {
+            pitch: -20 * Math.PI / 180, // 俯仰 (弧度)
+            yaw: 45 * Math.PI / 180,    // 偏航 (弧度)
+            roll: 0,
+            fov: 60 * Math.PI / 180,    // 视场角 (弧度)
+            distance: 9.0,              // 视距
+            height: 0,                  // 目标点 Y
+            isLocked: false,
+            twoPointLocked: false,
+            gridDensity: 12,
+        };
+
+        // 视觉开关
+        const visual = {
+            ground: true,
+            cube: true,
+            full3d: false,
+            vps: true,
+        };
+
+        // 绘制轨迹缓存 (锁定模式下的笔画测试)
+        let strokes = [];
+        let currentStroke = null;
+
+        function resize() {
+            canvas.width = container.clientWidth * window.devicePixelRatio;
+            canvas.height = container.clientHeight * window.devicePixelRatio;
+            render();
+        }
+        window.addEventListener('resize', resize);
+
+        // 3D 投影核心算法
+        function project(x, y, z) {
+            const cosY = Math.cos(-camera.yaw);
+            const sinY = Math.sin(-camera.yaw);
+            const x1 = x * cosY - z * sinY;
+            const z1 = x * sinY + z * cosY;
+
+            const cosP = Math.cos(-camera.pitch);
+            const sinP = Math.sin(-camera.pitch);
+            const y2 = y * cosP - z1 * sinP;
+            const z2 = y * sinP + z1 * cosP;
+
+            // 视距偏置
+            const camZ = z2 + camera.distance;
+            if (camZ <= 0.05) return null; // 近裁剪面裁剪
+
+            const aspect = canvas.width / canvas.height;
+            const f = 1.0 / Math.tan(camera.fov / 2);
+
+            const screenX = (x1 * f / (camZ * aspect)) * (canvas.width / 2) + canvas.width / 2;
+            const screenY = (-y2 * f / camZ) * (canvas.height / 2) + canvas.height / 2;
+
+            return { x: screenX, y: screenY, z: camZ };
+        }
+
+        // 解算主轴无穷远灭点
+        function projectVanishingPoint(axisX, axisY, axisZ) {
+            const cosY = Math.cos(-camera.yaw);
+            const sinY = Math.sin(-camera.yaw);
+            const x1 = axisX * cosY - axisZ * sinY;
+            const z1 = axisX * sinY + axisZ * cosY;
+
+            const cosP = Math.cos(-camera.pitch);
+            const sinP = Math.sin(-camera.pitch);
+            const y2 = axisY * cosP - z1 * sinP;
+            const z2 = axisY * sinP + z1 * cosP;
+
+            if (Math.abs(z2) < 0.0001) return null; // 灭点在无穷远平面上
+
+            const aspect = canvas.width / canvas.height;
+            const f = 1.0 / Math.tan(camera.fov / 2);
+
+            const screenX = (x1 * f / (z2 * aspect)) * (canvas.width / 2) + canvas.width / 2;
+            const screenY = (-y2 * f / z2) * (canvas.height / 2) + canvas.height / 2;
+
+            return { x: screenX, y: screenY, inFront: z2 > 0 };
+        }
+
+        function drawLine3D(p1, p2, color, width = 1, dash = []) {
+            const sp1 = project(p1[0], p1[1], p1[2]);
+            const sp2 = project(p2[0], p2[1], p2[2]);
+            if (!sp1 || !sp2) return;
+
+            ctx.save();
+            ctx.beginPath();
+            ctx.setLineDash(dash);
+            ctx.strokeStyle = color;
+            ctx.lineWidth = width * window.devicePixelRatio;
+            ctx.moveTo(sp1.x, sp1.y);
+            ctx.lineTo(sp2.x, sp2.y);
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        function render() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // 1. 全空间 3D 晶格 (体验线条密集度)
+            if (visual.full3d) {
+                const count = 4;
+                const size = 3;
+                const step = size / count;
+                for (let x = -size; x <= size; x += step) {
+                    for (let y = -size; y <= size; y += step) {
+                        drawLine3D([x, y, -size], [x, y, size], 'rgba(120, 140, 160, 0.12)', 0.8);
+                    }
+                    for (let z = -size; z <= size; z += step) {
+                        drawLine3D([x, -size, z], [x, size, z], 'rgba(120, 140, 160, 0.12)', 0.8);
+                    }
+                }
+                for (let y = -size; y <= size; y += step) {
+                    for (let z = -size; z <= size; z += step) {
+                        drawLine3D([-size, y, z], [size, y, z], 'rgba(120, 140, 160, 0.12)', 0.8);
+                    }
+                }
+            }
+
+            // 2. 地面网格 (Ground Grid)
+            if (visual.ground) {
+                const n = camera.gridDensity;
+                const extent = 6.0;
+                const step = (extent * 2) / n;
+                for (let i = -n / 2; i <= n / 2; i++) {
+                    const coord = i * step;
+                    const isMajor = (i === 0);
+                    const col = isMajor ? 'rgba(160, 185, 205, 0.45)' : 'rgba(130, 150, 170, 0.22)';
+                    const w = isMajor ? 1.5 : 1.0;
+                    // X 平行线
+                    drawLine3D([-extent, 0, coord], [extent, 0, coord], col, w);
+                    // Z 平行线
+                    drawLine3D([coord, 0, -extent], [coord, 0, extent], col, w);
+                }
+            }
+
+            // 3. 原点中心参考立方体 (Guide Cube)
+            if (visual.cube) {
+                const s = 1.0; // 立方体半边长
+                const edges = [
+                    // 底面
+                    [[-s, 0, -s], [s, 0, -s]], [[s, 0, -s], [s, 0, s]],
+                    [[s, 0, s], [-s, 0, s]], [[-s, 0, s], [-s, 0, -s]],
+                    // 顶面
+                    [[-s, s * 2, -s], [s, s * 2, -s]], [[s, s * 2, -s], [s, s * 2, s]],
+                    [[s, s * 2, s], [-s, s * 2, s]], [[-s, s * 2, s], [-s, s * 2, -s]],
+                    // 4 根垂直立柱 (Y 轴铅垂线)
+                    [[-s, 0, -s], [-s, s * 2, -s]], [[s, 0, -s], [s, s * 2, -s]],
+                    [[s, 0, s], [s, s * 2, s]], [[-s, 0, s], [-s, s * 2, s]]
+                ];
+
+                edges.forEach((edge, idx) => {
+                    const isVertical = idx >= 8;
+                    const col = isVertical ? 'rgba(120, 210, 160, 0.8)' : 'rgba(215, 170, 130, 0.8)';
+                    drawLine3D(edge[0], edge[1], col, 2.0);
+                });
+
+                // 轴向指示
+                drawLine3D([0, 0, 0], [s * 1.8, 0, 0], '#e07a7a', 2.5); // X 红
+                drawLine3D([0, 0, 0], [0, s * 2.8, 0], '#7ae08d', 2.5); // Y 绿
+                drawLine3D([0, 0, 0], [0, 0, s * 1.8], '#7aaae0', 2.5); // Z 蓝
+            }
+
+            // 4. 灭点与视平线
+            const vpX = projectVanishingPoint(1, 0, 0);
+            const vpZ = projectVanishingPoint(0, 0, 1);
+            const vpY = projectVanishingPoint(0, 1, 0);
+
+            if (visual.vps && vpX && vpZ) {
+                // 贯穿地平线
+                ctx.save();
+                ctx.strokeStyle = 'rgba(215, 185, 130, 0.7)';
+                ctx.lineWidth = 1.5 * window.devicePixelRatio;
+                ctx.setLineDash([6 * window.devicePixelRatio, 4 * window.devicePixelRatio]);
+                ctx.beginPath();
+                const dx = vpZ.x - vpX.x;
+                const dy = vpZ.y - vpX.y;
+                const len = Math.hypot(dx, dy) || 1;
+                const ext = 10000;
+                ctx.moveTo(vpX.x - (dx / len) * ext, vpX.y - (dy / len) * ext);
+                ctx.lineTo(vpZ.x + (dx / len) * ext, vpZ.y + (dy / len) * ext);
+                ctx.stroke();
+
+                // 标记灭点
+                function drawVPBadge(vp, label, color) {
+                    ctx.save();
+                    ctx.fillStyle = color;
+                    ctx.beginPath();
+                    ctx.arc(vp.x, vp.y, 6 * window.devicePixelRatio, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.strokeStyle = '#ffffff';
+                    ctx.lineWidth = 2 * window.devicePixelRatio;
+                    ctx.stroke();
+
+                    ctx.font = `${11 * window.devicePixelRatio}px monospace`;
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillText(label, vp.x + 10, vp.y - 10);
+                    ctx.restore();
+                }
+
+                drawVPBadge(vpX, 'VP-X', '#e07a7a');
+                drawVPBadge(vpZ, 'VP-Z', '#7aaae0');
+                if (vpY && Math.abs(camera.pitch) > 0.03) {
+                    drawVPBadge(vpY, 'VP-Y (第3灭点)', '#7ae08d');
+                }
+                ctx.restore();
+            }
+
+            // 5. 绘制用户测试笔画
+            if (strokes.length > 0) {
+                ctx.save();
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                strokes.forEach(s => {
+                    ctx.strokeStyle = s.color || '#fff';
+                    ctx.lineWidth = 3 * window.devicePixelRatio;
+                    ctx.beginPath();
+                    s.points.forEach((pt, idx) => {
+                        if (idx === 0) ctx.moveTo(pt.x, pt.y);
+                        else ctx.lineTo(pt.x, pt.y);
+                    });
+                    ctx.stroke();
+                });
+                ctx.restore();
+            }
+
+            // 更新 HUD 统计
+            const pitchDeg = Math.round(camera.pitch * 180 / Math.PI);
+            const is2Pt = Math.abs(pitchDeg) === 0;
+            document.getElementById('hud-pt-type').innerText = is2Pt ? '两点透视 (平视，Y轴平行)' : '三点透视 (俯仰视，Y轴汇聚)';
+            document.getElementById('hud-pt-type').style.color = is2Pt ? '#8da4b8' : '#7ae08d';
+            document.getElementById('hud-horizon-angle').innerText = `${pitchDeg}°`;
+        }
+
+        // 手势交互：拖拽旋转 Orbit
+        let isDragging = false;
+        let lastX = 0;
+        let lastY = 0;
+
+        canvas.addEventListener('mousedown', (e) => {
+            if (camera.isLocked) {
+                // 绘画模式：模拟笔画吸附
+                const rect = canvas.getBoundingClientRect();
+                const px = (e.clientX - rect.left) * window.devicePixelRatio;
+                const py = (e.clientY - rect.top) * window.devicePixelRatio;
+                currentStroke = { color: '#8da4b8', points: [{ x: px, y: py }] };
+                strokes.push(currentStroke);
+                isDragging = true;
+                return;
+            }
+            isDragging = true;
+            lastX = e.clientX;
+            lastY = e.clientY;
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+            if (camera.isLocked) {
+                if (!currentStroke) return;
+                const rect = canvas.getBoundingClientRect();
+                const px = (e.clientX - rect.left) * window.devicePixelRatio;
+                const py = (e.clientY - rect.top) * window.devicePixelRatio;
+                currentStroke.points.push({ x: px, y: py });
+                render();
+                return;
+            }
+
+            const dx = e.clientX - lastX;
+            const dy = e.clientY - lastY;
+            lastX = e.clientX;
+            lastY = e.clientY;
+
+            camera.yaw += dx * 0.008;
+            if (!camera.twoPointLocked) {
+                camera.pitch += dy * 0.008;
+                camera.pitch = Math.max(-85 * Math.PI / 180, Math.min(85 * Math.PI / 180, camera.pitch));
+            }
+
+            syncUI();
+            render();
+        });
+
+        window.addEventListener('mouseup', () => {
+            isDragging = false;
+            currentStroke = null;
+        });
+
+        // 滚轮缩放视距 / FOV
+        canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            camera.distance += e.deltaY * 0.006;
+            camera.distance = Math.max(3.0, Math.min(25.0, camera.distance));
+            render();
+        }, { passive: false });
+
+        // UI 控件绑定
+        const sliderPitch = document.getElementById('slider-pitch');
+        const sliderYaw = document.getElementById('slider-yaw');
+        const sliderFov = document.getElementById('slider-fov');
+        const sliderDensity = document.getElementById('slider-density');
+
+        function syncUI() {
+            const pDeg = Math.round(camera.pitch * 180 / Math.PI);
+            const yDeg = Math.round(camera.yaw * 180 / Math.PI);
+            const fDeg = Math.round(camera.fov * 180 / Math.PI);
+
+            sliderPitch.value = pDeg;
+            document.getElementById('val-pitch').innerText = `${pDeg}°`;
+            sliderYaw.value = yDeg;
+            document.getElementById('val-yaw').innerText = `${yDeg}°`;
+            sliderFov.value = fDeg;
+            document.getElementById('val-fov').innerText = `${fDeg}°`;
+            sliderDensity.value = camera.gridDensity;
+            document.getElementById('val-density').innerText = camera.gridDensity;
+        }
+
+        sliderPitch.addEventListener('input', (e) => {
+            camera.pitch = parseInt(e.target.value) * Math.PI / 180;
+            camera.twoPointLocked = false;
+            document.getElementById('btn-lock-2pt').classList.remove('active');
+            document.getElementById('btn-free-3pt').classList.add('active');
+            syncUI();
+            render();
+        });
+
+        sliderYaw.addEventListener('input', (e) => {
+            camera.yaw = parseInt(e.target.value) * Math.PI / 180;
+            syncUI();
+            render();
+        });
+
+        sliderFov.addEventListener('input', (e) => {
+            camera.fov = parseInt(e.target.value) * Math.PI / 180;
+            syncUI();
+            render();
+        });
+
+        sliderDensity.addEventListener('input', (e) => {
+            camera.gridDensity = parseInt(e.target.value);
+            syncUI();
+            render();
+        });
+
+        // 开关按钮
+        document.getElementById('chk-ground').addEventListener('change', (e) => {
+            visual.ground = e.target.checked;
+            render();
+        });
+        document.getElementById('chk-cube').addEventListener('change', (e) => {
+            visual.cube = e.target.checked;
+            render();
+        });
+        document.getElementById('chk-full3d').addEventListener('change', (e) => {
+            visual.full3d = e.target.checked;
+            render();
+        });
+        document.getElementById('chk-vps').addEventListener('change', (e) => {
+            visual.vps = e.target.checked;
+            render();
+        });
+
+        // 状态切换 (调整态 vs 锁定态)
+        const btnAdjust = document.getElementById('btn-mode-adjust');
+        const btnLock = document.getElementById('btn-mode-lock');
+        const btnClearDraw = document.getElementById('btn-clear-draw');
+        const modeBadge = document.getElementById('mode-badge');
+
+        btnAdjust.addEventListener('click', () => {
+            camera.isLocked = false;
+            btnAdjust.classList.add('active');
+            btnLock.classList.remove('active');
+            modeBadge.innerText = '调整相机视角';
+            modeBadge.className = 'status-badge badge-adjust';
+            canvas.classList.remove('drawing-mode');
+            btnClearDraw.style.display = 'none';
+        });
+
+        btnLock.addEventListener('click', () => {
+            camera.isLocked = true;
+            btnLock.classList.add('active');
+            btnAdjust.classList.remove('active');
+            modeBadge.innerText = '已锁定 (模拟绘画吸附)';
+            modeBadge.className = 'status-badge badge-lock';
+            canvas.classList.add('drawing-mode');
+            btnClearDraw.style.display = 'block';
+        });
+
+        btnClearDraw.addEventListener('click', () => {
+            strokes = [];
+            render();
+        });
+
+        // 透视锁定与预设
+        document.getElementById('btn-lock-2pt').addEventListener('click', () => {
+            camera.pitch = 0;
+            camera.twoPointLocked = true;
+            document.getElementById('btn-lock-2pt').classList.add('active');
+            document.getElementById('btn-free-3pt').classList.remove('active');
+            syncUI();
+            render();
+        });
+
+        document.getElementById('btn-free-3pt').addEventListener('click', () => {
+            camera.twoPointLocked = false;
+            document.getElementById('btn-free-3pt').classList.add('active');
+            document.getElementById('btn-lock-2pt').classList.remove('active');
+        });
+
+        document.getElementById('btn-view-top').addEventListener('click', () => {
+            camera.pitch = -84 * Math.PI / 180;
+            camera.yaw = 0;
+            camera.twoPointLocked = false;
+            syncUI();
+            render();
+        });
+
+        document.getElementById('btn-view-front').addEventListener('click', () => {
+            camera.pitch = 0;
+            camera.yaw = 0;
+            camera.twoPointLocked = true;
+            document.getElementById('btn-lock-2pt').classList.add('active');
+            document.getElementById('btn-free-3pt').classList.remove('active');
+            syncUI();
+            render();
+        });
+
+        document.getElementById('btn-view-reset').addEventListener('click', () => {
+            camera.pitch = -20 * Math.PI / 180;
+            camera.yaw = 45 * Math.PI / 180;
+            camera.fov = 60 * Math.PI / 180;
+            camera.distance = 9.0;
+            camera.twoPointLocked = false;
+            document.getElementById('btn-free-3pt').classList.add('active');
+            document.getElementById('btn-lock-2pt').classList.remove('active');
+            syncUI();
+            render();
+        });
+
+        resize();
+    </script>
+</body>
+</html>

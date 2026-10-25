@@ -31,7 +31,8 @@ import kotlinx.coroutines.launch
     internal fun PaintViewModel.updateBrushAngle(v: Double) {
         brushAngle = v
         saveBrushParam()
-        runCore(render = false) { ReverieCoreBridge.setBrushAngle(v) }
+        val effAngle = ((brushAngle + brushRotation) % 360.0).let { if (it < 0.0) it + 360.0 else it }
+        runCore(render = false) { ReverieCoreBridge.setBrushAngle(effAngle) }
     }
 
     internal fun PaintViewModel.updateBrushScatter(v: Double) {
@@ -42,32 +43,36 @@ import kotlinx.coroutines.launch
 
     internal fun PaintViewModel.updateBrushFade(v: Double) {
         brushFade = v
-        saveBrushParam(reloadEngine = true)
+        saveBrushParam(reloadEngine = false)
         runCore(render = false) { ReverieCoreBridge.setBrushFade(v) }
     }
 
     internal fun PaintViewModel.updateBrushSoftness(v: Double) {
         brushSoftness = v
-        saveBrushParam(reloadEngine = true)
+        saveBrushParam(reloadEngine = false)
         runCore(render = false) { ReverieCoreBridge.setBrushSoftness(v) }
     }
 
     internal fun PaintViewModel.updateBrushRatio(v: Double) {
         brushRatio = v
-        saveBrushParam(reloadEngine = true)
+        saveBrushParam(reloadEngine = false)
         runCore(render = false) { ReverieCoreBridge.setBrushRatio(v) }
     }
 
     internal fun PaintViewModel.updateBrushSharpness(v: Double) {
         brushSharpness = v
-        saveBrushParam(reloadEngine = true)
+        saveBrushParam(reloadEngine = false)
         runCore(render = false) { ReverieCoreBridge.setBrushSharpness(v) }
     }
 
     internal fun PaintViewModel.updateBrushRotation(v: Double) {
         brushRotation = v
-        saveBrushParam(reloadEngine = true)
-        runCore(render = false) { ReverieCoreBridge.setBrushRotation(v) }
+        saveBrushParam(reloadEngine = false)
+        val effAngle = ((brushAngle + brushRotation) % 360.0).let { if (it < 0.0) it + 360.0 else it }
+        runCore(render = false) {
+            ReverieCoreBridge.setBrushRotation(v)
+            ReverieCoreBridge.setBrushAngle(effAngle)
+        }
     }
 
     internal fun PaintViewModel.updateBrushCompositeOp(op: String) {
@@ -101,7 +106,16 @@ import kotlinx.coroutines.launch
 
     internal fun PaintViewModel.updateBrushFollowDirection(v: Boolean) {
         brushFollowDirection = v
-        saveBrushParam(reloadEngine = true, immediateReload = true)
+        if (v) {
+            brushRotationSensor = "drawingangle"
+            val opt = brushDynamicOptions["Rotation"] ?: com.reverie.paint.model.DynamicOptionConfig.defaultFor("Rotation")
+            brushDynamicOptions["Rotation"] = opt.copy(sensorId = "drawingangle", enabled = true)
+        } else {
+            brushRotationSensor = ""
+            val opt = brushDynamicOptions["Rotation"] ?: com.reverie.paint.model.DynamicOptionConfig.defaultFor("Rotation")
+            brushDynamicOptions["Rotation"] = opt.copy(enabled = false)
+        }
+        saveBrushParam(dynamicsChanged = true, reloadEngine = true, immediateReload = true)
         runCore(render = false) { ReverieCoreBridge.setBrushFollowDirection(v) }
     }
 
@@ -180,25 +194,43 @@ import kotlinx.coroutines.launch
 
     internal fun PaintViewModel.updateBrushPressureSize(v: Double) {
         brushPressureSize = v
-        saveBrushParam(dynamicsChanged = true, reloadEngine = true)
+        val opt = brushDynamicOptions["Size"]
+        val cfg = (opt ?: com.reverie.paint.model.DynamicOptionConfig.defaultFor("Size")).copy(
+            strength = v.toFloat(),
+            enabled = v > 0.001,
+        )
+        brushDynamicOptions["Size"] = cfg
+        saveBrushParam(dynamicsChanged = true)
         runCore(render = false) {
-            ReverieCoreBridge.setBrushPressureDynamics(brushPressureEnabled, brushPressureSize, brushPressureOpacity, brushPressureFlow, brushPressureCurve)
+            ReverieCoreBridge.setBrushOptionDynamics("Size", cfg.enabled, cfg.sensorId, cfg.toKritaCurveString(), v)
         }
     }
 
     internal fun PaintViewModel.updateBrushPressureOpacity(v: Double) {
         brushPressureOpacity = v
-        saveBrushParam(dynamicsChanged = true, reloadEngine = true)
+        val opt = brushDynamicOptions["Opacity"]
+        val cfg = (opt ?: com.reverie.paint.model.DynamicOptionConfig.defaultFor("Opacity")).copy(
+            strength = v.toFloat(),
+            enabled = v > 0.001,
+        )
+        brushDynamicOptions["Opacity"] = cfg
+        saveBrushParam(dynamicsChanged = true)
         runCore(render = false) {
-            ReverieCoreBridge.setBrushPressureDynamics(brushPressureEnabled, brushPressureSize, brushPressureOpacity, brushPressureFlow, brushPressureCurve)
+            ReverieCoreBridge.setBrushOptionDynamics("Opacity", cfg.enabled, cfg.sensorId, cfg.toKritaCurveString(), v)
         }
     }
 
     internal fun PaintViewModel.updateBrushPressureFlow(v: Double) {
         brushPressureFlow = v
-        saveBrushParam(dynamicsChanged = true, reloadEngine = true)
+        val opt = brushDynamicOptions["Flow"]
+        val cfg = (opt ?: com.reverie.paint.model.DynamicOptionConfig.defaultFor("Flow")).copy(
+            strength = v.toFloat(),
+            enabled = v > 0.001,
+        )
+        brushDynamicOptions["Flow"] = cfg
+        saveBrushParam(dynamicsChanged = true)
         runCore(render = false) {
-            ReverieCoreBridge.setBrushPressureDynamics(brushPressureEnabled, brushPressureSize, brushPressureOpacity, brushPressureFlow, brushPressureCurve)
+            ReverieCoreBridge.setBrushOptionDynamics("Flow", cfg.enabled, cfg.sensorId, cfg.toKritaCurveString(), v)
         }
     }
 
@@ -336,26 +368,34 @@ import kotlinx.coroutines.launch
 
     internal fun PaintViewModel.updateBrushRotationSensor(v: String) {
         brushRotationSensor = v
-        saveBrushParam(reloadEngine = true, immediateReload = true)
+        val opt = brushDynamicOptions["Rotation"]
+        if (opt != null) {
+            brushDynamicOptions["Rotation"] = opt.copy(sensorId = v, enabled = v.isNotBlank())
+        }
+        saveBrushParam(dynamicsChanged = true, reloadEngine = true, immediateReload = true)
     }
 
     internal fun PaintViewModel.updateBrushSizeSensor(v: String) {
         brushSizeSensor = v
+        brushDynamicOptions["Size"] = (brushDynamicOptions["Size"] ?: com.reverie.paint.model.DynamicOptionConfig.defaultFor("Size")).copy(sensorId = v)
         saveBrushParam(dynamicsChanged = true, reloadEngine = true, immediateReload = true)
     }
 
     internal fun PaintViewModel.updateBrushOpacitySensor(v: String) {
         brushOpacitySensor = v
+        brushDynamicOptions["Opacity"] = (brushDynamicOptions["Opacity"] ?: com.reverie.paint.model.DynamicOptionConfig.defaultFor("Opacity")).copy(sensorId = v)
         saveBrushParam(dynamicsChanged = true, reloadEngine = true, immediateReload = true)
     }
 
     internal fun PaintViewModel.updateBrushFlowSensor(v: String) {
         brushFlowSensor = v
+        brushDynamicOptions["Flow"] = (brushDynamicOptions["Flow"] ?: com.reverie.paint.model.DynamicOptionConfig.defaultFor("Flow")).copy(sensorId = v)
         saveBrushParam(dynamicsChanged = true, reloadEngine = true, immediateReload = true)
     }
 
     internal fun PaintViewModel.updateBrushScatterSensor(v: String) {
         brushScatterSensor = v
+        brushDynamicOptions["Scatter"] = (brushDynamicOptions["Scatter"] ?: com.reverie.paint.model.DynamicOptionConfig.defaultFor("Scatter")).copy(sensorId = v)
         saveBrushParam(dynamicsChanged = true, reloadEngine = true, immediateReload = true)
     }
 
@@ -365,18 +405,27 @@ import kotlinx.coroutines.launch
     }
 
     /** Capture scratchpad raster as the preset's official PNG thumbnail */
-    fun PaintViewModel.capturePresetThumbnail(bitmap: Bitmap): Boolean {
-        val preset = brushPresets.firstOrNull { it.index == brushPresetIndex } ?: return false
+    fun PaintViewModel.capturePresetThumbnail(bitmap: Bitmap, targetPresetIndex: Int = brushPresetIndex): Boolean {
+        val preset = brushPresets.firstOrNull { it.index == targetPresetIndex } ?: run {
+            android.util.Log.e("ReveriePaint", "capturePresetThumbnail: preset not found for index $targetPresetIndex")
+            return false
+        }
         val dir = File(appContext.filesDir, "paintoppresets")
+        if (!dir.exists()) dir.mkdirs()
         val kppFile = File(dir, "${preset.name}.kpp")
         if (!kppFile.exists()) {
             try {
                 appContext.assets.open("paintoppresets/${preset.name}.kpp").use { input ->
                     kppFile.outputStream().use { output -> input.copyTo(output) }
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                android.util.Log.w("ReveriePaint", "Failed to copy kpp from assets for ${preset.name}", e)
+            }
         }
-        if (!kppFile.exists()) return false
+        if (!kppFile.exists()) {
+            android.util.Log.e("ReveriePaint", "capturePresetThumbnail: kppFile not found: ${kppFile.absolutePath}")
+            return false
+        }
 
         val targetSize = 256
         val thumbBmp = if (bitmap.width == targetSize && bitmap.height == targetSize) {
@@ -399,6 +448,8 @@ import kotlinx.coroutines.launch
                 appContext.getString(R.string.brush_studio_toast_thumbnail_updated),
                 android.widget.Toast.LENGTH_SHORT
             ).show()
+        } else {
+            android.util.Log.e("ReveriePaint", "capturePresetThumbnail: KppHelper.updateKppThumbnail failed for ${kppFile.name}")
         }
         return success
     }
@@ -418,10 +469,8 @@ import kotlinx.coroutines.launch
         for ((key, cfg) in brushDynamicOptions) {
             if (key.isBlank()) continue
             val curve = cfg.toKritaCurveString()
-            val nonLinear = curve != "0.000,0.000;1.000,1.000;"
-            if (!cfg.enabled && !nonLinear) continue
             val id = cfg.sensorId.ifBlank { "pressure" }
-            out[key] = "<!DOCTYPE params><params id=\"$id\"><curve>$curve</curve></params>"
+            out[key] = "<!DOCTYPE params><params id=\"$id\" enabled=\"${cfg.enabled}\" strength=\"${cfg.strength}\"><curve>$curve</curve></params>"
         }
         return out
     }
@@ -430,7 +479,10 @@ import kotlinx.coroutines.launch
      * 将预设中的传感器 XML (SizeSensor/SpacingSensor 等) 反向灌回 UI 状态。
      * 每次切换笔刷时必须先彻底重置内存 Map，彻底杜绝跨笔刷曲线污染。
      */
-    internal fun PaintViewModel.applySensorXmlToDynamicOptions(sensorXml: Map<String, String>) {
+    internal fun PaintViewModel.applySensorXmlToDynamicOptions(
+        sensorXml: Map<String, String>,
+        parsed: KppHelper.KppParsedAttributes? = null,
+    ) {
         val standardKeys = listOf("Size", "Opacity", "Flow", "Spacing", "Scatter", "Rotation", "SmudgeRate", "ColorRate")
         val newMap = mutableMapOf<String, com.reverie.paint.model.DynamicOptionConfig>()
         for (k in standardKeys) {
@@ -455,17 +507,31 @@ import kotlinx.coroutines.launch
             val isLinear = points.size == 2 &&
                     points[0].x == 0f && points[0].y == 0f &&
                     points[1].x == 1f && points[1].y == 1f
+
+            val enabledAttr = Regex("""enabled="([^"]+)"""").find(body)?.groupValues?.getOrNull(1)?.toBooleanStrictOrNull()
+            val strengthAttr = Regex("""strength="([^"]+)"""").find(body)?.groupValues?.getOrNull(1)?.toFloatOrNull()
+
             // 出厂预设中常包含所有通道的 Sensor/curve 节点，但实际压感并未启用。
-            // 只有 Size 默认开启压感；非 Size 通道若为默认线性曲线且无已有启用状态，则默认保持关闭，避免无脑设 enabled = true
-            val isEnabled = if (!key.equals("Size", ignoreCase = true) && isLinear && (id == null || id == "pressure")) {
-                existing?.enabled ?: false
-            } else {
-                existing?.enabled ?: true
+            // 若 XML 显式包含 enabled 属性则按显式值恢复；仅当来自出厂预设/旧版 XML 时应用启发式规则
+            val isEnabled = if (enabledAttr != null) {
+                enabledAttr
+            } else when (key.lowercase()) {
+                "size" -> parsed?.pressureSize?.let { it > 0.001 } ?: true
+                "opacity" -> parsed?.pressureOpacity?.let { it > 0.001 } ?: false
+                "flow" -> parsed?.pressureFlow?.let { it > 0.001 } ?: false
+                else -> if (isLinear && (id == null || id == "pressure")) {
+                    existing?.enabled ?: false
+                } else {
+                    existing?.enabled ?: true
+                }
             }
+            val strength = strengthAttr ?: 1.0f
+
             newMap[key] = (existing ?: com.reverie.paint.model.DynamicOptionConfig(optionKey = key)).copy(
                 enabled = isEnabled,
                 sensorId = id ?: existing?.sensorId ?: "pressure",
                 points = points,
+                strength = strength,
             )
         }
         brushDynamicOptions.clear()
@@ -487,7 +553,7 @@ import kotlinx.coroutines.launch
         val sc = smudgeChanged || (existing?.smudgeCustomized == true)
         val spc = spacingChanged || (existing?.spacingCustomized == true)
         val p = BrushParams(
-            dynamicOptions = buildDynamicOptionSensorXml(),
+            dynamicOptions = if (dc) buildDynamicOptionSensorXml() else (existing?.dynamicOptions ?: emptyMap()),
             size = brushSize,
             opacity = brushOpacity,
             flow = brushFlow,
@@ -574,6 +640,7 @@ import kotlinx.coroutines.launch
                         if (brushPresetIndex != targetIdx) return@runCore
                         val pSnapshot = brushParams[name] ?: return@runCore
                         if (ReverieCoreBridge.loadBrushPreset(targetIdx)) {
+                            if (pSnapshot.tipAsset.isNotBlank()) ReverieCoreBridge.setBrushTipAsset(pSnapshot.tipAsset)
                             ReverieCoreBridge.setPresetIsEraser(isEraserPreset)
                             ReverieCoreBridge.setBrushColor(brushColor)
                             ReverieCoreBridge.setBrushSecondaryColor(brushSecondaryColor)
@@ -583,7 +650,8 @@ import kotlinx.coroutines.launch
                             if (pSnapshot.spacingCustomized) {
                                 ReverieCoreBridge.setBrushSpacing(pSnapshot.spacing)
                             }
-                            ReverieCoreBridge.setBrushAngle(pSnapshot.angle)
+                            val effAngle = ((pSnapshot.angle + pSnapshot.rotation) % 360.0).let { if (it < 0.0) it + 360.0 else it }
+                            ReverieCoreBridge.setBrushAngle(effAngle)
                             if (pSnapshot.dynamicsCustomized) {
                                 ReverieCoreBridge.setBrushScatter(pSnapshot.scatter)
                             }
@@ -595,16 +663,18 @@ import kotlinx.coroutines.launch
                             ReverieCoreBridge.setBrushCompositeOp(brushCompositeOp)
                             if (pSnapshot.dynamicsCustomized) {
                                 if (pSnapshot.dynamicOptions.isNotEmpty()) {
-                                    for ((opt, xml) in pSnapshot.dynamicOptions) {
+                                     for ((opt, xml) in pSnapshot.dynamicOptions) {
                                         val sensorId = Regex("""id="([^"]+)"""").find(xml)?.groupValues?.getOrNull(1) ?: "pressure"
                                         val curve = Regex("""<curve>([^<]*)</curve>""").find(xml)?.groupValues?.getOrNull(1) ?: "0,0;1,1;"
-                                        val strength = when (opt.lowercase()) {
+                                        val enabledAttr = Regex("""enabled="([^"]+)"""").find(xml)?.groupValues?.getOrNull(1)?.toBooleanStrictOrNull()
+                                        val strengthAttr = Regex("""strength="([^"]+)"""").find(xml)?.groupValues?.getOrNull(1)?.toDoubleOrNull()
+                                        val strength = strengthAttr ?: when (opt.lowercase()) {
                                             "size" -> pSnapshot.pressureSize
                                             "opacity" -> pSnapshot.pressureOpacity
                                             "flow" -> pSnapshot.pressureFlow
                                             else -> 1.0
                                         }
-                                        val isEnabled = when (opt.lowercase()) {
+                                        val isEnabled = enabledAttr ?: when (opt.lowercase()) {
                                             "size" -> pSnapshot.pressureEnabled && pSnapshot.pressureSize > 0.001
                                             "opacity" -> pSnapshot.pressureEnabled && pSnapshot.pressureOpacity > 0.001
                                             "flow" -> pSnapshot.pressureEnabled && pSnapshot.pressureFlow > 0.001
@@ -635,11 +705,15 @@ import kotlinx.coroutines.launch
                                 pSnapshot.textureMode,
                                 pSnapshot.texturePattern,
                             )
-                            ReverieCoreBridge.setBrushFollowDirection(pSnapshot.followDirection)
+                            if (pSnapshot.followDirection) {
+                                ReverieCoreBridge.setBrushFollowDirection(true)
+                            } else if (pSnapshot.dynamicsCustomized && brushRotationSensor.isBlank()) {
+                                ReverieCoreBridge.setBrushFollowDirection(false)
+                            }
                             ReverieCoreBridge.setBrushMirror(pSnapshot.randomFlipX, pSnapshot.randomFlipY)
                             ReverieCoreBridge.setBrushAntiAliasing(pSnapshot.antiAliasing)
                             ReverieCoreBridge.setBrushJitter(pSnapshot.jitterAngle, pSnapshot.jitterSize)
-                            ReverieCoreBridge.setBrushSmudgeRate(pSnapshot.colorRate)
+                            ReverieCoreBridge.setBrushSmudgeRate(pSnapshot.smudgeRate)
                             ReverieCoreBridge.setBrushSmudgeLength(pSnapshot.smudgeLength)
                             ReverieCoreBridge.setBrushAirbrush(pSnapshot.airbrush, pSnapshot.airbrushRate)
                         }

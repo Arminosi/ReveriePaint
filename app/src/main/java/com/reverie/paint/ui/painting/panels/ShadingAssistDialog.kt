@@ -68,6 +68,7 @@ fun ShadingAssistDialog(
     val coroutineScope = rememberCoroutineScope()
     val config = vm.shadingAssistConfig
     val modelStatus = ShadingModelManager.modelStatus
+    val importFailedMessage = stringResource(R.string.shading_assist_import_failed)
 
     // 本地 .onnx 模型文件选择器
     val filePickerLauncher = rememberLauncherForActivityResult(
@@ -81,7 +82,7 @@ fun ShadingAssistDialog(
                         vm.updateShadingConfig(vm.shadingAssistConfig, reloadLineart = true)
                     },
                     onFailure = {
-                        Toast.makeText(context, it.message ?: context.getString(R.string.shading_assist_import_failed), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, it.message ?: importFailedMessage, Toast.LENGTH_SHORT).show()
                     }
                 )
             }
@@ -395,13 +396,14 @@ fun ShadingAssistDialog(
                                             Spacer(Modifier.height(14.dp))
                                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                                 ReTextButton(
-                                                    text = stringResource(R.string.shading_assist_model_download),
+                                                    text = stringResource(R.string.shading_assist_model_download) + " (34MB)",
                                                     primary = true,
                                                     fontSize = 11.sp,
                                                     onClick = {
                                                         ShadingModelManager.startDownload(
                                                             context = context,
                                                             scope = coroutineScope,
+                                                            preset = ShadingModelManager.currentPreset,
                                                             onSuccess = {
                                                                 vm.updateShadingConfig(vm.shadingAssistConfig, reloadLineart = true)
                                                             }
@@ -434,10 +436,20 @@ fun ShadingAssistDialog(
                             // 1. 深度神经网络模型状态与操作卡片
                             ModelStatusCard(
                                 status = modelStatus,
+                                currentPreset = ShadingModelManager.currentPreset,
+                                isCustomActive = ShadingModelManager.isCustomActive,
+                                hasCustomModel = ShadingModelManager.hasCustomModel(context),
+                                onSelectPreset = { preset ->
+                                    vm.switchShadingModelPreset(preset)
+                                },
+                                onSelectCustom = {
+                                    vm.switchShadingCustomModel()
+                                },
                                 onDownload = {
                                     ShadingModelManager.startDownload(
                                         context = context,
                                         scope = coroutineScope,
+                                        preset = ShadingModelManager.currentPreset,
                                         onSuccess = {
                                             vm.updateShadingConfig(vm.shadingAssistConfig, reloadLineart = true)
                                         }
@@ -638,8 +650,177 @@ fun ShadingAssistDialog(
                                 }
                             }
 
-                            // 线稿投射微调参数
-                            if (config.lineArtOcclusion) {
+                            // 二次元二分精调卡片
+                            if (config.mode == ShadingMode.CEL) {
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = CardDefaults.cardColors(containerColor = Morandi.panelHi),
+                                    border = null
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Icon(
+                                                painter = painterResource(R.drawable.ic_magicwand),
+                                                contentDescription = null,
+                                                tint = Morandi.accent,
+                                                modifier = Modifier.size(15.dp)
+                                            )
+                                            Text(
+                                                text = stringResource(R.string.shading_assist_section_anime_cel),
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = Morandi.text
+                                            )
+                                        }
+
+                                        // 1. 底色边缘吸附
+                                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.SpaceBetween
+                                            ) {
+                                                Text(
+                                                    text = stringResource(R.string.shading_assist_color_edge_snapping),
+                                                    fontSize = 11.sp,
+                                                    color = Morandi.text
+                                                )
+                                                ReSwitch(
+                                                    checked = config.colorEdgeSnapping,
+                                                    onChecked = {
+                                                        vm.updateShadingConfig(vm.shadingAssistConfig.copy(colorEdgeSnapping = it))
+                                                    }
+                                                )
+                                            }
+                                            if (config.colorEdgeSnapping) {
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.SpaceBetween
+                                                ) {
+                                                    Text(
+                                                        text = stringResource(R.string.shading_assist_color_edge_snap_tol),
+                                                        fontSize = 10.sp,
+                                                        color = Morandi.subText
+                                                    )
+                                                    Text(
+                                                        text = "${(config.colorEdgeSnapTolerance * 100).toInt()}%",
+                                                        fontSize = 10.sp,
+                                                        color = Morandi.text
+                                                    )
+                                                }
+                                                ReSlider(
+                                                    value = config.colorEdgeSnapTolerance,
+                                                    onValue = { vm.updateShadingConfig(vm.shadingAssistConfig.copy(colorEdgeSnapTolerance = it)) }
+                                                )
+                                            }
+                                        }
+
+                                        // 2. 赛璐珞形态学平滑 (消除像素阶梯锯齿)
+                                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween
+                                            ) {
+                                                Text(
+                                                    text = stringResource(R.string.shading_assist_morphological_smooth),
+                                                    fontSize = 11.sp,
+                                                    color = Morandi.subText
+                                                )
+                                                Text(
+                                                    text = "${config.morphologicalSmoothRadius} px",
+                                                    fontSize = 11.sp,
+                                                    color = Morandi.text
+                                                )
+                                            }
+                                            ReSlider(
+                                                value = (config.morphologicalSmoothRadius / 3.0f).coerceIn(0f, 1f),
+                                                onValue = {
+                                                    val rad = (it * 3.0f + 0.5f).toInt()
+                                                    vm.updateShadingConfig(vm.shadingAssistConfig.copy(morphologicalSmoothRadius = rad))
+                                                }
+                                            )
+                                        }
+
+                                        // 3. 死角接触 AO
+                                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween
+                                            ) {
+                                                Text(
+                                                    text = stringResource(R.string.shading_assist_ambient_occlusion),
+                                                    fontSize = 11.sp,
+                                                    color = Morandi.subText
+                                                )
+                                                Text(
+                                                    text = "${(config.ambientOcclusionIntensity * 100).toInt()}%",
+                                                    fontSize = 11.sp,
+                                                    color = Morandi.text
+                                                )
+                                            }
+                                            ReSlider(
+                                                value = config.ambientOcclusionIntensity,
+                                                onValue = { vm.updateShadingConfig(vm.shadingAssistConfig.copy(ambientOcclusionIntensity = it)) }
+                                            )
+                                        }
+
+                                        // 4. 定向投射阴影
+                                        if (config.lineArtOcclusion) {
+                                            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.SpaceBetween
+                                                ) {
+                                                    Text(
+                                                        text = stringResource(R.string.shading_assist_line_cast_dist),
+                                                        fontSize = 11.sp,
+                                                        color = Morandi.subText
+                                                    )
+                                                    Text(
+                                                        text = "${config.lineCastDistance.toInt()} px",
+                                                        fontSize = 11.sp,
+                                                        color = Morandi.text
+                                                    )
+                                                }
+                                                ReSlider(
+                                                    value = (config.lineCastDistance / 40.0f).coerceIn(0f, 1f),
+                                                    onValue = { vm.updateShadingConfig(vm.shadingAssistConfig.copy(lineCastDistance = it * 40.0f)) }
+                                                )
+                                            }
+
+                                            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.SpaceBetween
+                                                ) {
+                                                    Text(
+                                                        text = stringResource(R.string.shading_assist_line_cast_intensity),
+                                                        fontSize = 11.sp,
+                                                        color = Morandi.subText
+                                                    )
+                                                    Text(
+                                                        text = "${(config.lineCastIntensity * 100).toInt()}%",
+                                                        fontSize = 11.sp,
+                                                        color = Morandi.text
+                                                    )
+                                                }
+                                                ReSlider(
+                                                    value = (config.lineCastIntensity / 2.0f).coerceIn(0f, 1f),
+                                                    onValue = { vm.updateShadingConfig(vm.shadingAssistConfig.copy(lineCastIntensity = it * 2.0f)) }
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            } else if (config.lineArtOcclusion) {
                                 Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
@@ -911,6 +1092,11 @@ private fun LightOrbManipulator(
 @Composable
 private fun ModelStatusCard(
     status: ModelStatus,
+    currentPreset: ShadingModelPreset,
+    isCustomActive: Boolean,
+    hasCustomModel: Boolean,
+    onSelectPreset: (ShadingModelPreset) -> Unit,
+    onSelectCustom: () -> Unit,
     onDownload: () -> Unit,
     onCancelDownload: () -> Unit,
     onUninstall: () -> Unit,
@@ -923,7 +1109,7 @@ private fun ModelStatusCard(
         colors = CardDefaults.cardColors(containerColor = Morandi.panelHi),
         border = null
     ) {
-        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             // 顶栏：标题与状态指示胶囊
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1019,6 +1205,81 @@ private fun ModelStatusCard(
                 }
             }
 
+            // 模型切换 (仅当存在导入的自定义模型时显示切换，否则直接展示官方推荐模型)
+            var modelMenuExpanded by remember { mutableStateOf(false) }
+            val currentLabel = if (isCustomActive) {
+                stringResource(R.string.shading_assist_model_custom)
+            } else {
+                stringResource(R.string.shading_assist_model_depth_anything)
+            }
+
+            if (hasCustomModel) {
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { modelMenuExpanded = true },
+                        color = Morandi.panel
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 10.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = currentLabel,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = Morandi.text,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Icon(
+                                painter = painterResource(R.drawable.ic_chevron_down),
+                                contentDescription = null,
+                                tint = Morandi.subText,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
+                    }
+
+                    ReDropdownMenu(
+                        expanded = modelMenuExpanded,
+                        onDismissRequest = { modelMenuExpanded = false },
+                        modifier = Modifier.widthIn(min = 240.dp)
+                    ) {
+                        ReDropdownMenuItem(
+                            text = stringResource(R.string.shading_assist_model_depth_anything),
+                            selected = !isCustomActive,
+                            onClick = {
+                                onSelectPreset(ShadingModelPreset.DEPTH_ANYTHING)
+                                modelMenuExpanded = false
+                            }
+                        )
+                        ReDropdownMenuItem(
+                            text = stringResource(R.string.shading_assist_model_custom),
+                            selected = isCustomActive,
+                            onClick = {
+                                onSelectCustom()
+                                modelMenuExpanded = false
+                            }
+                        )
+                    }
+                }
+            } else {
+                Text(
+                    text = currentLabel,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = Morandi.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
             // 内容与交互区
             when (status) {
                 is ModelStatus.Ready -> {
@@ -1109,7 +1370,7 @@ private fun ModelStatusCard(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         ReTextButton(
-                            text = stringResource(R.string.shading_assist_model_download),
+                            text = stringResource(R.string.shading_assist_model_download) + " (34MB)",
                             onClick = onDownload,
                             primary = true,
                             fontSize = 11.sp,

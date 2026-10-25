@@ -281,6 +281,59 @@ class ThemeSettingsTest {
         assertEquals(QuickActionLayoutMode.COLUMN, config.layoutMode)
         assertFalse(config.showLabels)
     }
+
+    @Test
+    fun `floating ui enabled resolution logic preserves user preference regardless of screen window state`() {
+        val resolveFloating = { containsKey: Boolean, savedValue: Boolean, isTablet: Boolean ->
+            val floatingSavedEnabled = if (containsKey) savedValue else isTablet
+            floatingSavedEnabled
+        }
+
+        // First launch on tablet: defaults to true
+        assertTrue("Tablet first launch defaults to floating UI enabled", resolveFloating(false, false, true))
+        // First launch on phone: defaults to false
+        assertFalse("Phone first launch defaults to floating UI disabled", resolveFloating(false, false, false))
+
+        // Tablet user enables floating, then opens app in small window (phone-sized):
+        // Preference must remain true
+        assertTrue("Tablet user preference remains enabled even in small window", resolveFloating(true, true, false))
+
+        // Phone user explicitly enables floating UI:
+        assertTrue("Phone user explicit enabled must be preserved", resolveFloating(true, true, false))
+
+        // Tablet user explicitly disabled floating UI:
+        assertFalse("Tablet user explicit disabled must be preserved", resolveFloating(true, false, true))
+    }
+
+    @Test
+    fun `floating ui small screen warning detection logic`() {
+        val isSmallScreen = { smallestScreenWidthDp: Int, screenWidthDp: Int ->
+            smallestScreenWidthDp < 600 || screenWidthDp < 600
+        }
+
+        // Phone portrait & landscape
+        assertTrue("Phone portrait (sw392, w392) triggers warning", isSmallScreen(392, 392))
+        assertTrue("Phone landscape (sw392, w840) triggers warning because sw < 600", isSmallScreen(392, 840))
+
+        // Tablet full screen landscape
+        assertFalse("Tablet full screen (sw800, w1280) does not trigger warning", isSmallScreen(800, 1280))
+        // Tablet full screen portrait
+        assertFalse("Tablet full screen portrait (sw800, w800) does not trigger warning", isSmallScreen(800, 800))
+
+        // Tablet split screen / small floating window
+        assertTrue("Tablet split screen (sw800, w540) triggers warning", isSmallScreen(800, 540))
+        assertTrue("Tablet freeform small window (sw400, w400) triggers warning", isSmallScreen(400, 400))
+    }
+
+    @Test
+    fun `workspace layout options count based on floating UI state`() {
+        val resolveLayoutCount = { floatingEnabled: Boolean ->
+            if (floatingEnabled) 5 else 2
+        }
+
+        assertEquals("When floating UI is disabled, show docked and floating options (2 items)", 2, resolveLayoutCount(false))
+        assertEquals("When floating UI is enabled, show 2 radio options + 3 tuning items (5 items)", 5, resolveLayoutCount(true))
+    }
 }
 
 

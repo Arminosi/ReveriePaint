@@ -164,9 +164,20 @@ internal fun PaintViewModel.notifyLayerChanged(
      * false —— 见函数末尾的说明。
      */
     pixelChanged: Boolean = false,
+    /**
+     * 本次变更是否真的改动了文档内容/结构。
+     *
+     * 纯**选中/切换**类操作 (点图层、播放中切层) 传 false: 不标 isModified、
+     * 不置 hasPendingMajorOp。选中不改内容, 下一次真实变更会顺带把选中索引存档;
+     * 若不区分, 每次点图层都会在 1s 内拉响自动保存 —— 大工程全量保存耗时可达
+     * 十秒级并占住渲染线程, 是「点击图层卡顿」的直接来源。
+     */
+    contentChanged: Boolean = true,
 ) {
-    isModified = true
-    hasPendingMajorOp = true
+    if (contentChanged) {
+        isModified = true
+        hasPendingMajorOp = true
+    }
     onPaintingActivity()
     syncLayersFromNative()
     // Mirror the C++ solo raw-mode flag into Compose state so the solo
@@ -303,6 +314,9 @@ internal fun PaintViewModel.generateDefaultGroupName(): String {
 }
 
 internal fun PaintViewModel.addLayer() {
+    if (transientTransformSelectionPending || canUndoTransformSelection || canRedoTransformSelection) {
+        discardTransientTransformSelection()
+    }
     clearLayerSelection()
     if (recorder.recording) {
         recorder.layerOp(com.reverie.paint.model.RecordingEvents.L_ADD)
@@ -375,6 +389,9 @@ internal fun PaintViewModel.removeLayer() {
 }
 
 internal fun PaintViewModel.removeLayer(index: Int) {
+    if (transientTransformSelectionPending || canUndoTransformSelection || canRedoTransformSelection) {
+        discardTransientTransformSelection()
+    }
     clearLayerSelection()
     Breadcrumbs.record("Layer", "Remove layer: $index")
     if (recorder.recording) {
@@ -391,24 +408,31 @@ internal fun PaintViewModel.removeLayer(index: Int) {
 internal fun PaintViewModel.setCurrentLayer(i: Int) {
     Breadcrumbs.record("Layer", "Set current layer: $i")
     val prevIdx = currentLayerIndex
+    val changed = prevIdx != i
     val prevLayer = layers.getOrNull(prevIdx)
-    if (prevLayer != null && active3DLayers.containsKey(prevLayer.id) && prevIdx != i) {
+    if (prevLayer != null && active3DLayers.containsKey(prevLayer.id) && changed) {
         // 离开 3D 参考图层时，将其烘焙写入底层引擎，使上层绘图可见其底层参考
         commit3DLayerPixels(prevLayer.id)
     }
 
     currentLayerIndex = i
+    if (changed && (transientTransformSelectionPending || canUndoTransformSelection || canRedoTransformSelection)) {
+        discardTransientTransformSelection()
+    }
+    // 选中索引会写进工程 (selectedLayerIndex), 所以记一笔"只差它没落盘": 不触发自动保存,
+    // 但软件切后台时的静默保存会顺带存上。同一个图层重复点击不算变化。
+    if (changed) selectionDirty = true
 
     val newLayer = layers.getOrNull(i)
-    if (newLayer != null && active3DLayers.containsKey(newLayer.id) && prevIdx != i) {
+    if (newLayer != null && active3DLayers.containsKey(newLayer.id) && changed) {
         // 进入 3D 参考图层时，清空引擎中可能留存的静止像素，完全交由实时 120Hz Canvas3DDrawer 接管
         ensure3DLayerClearedInCore(newLayer.id)
     }
-
     if (recorder.recording) {
         recorder.layerOp(com.reverie.paint.model.RecordingEvents.L_SET_CURRENT, i)
     }
-    runCore(after = { notifyLayerChanged(forceThumbs = false) }) {
+    // 纯选中: 不改内容, 不标脏、不拉自动保存引信 (见 notifyLayerChanged 注释)
+    runCore(after = { notifyLayerChanged(forceThumbs = false, contentChanged = false) }) {
         ReverieCoreBridge.setCurrentLayer(i)
     }
 }
@@ -1024,6 +1048,9 @@ internal fun PaintViewModel.setGroupPassThrough(
 }
 
 internal fun PaintViewModel.mergeDown(i: Int) {
+    if (transientTransformSelectionPending || canUndoTransformSelection || canRedoTransformSelection) {
+        discardTransientTransformSelection()
+    }
     if (recorder.recording) {
         recorder.layerOp(com.reverie.paint.model.RecordingEvents.L_MERGE_DOWN, i)
     }

@@ -126,11 +126,19 @@ extern "C" JNIEXPORT jbyteArray JNICALL
 Java_com_reverie_paint_core_ReverieCoreBridge_selectionMask(JNIEnv *env, jobject)
 {
     const QByteArray mask = core()->selectionMask();
-    jbyteArray arr = env->NewByteArray(mask.size());
-    if (mask.size() > 0) {
-        env->SetByteArrayRegion(arr, 0, mask.size(),
-                                reinterpret_cast<const jbyte *>(mask.constData()));
+    const int sz = mask.size();
+    if (sz <= 0) {
+        jbyteArray emptyArr = env->NewByteArray(0);
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        return emptyArr;
     }
+    jbyteArray arr = env->NewByteArray(sz);
+    if (!arr || env->ExceptionCheck()) {
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        return nullptr;
+    }
+    env->SetByteArrayRegion(arr, 0, sz,
+                            reinterpret_cast<const jbyte *>(mask.constData()));
     return arr;
 }
 

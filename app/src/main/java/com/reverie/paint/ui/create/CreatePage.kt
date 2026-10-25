@@ -149,8 +149,10 @@ fun CreatePage(vm: PaintViewModel) {
     }
 
     // Tab state:
+    // Mode Switcher: (0 = 尺寸预设, 1 = 模板工程)
     // In Wide Landscape: presetTab (0 = 系统预设, 1 = 我的预设)
     // In Portrait / Phone: portraitTab (0 = 常用预设, 1 = 自定义尺寸)
+    var createMode by remember { mutableIntStateOf(0) }
     var presetTab by remember { mutableIntStateOf(0) }
     var portraitTab by remember { mutableIntStateOf(0) }
 
@@ -442,6 +444,16 @@ fun CreatePage(vm: PaintViewModel) {
                 fontWeight = FontWeight.Bold
             )
 
+            Spacer(Modifier.width(18.dp))
+
+            // 顶层模式切换: [尺寸预设, 模板工程]
+            SegmentedTabSwitcher(
+                tabs = listOf(stringResource(R.string.create_mode_preset_size), stringResource(R.string.create_mode_templates)),
+                selectedIndex = createMode,
+                onTabSelected = { createMode = it },
+                modifier = Modifier.width(220.dp),
+            )
+
             Spacer(Modifier.weight(1f))
 
             Box(
@@ -473,7 +485,15 @@ fun CreatePage(vm: PaintViewModel) {
             }
         }
 
-        if (isWideLandscape) {
+        if (createMode == 1) {
+            TemplateStudioSection(
+                vm = vm,
+                isWide = isWideLandscape,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+            )
+        } else if (isWideLandscape) {
             // Tablet Wide Landscape 2-Column Split View
             Row(
                 modifier = Modifier

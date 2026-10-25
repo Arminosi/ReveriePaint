@@ -128,13 +128,21 @@ fun BrushStudioPage(
         }
     }
 
+    // SAF / Photo Picker Import Launcher for Custom Brush Thumbnail Image (PNG, JPG, WebP, etc.)
+    val importThumbnailLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) {
+            val ok = vm.importPresetThumbnail(uri, presetIndex)
+            if (!ok) {
+                Toast.makeText(context, context.getString(R.string.brush_studio_toast_thumbnail_import_failed), Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     // 手机端折叠状态
     var scratchpadVisible by remember { mutableStateOf(true) }
     var scratchpadExpanded by remember { mutableStateOf(false) }
 
-    var shapeInvert by remember { mutableStateOf(false) }
-    var shapeColorInvert by remember { mutableStateOf(false) }
-    var shapeRgbAffectsAlpha by remember { mutableStateOf(true) }
+
 
     val pageBg = Morandi.bg
     val panelBg = Morandi.panel
@@ -239,6 +247,13 @@ fun BrushStudioPage(
                             },
                         )
                         ReDropdownMenuItem(
+                            text = stringResource(R.string.brush_studio_import_thumbnail),
+                            onClick = {
+                                showMenu = false
+                                importThumbnailLauncher.launch("image/*")
+                            },
+                        )
+                        ReDropdownMenuItem(
                             text = stringResource(R.string.brush_share_action),
                             onClick = {
                                 showMenu = false
@@ -297,12 +312,6 @@ fun BrushStudioPage(
                                     vm = vm,
                                     preset = preset,
                                     allTips = allTipItems,
-                                    shapeInvert = shapeInvert,
-                                    onShapeInvert = { shapeInvert = it },
-                                    shapeColorInvert = shapeColorInvert,
-                                    onShapeColorInvert = { shapeColorInvert = it },
-                                    shapeRgbAffectsAlpha = shapeRgbAffectsAlpha,
-                                    onShapeRgbAffectsAlpha = { shapeRgbAffectsAlpha = it },
                                     onOpenTipPicker = { showTipPickerModal = true },
                                     onImportCustomTip = { importTipLauncher.launch(arrayOf("*/*")) },
                                     cardBg = cardBg,
@@ -351,6 +360,7 @@ fun BrushStudioPage(
                                     },
                                     onRename = { showRenameDialog = true },
                                     onDelete = { showDeleteConfirmDialog = true },
+                                    onImportThumbnail = { importThumbnailLauncher.launch("image/*") },
                                 )
                             }
                         }
@@ -456,6 +466,7 @@ fun BrushStudioPage(
                                 .fillMaxHeight()
                                 .padding(8.dp),
                             isCollapsible = false,
+                            onImportThumbnail = { importThumbnailLauncher.launch("image/*") },
                         )
                     }
                 } else {
@@ -518,6 +529,7 @@ fun BrushStudioPage(
                                 isExpanded = scratchpadExpanded,
                                 onToggleExpanded = { scratchpadExpanded = !scratchpadExpanded },
                                 onClose = { scratchpadVisible = false },
+                                onImportThumbnail = { importThumbnailLauncher.launch("image/*") },
                             )
                         } else {
                             CollapsedScratchpadBar()

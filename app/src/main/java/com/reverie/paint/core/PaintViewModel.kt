@@ -49,6 +49,12 @@ private const val STROKE_BATCH_CAPACITY = 256
 /** Delay before the stroke-start idle kick flushes a pen-down dot. */
 private const val STROKE_START_KICK_MS = 24L
 
+/** 批内合并: 上一批「引擎 flush + 瓦片渲染」超过这个耗时 (一整帧 60Hz 预算) 才把新样本并进同一批 (ms)。 */
+private const val STROKE_MERGE_TRIGGER_MS = 16L
+
+/** 批内合并: 合并后单批样本数上限 (与引擎 appendStrokeSample 的 32 样本分段对齐)。 */
+private const val STROKE_MERGE_MAX_SAMPLES = 32
+
 internal fun java.util.concurrent.atomic.AtomicInteger.decrementPositive() {
     while (true) {
         val cur = get()
@@ -208,7 +214,11 @@ class PaintViewModel : ViewModel() {
         maybeExitBackup()
         if (!autoSaveEnabled || isAutoSaving || isBlockingLoading) return
         if (currentPage != Page.PAINTING) return
-        if (!hasUnsavedChanges()) return
+        // 只切过图层 (contentChanged=false) 也算"有东西没落盘": 这里静默存一次, 否则
+        // "切到第 12 层 → 切后台/被杀"下次打开还停在第 5 层。刻意不把它并入
+        // hasUnsavedChanges(): 那会让退出重新弹"未保存", 也会让 checkAutoSave 每点一次
+        // 图层就拉响自动保存 —— 正是本 PR 要修的问题。
+        if (!hasUnsavedChanges() && !selectionDirty) return
 
         // 软件切入后台时，立即触发后台静默自动保存
         autoSaveProject(isPeriodic = false)
@@ -244,6 +254,20 @@ class PaintViewModel : ViewModel() {
     var autoSaveToastEnabled by mutableStateOf(true)
     var strokesSinceLastAutoSave by mutableIntStateOf(0)
     var hasPendingMajorOp by mutableStateOf(false)
+
+    /**
+     * 只改了"选中图层"、没改内容 (见 [notifyLayerChanged] 的 contentChanged)。
+     *
+     * `selectedLayerIndex` 会写进工程 (Kotlin 工程 JSON + 原生 `.revp` meta), 所以只切层的
+     * 结果也该落盘; 但它不值得**触发**自动保存 (那是"点图层就卡一下"的来源), 也不该让退出
+     * 弹"未保存"。
+     *
+     * 折中: 不参与 [hasUnsavedChanges] (退出不误报), 只作为"软件切后台时静默存一次"的理由
+     * (见 [onAppBackgrounded]) —— 那本来就是既有的保存时机, 用户也预期此时会存。
+     * 任何一次真实保存完成后清掉。
+     */
+    @Volatile
+    internal var selectionDirty = false
 
     /**
      * 性能标尺 (画布左上角实时显示渲染路径/纹理重传/保存阶段耗时)。见 [PerfTrace]。
@@ -515,6 +539,7 @@ class PaintViewModel : ViewModel() {
     var lastAutoSaveTimeMs by mutableLongStateOf(0L)
     var maxUndoSteps by mutableIntStateOf(50)
     var promptSaveOnExit by mutableStateOf(true)
+    var renderScheduleMode by mutableStateOf(com.reverie.paint.model.RenderScheduleMode.PERFORMANCE)
 
     // Brush state
     var brushSize by mutableDoubleStateOf(20.0)
@@ -635,6 +660,29 @@ class PaintViewModel : ViewModel() {
         config: com.reverie.paint.model.DynamicOptionConfig,
     ) {
         brushDynamicOptions[key] = config
+        when (key.lowercase()) {
+            "size" -> {
+                brushPressureSize = if (config.enabled) config.strength.toDouble() else 0.0
+                if (config.enabled) brushPressureEnabled = true
+                brushSizeSensor = config.sensorId
+            }
+            "opacity" -> {
+                brushPressureOpacity = if (config.enabled) config.strength.toDouble() else 0.0
+                if (config.enabled) brushPressureEnabled = true
+                brushOpacitySensor = config.sensorId
+            }
+            "flow" -> {
+                brushPressureFlow = if (config.enabled) config.strength.toDouble() else 0.0
+                if (config.enabled) brushPressureEnabled = true
+                brushFlowSensor = config.sensorId
+            }
+            "scatter" -> {
+                brushScatterSensor = config.sensorId
+            }
+            "rotation" -> {
+                brushRotationSensor = config.sensorId
+            }
+        }
         runCore(render = false) {
             ReverieCoreBridge.setBrushOptionDynamics(
                 optionName = key,
@@ -1428,6 +1476,10 @@ class PaintViewModel : ViewModel() {
             com.reverie.paint.model.QuickAction.RESET_VIEW -> {
                 requestUiCommand("reset_view")
             }
+            com.reverie.paint.model.QuickAction.ZOOM_IN -> requestUiCommand(CanvasViewportStep.ZOOM_IN.command)
+            com.reverie.paint.model.QuickAction.ZOOM_OUT -> requestUiCommand(CanvasViewportStep.ZOOM_OUT.command)
+            com.reverie.paint.model.QuickAction.ROTATE_CCW -> requestUiCommand(CanvasViewportStep.ROTATE_CCW.command)
+            com.reverie.paint.model.QuickAction.ROTATE_CW -> requestUiCommand(CanvasViewportStep.ROTATE_CW.command)
             com.reverie.paint.model.QuickAction.UNDO -> {
                 undo()
             }
@@ -1651,6 +1703,17 @@ class PaintViewModel : ViewModel() {
     var leftHandMode by mutableStateOf(false) // 左手模式: 快捷工具栏与滑块镜像停靠在右侧
     /** 自由悬浮布局配置 (平板专属) */
     var floatingUiConfig by mutableStateOf(com.reverie.paint.model.FloatingUiConfig())
+
+    /**
+     * 顶栏 / 工具栏按钮 / 滑块栏的实测屏幕边界 (root 坐标, px), 由 Compose 侧用
+     * onGloballyPositioned 写入。画布视图的前缓冲 UI 避让区用它取代硬编码的 dp 矩形
+     * (悬浮/贴边/左手/横竖屏下真实几何差异很大)。UI 线程写、触控/渲染线程读; null = 尚未测量。
+     */
+    @Volatile var measuredTopBarRect: android.graphics.RectF? = null
+
+    @Volatile var measuredToolRailRect: android.graphics.RectF? = null
+
+    @Volatile var measuredSliderRailRect: android.graphics.RectF? = null
     var selectionMaskColorHex by mutableStateOf("#141416") // 选区蒙版遮罩颜色 (默认深空灰黑)
     var selectionMaskOpacity by mutableFloatStateOf(0.47f) // 选区蒙版遮罩不透明度 (0.10 - 0.90, 默认 0.47)
 
@@ -1820,6 +1883,14 @@ class PaintViewModel : ViewModel() {
      * 关闭时回到上游原版行为 (仅"超低延迟笔迹预测"开关的 OEM 硬件尾线)。
      */
     var frontBufferPredictionEnabled by mutableStateOf(false)
+
+    /**
+     * 新建画布后，前缓冲在这段 uptime 之前不贴真墨、也不贴 #81 预览。
+     * Tab S9 实测：画布刚出来的约 3 秒内落笔，笔迹会裂开并叠一层错位副本；等过这段再画则正常。
+     * 尺寸对齐挡不住，因为这段时间里缓冲宽高已经等于 View。
+     */
+    @Volatile
+    var frontBufferQuietUntilMs: Long = 0L
 
     /**
      * 笔迹预测总开关: 任一预测开启即视为开启
@@ -2139,6 +2210,7 @@ class PaintViewModel : ViewModel() {
     var gradientType by mutableIntStateOf(0) // 0: 线性, 1: 径向, 2: 角度
     var gradientRepeat by mutableIntStateOf(0) // 0: 无, 1: 重复, 2: 往返
     var gradientReverse by mutableStateOf(false)
+    val gradientState = GradientState()
 
     var shapeStrokeWidth by mutableDoubleStateOf(4.0)
     var shapeFillMode by mutableIntStateOf(0) // 0: 仅描边, 1: 仅填充, 2: 描边与填充
@@ -2336,12 +2408,116 @@ class PaintViewModel : ViewModel() {
         }
     }
 
-    fun updateGestureThreeFingerEditMenu(enable: Boolean) {
-        gestureThreeFingerEditMenu = enable
+    var gestureConfig by mutableStateOf(com.reverie.paint.model.GestureConfig())
+
+    var quickMenuAnchor by mutableStateOf<androidx.compose.ui.geometry.Offset?>(null)
+    var quickMenuHoverIndex by mutableIntStateOf(-1)
+
+    fun updateGestureTrigger(
+        action: com.reverie.paint.model.GestureAction,
+        trigger: com.reverie.paint.model.GestureTrigger,
+    ) {
+        val (newConfig, conflictAction) = gestureConfig.withMapping(action, trigger)
+        gestureConfig = newConfig
+
+        if (action == com.reverie.paint.model.GestureAction.QUICK_MENU &&
+            trigger == com.reverie.paint.model.GestureTrigger.SINGLE_FINGER_TOUCH_SLIDE
+        ) {
+            if (penModeSingleFingerPanEnabled) {
+                updatePenModeSingleFingerPan(false)
+                if (::appContext.isInitialized) {
+                    showActionToast(appContext.getString(R.string.gesture_touch_slide_warning))
+                }
+            }
+        }
+
+        gestureTwoFingerUndo = newConfig.getTrigger(com.reverie.paint.model.GestureAction.UNDO) != com.reverie.paint.model.GestureTrigger.NONE
+        gestureThreeFingerRedo = newConfig.getTrigger(com.reverie.paint.model.GestureAction.REDO) != com.reverie.paint.model.GestureTrigger.NONE
+        gestureThreeFingerEditMenu = newConfig.getTrigger(com.reverie.paint.model.GestureAction.QUICK_MENU) != com.reverie.paint.model.GestureTrigger.NONE
+        gestureQuickPinchFit = newConfig.getTrigger(com.reverie.paint.model.GestureAction.FIT_CANVAS) != com.reverie.paint.model.GestureTrigger.NONE
+
+        if (conflictAction != null && ::appContext.isInitialized) {
+            val triggerName = appContext.getString(trigger.labelRes())
+            val conflictName = appContext.getString(conflictAction.labelRes())
+            val actionName = appContext.getString(action.labelRes())
+            showActionToast(appContext.getString(R.string.gesture_conflict_toast, triggerName, conflictName, actionName))
+        }
+
+        persistGestureConfig()
+    }
+
+    fun resetGestureConfigToDefaults() {
+        gestureConfig = com.reverie.paint.model.GestureConfig()
+        gestureTwoFingerUndo = true
+        gestureThreeFingerRedo = true
+        gestureThreeFingerEditMenu = true
+        gestureQuickPinchFit = true
+        persistGestureConfig()
+        if (::appContext.isInitialized) {
+            showActionToast(appContext.getString(R.string.gesture_reset_defaults_done))
+        }
+    }
+
+    private fun persistGestureConfig() {
         if (::appContext.isInitialized) {
             appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
-                .edit().putBoolean("gestureThreeFingerEditMenu", enable).apply()
+                .edit()
+                .putString("gestureConfig", gestureConfig.serialize())
+                .putBoolean("gestureTwoFingerUndo", gestureTwoFingerUndo)
+                .putBoolean("gestureThreeFingerRedo", gestureThreeFingerRedo)
+                .putBoolean("gestureThreeFingerEditMenu", gestureThreeFingerEditMenu)
+                .putBoolean("gestureQuickPinchFit", gestureQuickPinchFit)
+                .apply()
         }
+    }
+
+    fun dispatchGestureAction(action: com.reverie.paint.model.GestureAction, anchor: androidx.compose.ui.geometry.Offset? = null) {
+        when (action) {
+            com.reverie.paint.model.GestureAction.QUICK_MENU -> {
+                quickMenuAnchor = anchor
+                refreshCanvasEditCapabilities()
+                requestUiCommand("open_edit_menu")
+            }
+            com.reverie.paint.model.GestureAction.UNDO -> undo()
+            com.reverie.paint.model.GestureAction.REDO -> redo()
+            com.reverie.paint.model.GestureAction.FULLSCREEN -> requestUiCommand("toggle_fullscreen")
+            com.reverie.paint.model.GestureAction.FIT_CANVAS -> requestUiCommand("reset_view")
+            com.reverie.paint.model.GestureAction.CLEAR_LAYER -> clearLayer(currentLayerIndex)
+            com.reverie.paint.model.GestureAction.EYEDROPPER -> requestUiCommand("open_color")
+            com.reverie.paint.model.GestureAction.NONE -> Unit
+        }
+    }
+
+    fun executeCanvasEditAction(action: com.reverie.paint.model.CanvasEditAction) {
+        when (action) {
+            is com.reverie.paint.model.CanvasEditAction.Clipboard -> editCanvasClipboard(
+                cut = action == com.reverie.paint.model.CanvasEditAction.Clipboard.CUT,
+                paste = action == com.reverie.paint.model.CanvasEditAction.Clipboard.PASTE,
+            )
+            is com.reverie.paint.model.CanvasEditAction.Shortcut -> executeQuickAction(action.action)
+        }
+    }
+
+    fun executeCanvasEditActionByIndex(slot: Int) {
+        val actions = canvasEditMenuActions.take(6)
+        val slots = when (actions.size) {
+            1 -> listOf(0)
+            2 -> listOf(5, 1)
+            3 -> listOf(0, 2, 4)
+            4 -> listOf(5, 1, 2, 4)
+            else -> actions.indices.toList()
+        }
+        val actionIndex = slots.indexOf(slot)
+        if (actionIndex in actions.indices) {
+            executeCanvasEditAction(actions[actionIndex])
+        }
+    }
+
+    fun updateGestureThreeFingerEditMenu(enable: Boolean) {
+        gestureThreeFingerEditMenu = enable
+        val newTrigger = if (enable) com.reverie.paint.model.GestureTrigger.THREE_FINGER_SWIPE_DOWN else com.reverie.paint.model.GestureTrigger.NONE
+        gestureConfig = gestureConfig.withMapping(com.reverie.paint.model.GestureAction.QUICK_MENU, newTrigger).first
+        persistGestureConfig()
     }
     var gesturePinchTransform by mutableStateOf(true)
     var gestureQuickPinchFit by mutableStateOf(true)
@@ -3654,6 +3830,18 @@ class PaintViewModel : ViewModel() {
         }
     }
 
+    fun updateRenderScheduleMode(mode: com.reverie.paint.model.RenderScheduleMode) {
+        if (renderScheduleMode == mode) return
+        renderScheduleMode = mode
+        if (::appContext.isInitialized) {
+            appContext
+                .getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                .edit()
+                .putInt("renderScheduleMode", mode.id)
+                .apply()
+        }
+    }
+
     fun clearActionToast() {
         actionToastMessage = null
         actionToastIcon = null
@@ -3713,7 +3901,7 @@ class PaintViewModel : ViewModel() {
                 com.reverie.paint.model.FloatingUiConfig.DEFAULT_PANEL_ORDER
             }
             floatingUiConfig = com.reverie.paint.model.FloatingUiConfig(
-                enabled = isTabletDevice && floatingSavedEnabled,
+                enabled = floatingSavedEnabled,
                 topBarPosition = com.reverie.paint.model.PanelPosition(
                     edge = runCatching { com.reverie.paint.model.PanelEdge.valueOf(topBarEdgeName) }.getOrDefault(com.reverie.paint.model.PanelEdge.TOP),
                     alignment = runCatching { com.reverie.paint.model.PanelAlignment.valueOf(topBarAlignName) }.getOrDefault(com.reverie.paint.model.PanelAlignment.END),
@@ -3803,10 +3991,20 @@ class PaintViewModel : ViewModel() {
             genericStylusEnabled = prefs.getBoolean("genericStylusEnabled", false)
             genericPrimaryButtonAction = prefs.getString("genericPrimaryButtonAction", "toggle_eraser") ?: "toggle_eraser"
             genericSecondaryButtonAction = prefs.getString("genericSecondaryButtonAction", "undo") ?: "undo"
-            genericSideButtonErase = prefs.getBoolean("genericSideButtonErase", true)
             gestureTwoFingerUndo = prefs.getBoolean("gestureTwoFingerUndo", true)
             gestureThreeFingerRedo = prefs.getBoolean("gestureThreeFingerRedo", true)
             gestureThreeFingerEditMenu = prefs.getBoolean("gestureThreeFingerEditMenu", true)
+            val savedGestureConfig = prefs.getString("gestureConfig", null)
+            gestureConfig = if (!savedGestureConfig.isNullOrBlank()) {
+                com.reverie.paint.model.GestureConfig.deserialize(savedGestureConfig)
+            } else {
+                var config = com.reverie.paint.model.GestureConfig()
+                if (!gestureTwoFingerUndo) config = config.withMapping(com.reverie.paint.model.GestureAction.UNDO, com.reverie.paint.model.GestureTrigger.NONE).first
+                if (!gestureThreeFingerRedo) config = config.withMapping(com.reverie.paint.model.GestureAction.REDO, com.reverie.paint.model.GestureTrigger.NONE).first
+                if (!gestureThreeFingerEditMenu) config = config.withMapping(com.reverie.paint.model.GestureAction.QUICK_MENU, com.reverie.paint.model.GestureTrigger.NONE).first
+                if (!gestureQuickPinchFit) config = config.withMapping(com.reverie.paint.model.GestureAction.FIT_CANVAS, com.reverie.paint.model.GestureTrigger.NONE).first
+                config
+            }
             canvasEditMenuActions = com.reverie.paint.model.CanvasEditAction.decode(
                 prefs.getString(com.reverie.paint.model.CanvasEditAction.PREFERENCE_KEY, null),
             )
@@ -3877,6 +4075,9 @@ class PaintViewModel : ViewModel() {
             autoSaveToastEnabled = prefs.getBoolean("autoSaveToastEnabled", true)
             maxUndoSteps = prefs.getInt("maxUndoSteps", 50).coerceIn(10, 200)
             promptSaveOnExit = prefs.getBoolean("promptSaveOnExit", true)
+            renderScheduleMode = com.reverie.paint.model.RenderScheduleMode.fromId(
+                prefs.getInt("renderScheduleMode", com.reverie.paint.model.RenderScheduleMode.PERFORMANCE.id)
+            )
 
             val authorJson = prefs.getString("author_profile_json", null)
             authorProfile = com.reverie.paint.model.AuthorProfile.fromJson(authorJson)
@@ -4551,6 +4752,11 @@ class PaintViewModel : ViewModel() {
         )
     }
 
+    internal fun reloadPalettesFromPrefs() {
+        userPalettes = loadUserPalettes()
+        recentColors = loadRecentColors()
+    }
+
     fun updateColorPickerMode(mode: String) {
         colorPickerMode = mode
         if (::appContext.isInitialized) {
@@ -4616,6 +4822,10 @@ class PaintViewModel : ViewModel() {
     var displayRevision by mutableLongStateOf(0L)
         internal set
 
+    /** 参考窗口-画布页的独立刷新版本号: 仅当快照真正上屏时才自增, 避免 120Hz 冗余重组与纹理重传。 */
+    var referenceCanvasRevision by mutableLongStateOf(0L)
+        internal set
+
     // ===== 动画 (帧 / 轨道 / 时间轴) 状态镜像 =====
     // 引擎侧真身在 Krita 的 KisRasterKeyframeChannel (图层即轨道),
     // 这里只镜像 UI 需要的元信息。所有动画操作必须经
@@ -4623,6 +4833,8 @@ class PaintViewModel : ViewModel() {
     internal val anim = AnimationState()
 
     internal val syncState = SyncState()
+
+    internal val localBackupState = LocalBackupState()
 
     /** 动画音频播放器 (导入的音频资源, 播放动画时循环同步播放; 见 PaintViewModelAnimation.kt) */
     internal val animAudioPlayers = mutableListOf<android.media.MediaPlayer>()
@@ -4633,6 +4845,19 @@ class PaintViewModel : ViewModel() {
         viewH: Int,
     ) {
         if (viewW <= 0 || viewH <= 0) return
+        // coreW/coreH 由渲染线程在换文档 (loadProject/startPainting 的 newDocument) 时写入。
+        // 在 UI 线程上读会和它竞态, 把 renderW/renderH 写回旧尺寸, 首帧瓦片与文档尺寸错位。
+        // 投递到渲染线程, 与文档尺寸变更串行执行。渲染线程还没起来时不可能有换文档在跑,
+        // 就地应用 (不能丢掉: 之后不会再有 onSizeChanged 补这一次)。
+        val h = renderHandler
+        if (h == null) {
+            applyRenderViewport()
+        } else {
+            h.post { applyRenderViewport() }
+        }
+    }
+
+    private fun applyRenderViewport() {
         val nw = maxOf(1, coreW)
         val nh = maxOf(1, coreH)
         if (nw != renderW || nh != renderH) {
@@ -4659,6 +4884,16 @@ class PaintViewModel : ViewModel() {
     // backBuffer is rendered into by C++ ReverieCore on the render thread.
     internal var frontBuffer: Bitmap? = null
     internal var backBuffer: Bitmap? = null
+
+    // 512 显示瓦片网格 (1:1 渲染路径的画布来源, 见 PaintViewModelTiles.kt)。
+    internal val displayTiles = DisplayTileState()
+
+    /**
+     * 画布当前有可上屏的像素: 瓦片网格已发布, 或整图路径已有 [displayBitmap]。
+     * 液化这类"必须有画布画面"的功能用它做门 —— 瓦片路径下不一定存在整图位图。
+     */
+    internal val hasDisplaySurface: Boolean
+        get() = displayTiles.drawable() != null || displayBitmap != null
 
     // Cumulative dirty rect for large bitmap tiling (> 100MB) synchronization
     private val largeBitmapDirtyRect = android.graphics.Rect()
@@ -4708,7 +4943,16 @@ class PaintViewModel : ViewModel() {
     init {
         currentInstance = this
         startRenderThread()
+        // 前缓冲内容保留能力的后台探测 (十毫秒级), 进入画布前结论早已就绪。
+        com.reverie.paint.core.stylus.FrontBufferProbe.warmUpPreservedContentCheck()
     }
+
+    /**
+     * 前缓冲真墨呈现 (续 #81) 的渲染线程接口, 由画布视图注册。core 只认 [RealInkSink],
+     * 不引用 ui 包; 为 null 时一切照旧 (主画布逐帧失效)。
+     */
+    @Volatile
+    internal var realInkSink: RealInkSink? = null
 
     var stylusDriver: com.reverie.paint.core.stylus.StylusDriver? = null
 
@@ -4915,6 +5159,9 @@ class PaintViewModel : ViewModel() {
     // lost pressure detail. Buffers are allocated once: zero allocation on
     // the hot path (架构铁律 §4).
     companion object {
+        /** 见 [frontBufferQuietUntilMs]。取实测窗口的上沿，避免卡在 3 秒边界上仍裂开。 */
+        const val NEW_CANVAS_FRONT_BUFFER_QUIET_MS = 3_200L
+
         @Volatile var currentInstance: PaintViewModel? = null
         const val SMOOTHING_OFF = 0
         const val SMOOTHING_BASIC = 1
@@ -4930,10 +5177,28 @@ class PaintViewModel : ViewModel() {
             com.reverie.paint.model.Tool.FILL,
             com.reverie.paint.model.Tool.LASSO,
         )
-        const val PRESENT_ESTIMATE_MS = 14L // 补偿 UI draw + SurfaceFlinger 合成上屏延迟 (~1~1.5 帧 VSYNC)
-        const val PRESENT_TAIL_MS = 8L      // onDraw 提交 + HWUI/SF 合成 ~1 帧 @120Hz (保守常数)
+        const val PRESENT_ESTIMATE_MS = 8L // 普通 View 路径: UI draw + SurfaceFlinger 合成上屏延迟
+        const val PRESENT_TAIL_MS = 4L // onDraw 提交 + HWUI/SF 合成尾
+
+        /** 真墨由前缓冲直出时的上屏延迟估计 (单缓冲, 绕过 HWUI/SF 的排队)。 */
+        const val FRONT_BUFFER_PRESENT_MS = 4L
         const val STROKE_BATCH_CAPACITY = 256
         const val STROKE_SAMPLE_STRIDE = 6
+
+        /**
+         * 带时间的采样步进 (仅对称镜像缓冲使用): 前 6 个 float 与 [STROKE_SAMPLE_STRIDE]
+         * 相同, 第 7 个是相对笔锋起点的秒。注意 JNI `touchStrokeMoveBatch` 只认
+         * stride 6/3, 重放须重打包为 6 维并丢弃时间; 仅 `touchStrokeMirrorBatch`
+         * -> `paintMirrorPolyline(..., 7, ...)` 接受 7 维。实时运笔缓冲仍固定 6 元。
+         */
+        const val STROKE_SAMPLE_STRIDE_WITH_TIME = 7
+        /** 对称镜像实时队列: 最多 8 条分支, 每条 256 个 7 元采样点。 */
+        const val MIRROR_BRANCH_COUNT = 8
+        const val MIRROR_BRANCH_CAPACITY = 256
+        /** JNI touchStrokeMirrorBatch 返回值 (与 C++ reverie::MirrorBatchAction 映射一致)。 */
+        const val MIRROR_BATCH_ACCEPTED = 1
+        const val MIRROR_BATCH_REJECTED = 0
+        const val MIRROR_BATCH_STALE = -1
 
         /**
          * 点刷家族判定: 印章/喷溅/飞溅/海绵/耙/噪点/粒子/网格/曲线/网点类预设。
@@ -5050,10 +5315,36 @@ class PaintViewModel : ViewModel() {
     private val strokeDrainTimes = LongArray(STROKE_BATCH_CAPACITY)
     private var strokeBatchCount = 0
     private var batchOverflowLogCounter = 0 // queueStrokeMove 仅 UI 线程调用
+    // ---- 对称实时镜像队列 ----
+    // 镜像点由 UI 线程在 appendMirrorSample 里追加, 渲染线程独占 drain。
+    // s12-F1: 每个点带落笔时分配的笔画号; 渲染线程只取"引擎当前打开的那一笔"([engineMirrorSeq])
+    // 的点, 快速连笔时下一笔的点不会被上一笔收尾的 drain 画进上一笔的笔触。
+    private val mirrorQueue = MirrorSampleQueue(MIRROR_BRANCH_COUNT, MIRROR_BRANCH_CAPACITY, STROKE_SAMPLE_STRIDE_WITH_TIME)
+    private val mirrorDrainCoords = arrayOfNulls<FloatArray>(MIRROR_BRANCH_COUNT)
+    private val mirrorPushScratch = FloatArray(STROKE_SAMPLE_STRIDE_WITH_TIME) // 仅 UI 线程
+    private var mirrorOverflowLogCounter = 0
+    /** 笔画号计数 (仅 UI 线程, touchStart 递增; 0 表示"没有笔画")。 */
+    internal var mirrorStrokeSeqCounter = 0
+    /**
+     * 渲染线程: 引擎当前打开的笔画的笔画号 (touchStart 的 runCore 在 touchStrokeStart 之后设置,
+     * touchEnd / touchCancel 的 runCore 在 touchStrokeEnd / touchStrokeCancel 之后清 0)。
+     */
+    @Volatile internal var engineMirrorSeq = 0
+    /**
+     * s12: 本笔镜像的实时出墨状态门 (OFF / PENDING / LIVE / FALLBACK, 见 [MirrorLiveGate])。
+     * 引擎侧每个镜像分支有独立 painter + paintop, 接受后镜像与主笔同笔触实时出真墨。
+     */
+    internal val mirrorGate = MirrorLiveGate()
+    /** 镜像已实时画进打开的笔触 (预览关闭、抬笔不重放)。只读, 由 [mirrorGate] 决定。 */
+    val symmetryMirrorLive: Boolean get() = mirrorGate.isLive
+    /** s13-C5: 本笔已被撤销/重做/取消中止, 抬笔不得重放镜像 (见 [MirrorLiveGate.abort])。 */
+    val mirrorStrokeAborted: Boolean get() = mirrorGate.isAborted
     @Volatile private var strokeBatchQueued = false
     @Volatile private var lastQueuedInputEventTime = 0L
     @Volatile private var lastQueuedUptime = 0L
-    @Volatile var lastE2ePipelineMs: Long = 40L
+    // 初值取一帧量级: 原先 40L 配合 "e2e in 5L..250L" 的更新条件, 硬笔快速运笔时实测 e2e 只有
+    // 1~4ms, 永远更新不上, 延迟估计锁死在 40 + 14 = 54ms, 预览回填窗口过大 (拐角重影)。
+    @Volatile var lastE2ePipelineMs: Long = 8L
     data class RenderedFrontier(
         val docX: Float,
         val docY: Float,
@@ -5077,6 +5368,7 @@ class PaintViewModel : ViewModel() {
 
     fun resetRenderedFrontier() {
         currentRenderedFrontier = null
+        lastE2ePipelineMs = 8L
     }
 
     fun updateRenderedFrontier(docX: Float, docY: Float, timeMs: Long) {
@@ -5091,8 +5383,10 @@ class PaintViewModel : ViewModel() {
      */
     val presentLagEstimateMs: Long
         get() {
+            // 真墨按住期间笔迹由前缓冲呈现, 不再经过主画布的 HWUI/SF 合成。
+            if (realInkSink?.wantsHold() == true) return FRONT_BUFFER_PRESENT_MS
             val measuredPresent = PerfTrace.presentWaitP50Ms
-            return if (measuredPresent in 2L..35L) {
+            return if (measuredPresent in 1L..35L) {
                 (measuredPresent + PRESENT_TAIL_MS).coerceAtLeast(PRESENT_ESTIMATE_MS)
             } else {
                 PRESENT_ESTIMATE_MS
@@ -5100,8 +5394,34 @@ class PaintViewModel : ViewModel() {
         }
 
     val effectivePipelineDelayMs: Long
-        get() = (lastE2ePipelineMs + presentLagEstimateMs).coerceIn(20L, 85L)
+        get() = (lastE2ePipelineMs + presentLagEstimateMs).coerceIn(4L, 85L)
     private var perfLogCounter = 0
+
+    /** 上一批「引擎 flush + 瓦片渲染」的实际耗时 (ns), 批内合并的触发依据。只在渲染线程读写。 */
+    private var lastStrokeBatchWorkNs = 0L
+
+    /** 上一次运笔渲染结束的系统时间戳 (uptimeMillis), 用于调度节流与温控。只在渲染线程读写。 */
+    private var lastStrokeRenderFinishUptimeMs = 0L
+    private var strokeThrottleRenderScheduled = false
+    private var pendingFrontierDocX = 0f
+    private var pendingFrontierDocY = 0f
+    private var pendingFrontierSampleTime = 0L
+    private var hasPendingFrontier = false
+
+    private val strokeThrottleRenderRunnable = Runnable {
+        strokeThrottleRenderScheduled = false
+        if (renderW > 0 && renderH > 0) {
+            val tStart = android.os.SystemClock.elapsedRealtimeNanos()
+            doRender()
+            val dtNs = android.os.SystemClock.elapsedRealtimeNanos() - tStart
+            lastStrokeRenderFinishUptimeMs = android.os.SystemClock.uptimeMillis()
+            if (hasPendingFrontier) {
+                updateRenderedFrontier(pendingFrontierDocX, pendingFrontierDocY, pendingFrontierSampleTime)
+                hasPendingFrontier = false
+            }
+            reportRenderWorkDuration(dtNs)
+        }
+    }
 
     private val strokeBatchRunnable = Runnable {
         val tDispatch = android.os.SystemClock.uptimeMillis()
@@ -5122,36 +5442,110 @@ class PaintViewModel : ViewModel() {
         } catch (_: Throwable) {
             false
         }
-        val dtKritaNs = android.os.SystemClock.elapsedRealtimeNanos() - tKritaStartNs
-        val dtKrita = dtKritaNs / 1_000_000L
+        // 镜像折线必须画在主笔同一批之后、doRender 之前。主笔这一批没落墨时也要 drain。
+        // 不为镜像单独再开一次 doRender。
+        val mirrorPainted = drainMirrorBatchesOnRenderThread()
+        var dtKritaNs = android.os.SystemClock.elapsedRealtimeNanos() - tKritaStartNs
         var dtRenderNs = 0L
-        // Render immediately in-place after ink landed to eliminate message queue roundtrip latency
-        if (painted) {
-            val tRenderStartNs = android.os.SystemClock.elapsedRealtimeNanos()
-            doRender()
-            dtRenderNs = android.os.SystemClock.elapsedRealtimeNanos() - tRenderStartNs
-            val dtRender = dtRenderNs / 1_000_000L
-            val tDone = android.os.SystemClock.uptimeMillis()
-            val queueWait = tDispatch - lastQueuedUptime
-            val e2e = if (lastQueuedInputEventTime > 0) tDone - lastQueuedInputEventTime else 0L
-            if (e2e in 5L..250L) {
-                lastE2ePipelineMs = e2e
-            }
-            val lastSampleIdx = n - 1
-            val lastCoordIdx = lastSampleIdx * STROKE_SAMPLE_STRIDE
-            updateRenderedFrontier(
-                strokeDrainCoords[lastCoordIdx],
-                strokeDrainCoords[lastCoordIdx + 1],
-                strokeDrainTimes[lastSampleIdx]
-            )
 
-            if (++perfLogCounter % 5 == 0) {
-                android.util.Log.i(
-                    "ReveriePerf",
-                    "StrokePerf: n=$n queueWait=${queueWait}ms krita=${dtKrita}ms render=${dtRender}ms e2e=${e2e}ms effectiveDelay=${effectivePipelineDelayMs}ms presentWait=${PerfTrace.presentWaitP50Ms}ms frontierErr=${"%.1f".format(PerfTrace.frontierErrP50Px)}px"
-                )
+        // ---- 批内合并 (渲染线程) ----
+        // 上一批 (引擎 flush + 瓦片渲染) 超过一整帧 16ms 预算说明渲染线程已落后于手写采样, 队列里又积了
+        // 新样本。与其让它们各自触发一轮完整的 doRender (compositeDirtyRegions + 瓦片拷贝 + 前缓冲贴图),
+        // 不如在这里并进同一批, 只做一轮 doRender。
+        // 根据当前调度策略 (RenderScheduleMode) 设定合并阈值与单次吸纳上限。
+        var lastDocX = if (n > 0) strokeDrainCoords[(n - 1) * STROKE_SAMPLE_STRIDE] else 0f
+        var lastDocY = if (n > 0) strokeDrainCoords[(n - 1) * STROKE_SAMPLE_STRIDE + 1] else 0f
+        var lastSampleTime = if (n > 0) strokeDrainTimes[n - 1] else 0L
+        var merged = 0
+        val maxMergeSamples = renderScheduleMode.maxStrokeMergeSamples
+        if (painted && n in 1 until maxMergeSamples &&
+            lastStrokeBatchWorkNs > STROKE_MERGE_TRIGGER_MS * 1_000_000L
+        ) {
+            var extra = 0
+            val maxExtra = minOf(
+                if (renderScheduleMode == com.reverie.paint.model.RenderScheduleMode.POWER_SAVER) 16 else 8,
+                maxMergeSamples - n,
+            )
+            synchronized(strokeBatchLock) {
+                if (strokeBatchCount in 1..maxExtra) {
+                    extra = strokeBatchCount
+                    System.arraycopy(strokeBatchCoords, 0, strokeDrainCoords, 0, extra * STROKE_SAMPLE_STRIDE)
+                    System.arraycopy(strokeBatchTimes, 0, strokeDrainTimes, 0, extra)
+                    strokeBatchCount = 0
+                }
+            }
+            if (extra > 0) {
+                lastDocX = strokeDrainCoords[(extra - 1) * STROKE_SAMPLE_STRIDE]
+                lastDocY = strokeDrainCoords[(extra - 1) * STROKE_SAMPLE_STRIDE + 1]
+                lastSampleTime = strokeDrainTimes[extra - 1]
+                val tMergeStartNs = android.os.SystemClock.elapsedRealtimeNanos()
+                try {
+                    ReverieCoreBridge.touchStrokeMoveBatch(strokeDrainCoords, extra)
+                } catch (_: Throwable) {
+                    // 与首批一致: 引擎异常不影响本帧照常渲染已落墨的部分
+                }
+                dtKritaNs += android.os.SystemClock.elapsedRealtimeNanos() - tMergeStartNs
+                merged = extra
             }
         }
+        val dtKrita = dtKritaNs / 1_000_000L
+
+        // Render immediately in-place after ink landed to eliminate message queue roundtrip latency.
+        // 调度温控：若开启节流且距上一帧渲染完成间隔过短，暂缓 doRender() 并在窗口期满时统一输出，
+        // 防止高刷屏上过度触发瓦片合成导致 CPU/GPU 发热满载。
+        if (painted || mirrorPainted) {
+            if (n > 0 || merged > 0) {
+                pendingFrontierDocX = lastDocX
+                pendingFrontierDocY = lastDocY
+                pendingFrontierSampleTime = lastSampleTime
+                hasPendingFrontier = true
+            }
+
+            val minIntervalMs = renderScheduleMode.minRenderIntervalMs
+            val nowMs = android.os.SystemClock.uptimeMillis()
+            val elapsed = nowMs - lastStrokeRenderFinishUptimeMs
+            val shouldThrottle = minIntervalMs > 0L && elapsed < minIntervalMs
+
+            if (!shouldThrottle) {
+                if (strokeThrottleRenderScheduled) {
+                    renderHandler?.removeCallbacks(strokeThrottleRenderRunnable)
+                    strokeThrottleRenderScheduled = false
+                }
+                val tRenderStartNs = android.os.SystemClock.elapsedRealtimeNanos()
+                doRender()
+                lastStrokeRenderFinishUptimeMs = android.os.SystemClock.uptimeMillis()
+                dtRenderNs = android.os.SystemClock.elapsedRealtimeNanos() - tRenderStartNs
+                val dtRender = dtRenderNs / 1_000_000L
+                val tDone = android.os.SystemClock.uptimeMillis()
+                val queueWait = tDispatch - lastQueuedUptime
+                val e2e =
+                    if (lastQueuedInputEventTime > 0) (tDone - lastQueuedInputEventTime).coerceAtLeast(1L) else 0L
+                if (e2e in 1L..250L) {
+                    lastE2ePipelineMs = ((lastE2ePipelineMs * 2L) + e2e) / 3L
+                }
+                if (hasPendingFrontier) {
+                    updateRenderedFrontier(pendingFrontierDocX, pendingFrontierDocY, pendingFrontierSampleTime)
+                    hasPendingFrontier = false
+                }
+
+                if (++perfLogCounter % 5 == 0) {
+                    android.util.Log.i(
+                        "ReveriePerf",
+                        "StrokePerf: n=$n merged=$merged mode=${renderScheduleMode.name} queueWait=${queueWait}ms krita=${dtKrita}ms " +
+                            "render=${dtRender}ms e2e=${e2e}ms effectiveDelay=${effectivePipelineDelayMs}ms " +
+                            "presentWait=${PerfTrace.presentWaitP50Ms}ms " +
+                            "frontierErr=${"%.1f".format(PerfTrace.frontierErrP50Px)}px"
+                    )
+                }
+            } else {
+                if (!strokeThrottleRenderScheduled) {
+                    strokeThrottleRenderScheduled = true
+                    val delay = (minIntervalMs - elapsed).coerceIn(1L, minIntervalMs)
+                    renderHandler?.postDelayed(strokeThrottleRenderRunnable, delay)
+                }
+            }
+        }
+        lastStrokeBatchWorkNs = dtKritaNs + dtRenderNs
         if (n > 0) {
             reportRenderWorkDuration(dtKritaNs + dtRenderNs)
         }
@@ -5216,13 +5610,156 @@ class PaintViewModel : ViewModel() {
         }
     }
 
+    /**
+     * 渲染线程上, 在提交 touchStrokeEnd 之前把还排在队列里的运笔补点跑完 (防御性)。
+     *
+     * 正常情况下这是空操作: 补点的 [strokeBatchRunnable] 由 UI 线程先于收尾任务投递, 按 FIFO
+     * 早已跑完。万一它排在收尾任务之后, 那一截笔尾会在笔画提交之后才进引擎 (丢墨、以错误的
+     * 合成状态重画)。只在确认 runnable 确实还在队列里时摘下来手动跑一次, 计数只减一次;
+     * API < 29 没有 hasCallbacks, 无法确认, 不做。只允许在渲染线程调用。
+     */
+    internal fun drainPendingStrokeBatchOnRenderThread() {
+        if (strokeThrottleRenderScheduled) {
+            renderHandler?.removeCallbacks(strokeThrottleRenderRunnable)
+            strokeThrottleRenderScheduled = false
+        }
+        if (!strokeBatchQueued) return
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) return
+        val h = renderHandler ?: return
+        if (!h.hasCallbacks(strokeBatchRunnable)) return
+        h.removeCallbacks(strokeBatchRunnable)
+        strokeBatchRunnable.run()
+    }
+
     /** Drop undelivered stroke samples (cancel path: they must not reach the
      *  engine after touchStrokeCancel ran). */
     internal fun clearPendingStrokeSamples() {
+        if (strokeThrottleRenderScheduled) {
+            renderHandler?.removeCallbacks(strokeThrottleRenderRunnable)
+            strokeThrottleRenderScheduled = false
+        }
         synchronized(strokeBatchLock) {
             strokeBatchCount = 0
         }
+        // s12-F1: 取消 / 撤销 / 重做 / 离开页面都会让引擎关掉打开的笔触, 镜像门同步关掉,
+        // 否则后续镜像批被引擎按过期丢弃而 Kotlin 仍以为在实时出墨, 抬笔也不重放。
+        mirrorGate.abort()
+        mirrorQueue.clear()
         resetRenderedFrontier()
+    }
+
+
+    /**
+     * UI 线程: 追加一个镜像采样点。队列满时丢弃最新的这个点 (不覆盖已入队的点),
+     * 也不在 UI 线程调用 JNI。
+     */
+    internal fun queueMirrorSample(
+        branchIndex: Int,
+        x: Float,
+        y: Float,
+        pressure: Float,
+        tiltX: Float,
+        tiltY: Float,
+        rotation: Float,
+        timeSeconds: Float,
+    ) {
+        if (!mirrorGate.isQueueing) return
+        if (branchIndex < 0 || branchIndex >= MIRROR_BRANCH_COUNT) return
+        if (x.isNaN() || y.isNaN()) return
+        val seq = mirrorGate.currentSeq
+        if (seq <= 0) return
+        val sc = mirrorPushScratch
+        sc[0] = x
+        sc[1] = y
+        sc[2] = if (pressure.isNaN()) 1f else pressure.coerceIn(0f, 1f)
+        // 与主笔 touchStart / queueStrokeMove 一致, 倾角夹到 ±60
+        sc[3] = if (tiltX.isNaN()) 0f else tiltX.coerceIn(-60f, 60f)
+        sc[4] = if (tiltY.isNaN()) 0f else tiltY.coerceIn(-60f, 60f)
+        sc[5] = if (rotation.isNaN()) 0f else rotation
+        sc[6] = if (timeSeconds.isNaN()) 0f else timeSeconds.coerceAtLeast(0f)
+        if (!mirrorQueue.push(branchIndex, seq, sc) && ++mirrorOverflowLogCounter % 60 == 1) {
+            android.util.Log.w(
+                "ReverieCore",
+                "MirrorBatch overflow: branch=$branchIndex dropped (capacity=$MIRROR_BRANCH_CAPACITY)"
+            )
+        }
+    }
+
+    /**
+     * 渲染线程: 把引擎当前打开那一笔 ([engineMirrorSeq]) 的镜像点画进笔触。返回是否送出了被引擎
+     * 接受的镜像墨 (调用方据此决定要不要 doRender)。
+     *
+     * - 只取本笔笔画号的点; 下一笔 (笔画号更大) 的点留在队列里, 更早的过期点丢弃。
+     * - 本笔还在 PENDING 时, 送墨在 [MirrorLiveGate.withLock] 内执行, 与 UI 线程抬笔判定
+     *   ([resolveMirrorLiveAtPenUp]) 互斥; 进入 LIVE 后不可能再回退, 其余分支在锁外送 (UI 不被整批阻塞)。
+     * - 引擎拒绝 (本笔还没有任何实时镜像墨) -> FALLBACK, 丢弃本笔剩余镜像点, 抬笔走 replaySymmetricBranches。
+     * - 引擎回报过期 (它已不在画这一笔) -> 丢弃本笔剩余镜像点, 状态不变。
+     */
+    internal fun drainMirrorBatchesOnRenderThread(): Boolean {
+        val seq = engineMirrorSeq
+        if (seq <= 0) return false
+        val st0 = mirrorGate.stateOf(seq)
+        if (st0 != MirrorLiveGate.State.PENDING && st0 != MirrorLiveGate.State.LIVE) {
+            if (st0 == MirrorLiveGate.State.FALLBACK) mirrorQueue.discardUpTo(seq)
+            return false
+        }
+        var painted = false
+        for (b in 0 until MIRROR_BRANCH_COUNT) {
+            val dst = mirrorQueue.take(b, seq, mirrorDrainCoords[b]) ?: continue
+            mirrorDrainCoords[b] = dst
+            val n = dst.size / STROKE_SAMPLE_STRIDE_WITH_TIME
+            val result: MirrorLiveGate.EngineResult? = when (mirrorGate.stateOf(seq)) {
+                MirrorLiveGate.State.LIVE -> sendMirrorBatch(dst, n, b, seq).also { mirrorGate.onEngineResult(seq, it) }
+                MirrorLiveGate.State.PENDING -> mirrorGate.withLock {
+                    // 锁内再看一次: UI 线程可能刚在抬笔时把本笔判成 FALLBACK
+                    when (mirrorGate.stateOf(seq)) {
+                        MirrorLiveGate.State.PENDING, MirrorLiveGate.State.LIVE ->
+                            sendMirrorBatch(dst, n, b, seq).also { mirrorGate.onEngineResult(seq, it) }
+                        else -> null
+                    }
+                }
+                else -> null
+            }
+            when (result) {
+                MirrorLiveGate.EngineResult.ACCEPTED -> painted = true
+                MirrorLiveGate.EngineResult.REJECTED -> {
+                    if (mirrorGate.stateOf(seq) != MirrorLiveGate.State.LIVE) {
+                        // 本笔还没有实时镜像墨: 抬笔重放 (镜像缓冲仍完整保存在 CanvasTouchView)
+                        mirrorQueue.discardUpTo(seq)
+                        return painted
+                    }
+                }
+                MirrorLiveGate.EngineResult.STALE, null -> {
+                    mirrorQueue.discardUpTo(seq)
+                    return painted
+                }
+            }
+        }
+        return painted
+    }
+
+    /** 渲染线程: 送一批镜像点并把 JNI 返回码映射成 [MirrorLiveGate.EngineResult]。 */
+    private fun sendMirrorBatch(coords: FloatArray, count: Int, branch: Int, seq: Int): MirrorLiveGate.EngineResult {
+        val r = try {
+            ReverieCoreBridge.touchStrokeMirrorBatch(coords, count, branch, seq)
+        } catch (_: Throwable) {
+            MIRROR_BATCH_REJECTED
+        }
+        return when (r) {
+            MIRROR_BATCH_ACCEPTED -> MirrorLiveGate.EngineResult.ACCEPTED
+            MIRROR_BATCH_STALE -> MirrorLiveGate.EngineResult.STALE
+            else -> MirrorLiveGate.EngineResult.REJECTED
+        }
+    }
+
+    /**
+     * UI 线程抬笔: 镜像是否已实时出墨。false 时 (含引擎还没来得及确认) 本笔停止入队并丢弃本笔
+     * 还在队列里的镜像点, 调用方走 replaySymmetricBranches; 保证不会既实时又重放。
+     */
+    internal fun resolveMirrorLiveAtPenUp(): Boolean {
+        val live = mirrorGate.resolveAtPenUp()
+        if (!live) mirrorQueue.discardUpTo(mirrorGate.currentSeq)
+        return live
     }
 
     // Airbrush hold-still ink flow: a self-rescheduling timer on the render
@@ -5292,7 +5829,9 @@ class PaintViewModel : ViewModel() {
         } catch (_: Throwable) {
             false
         }
-        if (painted) {
+        // s12: 落笔不动时镜像起笔点也要同帧出墨 (镜像分支实时 paintop), 否则镜像一侧要等第一批运笔。
+        val mirrorPainted = drainMirrorBatchesOnRenderThread()
+        if (painted || mirrorPainted) {
             scheduleRender()
         }
     }
@@ -5307,6 +5846,10 @@ class PaintViewModel : ViewModel() {
 
     internal fun scheduleRender(immediate: Boolean = false) {
         val h = renderHandler ?: return
+        if (strokeThrottleRenderScheduled) {
+            h.removeCallbacks(strokeThrottleRenderRunnable)
+            strokeThrottleRenderScheduled = false
+        }
         if (immediate) {
             // touchEnd / undo / structural changes: render right away and
             // drop any pending throttled render (its 16ms-later run would
@@ -5333,7 +5876,12 @@ class PaintViewModel : ViewModel() {
                 doRender()
             }
         pendingRenderRunnable = r
-        h.post(r)
+        val delay = if (renderScheduleMode == com.reverie.paint.model.RenderScheduleMode.POWER_SAVER) 16L else 0L
+        if (delay > 0L) {
+            h.postDelayed(r, delay)
+        } else {
+            h.post(r)
+        }
     }
 
     @Volatile internal var liquifyPresentationGesture = 0L
@@ -5353,6 +5901,13 @@ class PaintViewModel : ViewModel() {
         val w = renderW
         val h = renderH
         if (w <= 0 || h <= 0) return
+        // 文档与显示缓冲 1:1 时走 512 显示瓦片网格: 一帧只 lockPixels 脏区命中的那几张瓦片,
+        // 其余瓦片的位图引用原封不动, HWUI 直接复用显存纹理。其余情况维持整图双缓冲。
+        if (shouldRenderDisplayTiles(w, h)) {
+            doRenderTiles(w, h)
+            return
+        }
+        clearDisplayTileGrid()
 
         val sizeMismatch = backBuffer == null || backBuffer?.width != w || backBuffer?.height != h
         val reallocated = sizeMismatch || displayBufferInvalid
@@ -5482,26 +6037,78 @@ class PaintViewModel : ViewModel() {
             } catch (_: Throwable) {}
         }
 
+        if (referenceWindowOpen && referenceActiveTab == 1) {
+            mainHandler.post {
+                referenceCanvasRevision++
+            }
+        }
+
         // Direct hardware invalidate from render thread (zero Handler hop, zero frame delay).
         // 走 invalidateFromRender: 视图侧能证明画面其他部分不受影响时只失效脏区,
         // 否则 (光标/预测笔迹/旋转/大脏区等) 自动回退为整屏重绘。
+        // Compose 观察者只在回放页或参考窗口打开时通知。整图帧与瓦片帧共用这一出口。
+        // 整图路径不呈现真墨, 但要回报"这一帧没留在前缓冲上", 抬笔后的追赶清除才不会悬着。
+        realInkSink?.finishFrame(false)
+        notifyCanvasFramePublished()
+    }
+
+    /** 瓦片帧: 把本帧写入的文档矩形 `[l, t, r, b)` 发布给 UI 线程做局部失效。 */
+    internal fun publishRenderWrittenRect(l: Int, t: Int, r: Int, b: Int) {
+        renderDirty[0] = l
+        renderDirty[1] = t
+        renderDirty[2] = r - l
+        renderDirty[3] = b - t
+        hasWrittenRect = true
+        publishRenderDirtySnapshot()
+    }
+
+    /** 瓦片帧: 本帧没有写入任何像素。 */
+    internal fun clearRenderWrittenRect() {
+        hasWrittenRect = false
+        renderDirtySnapshot = null
+    }
+
+    /** 瓦片网格发布后整图 front/back 缓冲用不上了: 丢掉引用 (不 recycle, HWUI 可能还持有)。 */
+    internal fun releaseFullCanvasBuffers() {
+        val showing = displayBitmap
+        if (showing != null && (showing === frontBuffer || showing === backBuffer)) displayBitmap = null
+        frontBuffer = null
+        backBuffer = null
+        frontMissingRect.setEmpty()
+        backMissingRect.setEmpty()
+        synchronized(largeBitmapDirtyRect) { largeBitmapDirtyRect.setEmpty() }
+    }
+
+    /** 主线程上的画布失效 (预建 Runnable, 每帧投递零分配)。 */
+    private val postedCanvasInvalidate = Runnable {
+        com.reverie.paint.ui.painting.canvas.CanvasTouchView.activeTouchView?.invalidateFromRender()
+    }
+
+    /** 让画布从渲染线程失效重绘 (视图未挂上时投递到主线程)。 */
+    internal fun invalidateCanvasFromRender() {
         val tv = com.reverie.paint.ui.painting.canvas.CanvasTouchView.activeTouchView
         if (tv != null) {
             tv.invalidateFromRender()
         } else {
-            mainHandler.post {
-                com.reverie.paint.ui.painting.canvas.CanvasTouchView.activeTouchView?.invalidateFromRender()
-            }
+            mainHandler.post(postedCanvasInvalidate)
         }
-        val isStrokeActive = strokeBatchQueued || (pendingCoreOps.get() > 0)
-        if (!isStrokeActive) {
-            mainHandler.post {
-                com.reverie.paint.ui.painting.canvas.CanvasTouchView.activeTouchView?.invalidateFromRender()
-            }
-        }
+    }
 
-        // Notify Compose observers only when replay or reference window is active
-        if (referenceWindowOpen || currentPage == Page.REPLAY) {
+    /** 笔画批次仍在排队或引擎任务未完成 (运笔中)。 */
+    internal fun isStrokeRenderActive(): Boolean = strokeBatchQueued || (pendingCoreOps.get() > 0)
+
+    /**
+     * 新一帧像素已发布: 失效画布, 并通知参考窗口/回放页这类 Compose 观察者。与 doRender 尾部同语义。
+     * [keptOnFrontBuffer] = 这一帧已由前缓冲真墨接住, 主画布不失效 (省掉一次 HWUI 纹理上传)。
+     */
+    internal fun notifyCanvasFramePublished(keptOnFrontBuffer: Boolean = false) {
+        if (!keptOnFrontBuffer) {
+            invalidateCanvasFromRender()
+            if (!isStrokeRenderActive()) {
+                mainHandler.post(postedCanvasInvalidate)
+            }
+        }
+        if (currentPage == Page.REPLAY) {
             mainHandler.post {
                 displayRevision++
             }
@@ -5639,6 +6246,9 @@ class PaintViewModel : ViewModel() {
     var transformCopyOnly: Boolean by mutableStateOf(false)
     var isImportTransformPending: Boolean by mutableStateOf(false)
     var isSelectionTransformPending: Boolean by mutableStateOf(false)
+    var transientTransformSelectionPending: Boolean by mutableStateOf(false)
+    var canUndoTransformSelection: Boolean by mutableStateOf(false)
+    var canRedoTransformSelection: Boolean by mutableStateOf(false)
     internal val layerThumbStates = mutableStateMapOf<Int, Bitmap>()
 
     // Name-keyed mirror: layer indices change on every move/group op, so the

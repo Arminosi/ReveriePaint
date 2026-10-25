@@ -73,12 +73,13 @@ class KppHelperTest {
         assertTrue(updatedXml.contains("""<param type="string" name="OpacityValue"><![CDATA[0.8]]></param>"""))
         assertTrue(updatedXml.contains("""<param type="string" name="FlowValue"><![CDATA[0.9]]></param>"""))
         assertTrue(updatedXml.contains("""<param type="string" name="Spacing"><![CDATA[0.25]]></param>"""))
-        assertTrue(updatedXml.contains("""<param type="string" name="paintopAngle"><![CDATA[45.0]]></param>"""))
+        assertTrue(updatedXml.contains("""<param type="string" name="paintopAngle"><![CDATA[135.0]]></param>"""))
         assertTrue(updatedXml.contains("""<param type="string" name="ScatterValue"><![CDATA[0.3]]></param>"""))
         assertTrue(updatedXml.contains("""<param type="string" name="SoftnessValue"><![CDATA[0.8]]></param>"""))
         assertTrue(updatedXml.contains("""<param type="string" name="RatioValue"><![CDATA[0.5]]></param>"""))
         assertTrue(updatedXml.contains("""<param type="string" name="SharpnessValue"><![CDATA[0.2]]></param>"""))
-        assertTrue(updatedXml.contains("""<param type="string" name="RotationValue"><![CDATA[90.0]]></param>"""))
+        assertTrue(updatedXml.contains("""<param type="string" name="RotationValue"><![CDATA[1]]></param>"""))
+        assertTrue(updatedXml.contains("""<param type="string" name="ReverieRotation"><![CDATA[90.0]]></param>"""))
         assertTrue(updatedXml.contains("""<param type="string" name="Antialiasing"><![CDATA[true]]></param>"""))
         assertTrue(updatedXml.contains("""filename="mooncake.png""""))
         assertTrue(updatedXml.contains("""<param type="string" name="AirbrushOption/isAirbrushing"><![CDATA[true]]></param>"""))
@@ -649,5 +650,27 @@ class KppHelperTest {
         val updatedXml = KppHelper.injectParamsIntoXml(xml, "Test", params)
         assertTrue("SizeUseCurve 应为 true", updatedXml.contains("""name="SizeUseCurve"><![CDATA[true]]></param>"""))
         assertTrue("FlowUseCurve 应为 false (压感流量为0)", updatedXml.contains("""name="FlowUseCurve"><![CDATA[false]]></param>"""))
+    }
+
+    @Test
+    fun `parseKppAttributes 能够正确解析 paintOpSize 参数与 MaskGenerator 直径`() {
+        val xml1 = """<Preset name="Test" paintopid="paintbrush"><param name="paintopSize" type="string"><![CDATA[88.5]]></param></Preset>"""
+        val parsed1 = KppHelper.parseKppAttributes(xml1)
+        assertEquals(88.5, parsed1.paintOpSize ?: 0.0, 0.001)
+
+        val xml2 = """<Preset name="Test2" paintopid="paintbrush"><param name="brush_definition"><![CDATA[<MaskGenerator diameter="42.0" type="circle"/>]]></param></Preset>"""
+        val parsed2 = KppHelper.parseKppAttributes(xml2)
+        assertEquals(42.0, parsed2.paintOpSize ?: 0.0, 0.001)
+    }
+
+    @Test
+    fun `parseKppAttributes 能够正确解析主笔尖 tipAsset`() {
+        val xml1 = """<Preset name="AbrBrush"><param name="brush_definition"><![CDATA[<Brush filename="sample_tip_1.png" scale="0.5"/>]]></param></Preset>"""
+        val parsed1 = KppHelper.parseKppAttributes(xml1)
+        assertEquals("sample_tip_1.png", parsed1.tipAsset)
+
+        val xml2 = """<Preset name="AbrBrush2"><param name="requiredBrushFile"><![CDATA[fallback_tip.gbr]]></param></Preset>"""
+        val parsed2 = KppHelper.parseKppAttributes(xml2)
+        assertEquals("fallback_tip.gbr", parsed2.tipAsset)
     }
 }

@@ -222,12 +222,10 @@ internal object SyncEngine {
     ): Pair<File, String> {
         val temp = partFile(target)
         temp.parentFile?.mkdirs()
-        temp.delete()
         try {
             client.getToFile(remotePath, temp)
             return temp to sha256(temp)
         } catch (e: Exception) {
-            temp.delete()
             throw e
         }
     }
@@ -393,6 +391,7 @@ internal object SyncEngine {
         remoteEntries: List<RemoteEntry>,
         conflictSuffix: String,
         protectedPaths: Set<String> = emptySet(),
+        onManifestUpdated: ((Map<String, ManifestEntry>) -> Unit)? = null,
         onProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
     ): BackupOutcome {
         val tombstones = readTombstones(client)
@@ -462,6 +461,7 @@ internal object SyncEngine {
                         if (recorded != null && hash == recorded.hash) {
                             newManifest[project.relativePath] =
                                 ManifestEntry(hash, remoteTokens[project.relativePath] ?: "")
+                            onManifestUpdated?.invoke(newManifest)
                             skipped++
                         } else {
                             remoteNewer++
@@ -490,6 +490,7 @@ internal object SyncEngine {
                             newManifest[copyPath] = ManifestEntry(copyHash, tokenAfterUpload(client, copyPath))
                         } catch (_: Exception) {
                         }
+                        onManifestUpdated?.invoke(newManifest)
                         conflicts++
                         notices.add("${project.relativePath}: kept local, cloud version saved as a copy")
                     } catch (e: Exception) {
@@ -504,6 +505,7 @@ internal object SyncEngine {
                         client.putFile(project.relativePath, project.file)
                         newManifest[project.relativePath] =
                             ManifestEntry(project.sha256, tokenAfterUpload(client, project.relativePath))
+                        onManifestUpdated?.invoke(newManifest)
                         uploaded++
                         bytes += project.size
                     } catch (e: Exception) {
@@ -518,6 +520,7 @@ internal object SyncEngine {
             try {
                 client.delete(path)
                 newManifest.remove(path)
+                onManifestUpdated?.invoke(newManifest)
                 newTombstones[path] = deletedAt
                 deleted++
             } catch (e: Exception) {

@@ -12,6 +12,8 @@
 #define REVERIECORE_H
 
 #include "LiquifyInverseField.h"
+#include "DirtyRectList.h"
+#include "MirrorLivePolicy.h"
 #include <QImage>
 #include <QPointF>
 #include <QVector>
@@ -22,6 +24,7 @@
 #include <QMutex>
 #include <QSet>
 #include <QElapsedTimer>
+#include <mutex>
 
 #include <kis_types.h>
 #include <kis_random_source.h>
@@ -49,6 +52,11 @@ class KisMaskingBrushRenderer;
 class KisMaskedFreehandStrokePainter;
 class KisFreehandStrokeInfo;
 class KoStore;
+
+// 运笔静态底图的上界 (实现在 StrokePresentFastPath.h, 要读 m_drawing / m_layers /
+// m_currentLayer, 所以在这里前置声明并授予友元)。
+class ReverieCore;
+int strokeStaticUnderlayStop(const ReverieCore &core);
 
 class ReverieCore
 {
@@ -541,6 +549,12 @@ public:
     // kind 0=line, 1=rect, 2=ellipse, 3=closed polygon, 4=polyline
     void drawPolygon(const QVector<QPoint> &points, bool closed);
     void gradientFill(int x1, int y1, int x2, int y2, int type = 0, int repeat = 0, bool reverse = false);
+    void gradientFillV3(
+        int x1, int y1, int x2, int y2,
+        int type = 0, int repeat = 0, bool reverse = false,
+        float opacity = 1.0f, const QString &compositeOpId = QString(), bool dither = false,
+        const QVector<QPair<qreal, QColor>> &stops = {}
+    );
     void selectShape(int kind, int x1, int y1, int x2, int y2);
     void selectPolygon(const QVector<QPoint> &points);
     void lassoSelect(const QVector<QPoint> &points);
@@ -752,6 +766,10 @@ private:
     void liquifyPreviewBuildLocked();   // 每次 dab 后重建低分辨率预览(反向采样)
     /** 把预览混合进刚写好的显示缓冲区域(缓冲像素坐标; 预览覆盖 m_liquifyWorkerBounds)。 */
     void blendLiquifyPreview(quint8 *buffer, int w, int h, const QRect &written);
+    /** blendLiquifyPreview 的通用形式: [originX, originY] 是缓冲原点对应的文档坐标,
+     *  [sx, sy] 是文档 -> 缓冲的缩放, written 是缓冲坐标。瓦片调用给 (瓦片原点, 1, 1)。 */
+    void blendLiquifyPreviewScaled(quint8 *buffer, int w, int h, int originX, int originY,
+                                   qreal sx, qreal sy, const QRect &written);
 
     // ---- 预览基座(见 setLiquifyPreviewBaseRect): 预览期间目标图层不参与画布合成 ----
     /** 把基座矩形的新增部分合成为"不含目标图层"的像素(内部会标脏, 让渲染重读)。 */
@@ -813,6 +831,14 @@ public:
     // Returns true when this call flushed a batch and painted new ink (used
     // by the Kotlin transport to render only after real paint work).
     bool touchStrokeMove(qreal x, qreal y, qreal pressure, qreal tiltX = 0.0, qreal tiltY = 0.0, qreal rotation = 0.0, qreal timeSeconds = -1.0);
+    // 把一条镜像折线画进当前已经打开的原生笔触。不写入 m_strokeSamples，
+    // 因此不会和主笔连成一条跨轴的线。用各分支自己的距离累加器，不用 m_strokeDistance。
+    // 返回处理动作 (见 MirrorLivePolicy.h): Reject 时调用方走抬笔重放; Stale 表示
+    // [strokeSeq] 不是当前打开的笔画 (快速连笔时上一笔 / 下一笔的点), 整批丢弃。
+    reverie::MirrorBatchAction paintMirrorPolyline(const float *samples, int count, int stride, int branchIndex,
+                                                   int strokeSeq);
+    // s12-F1: Kotlin 在 touchStrokeStart 之后告知当前笔画的笔画号; start/end/cancel 清 0。
+    void setMirrorStrokeSeq(int strokeSeq);
     // Flush the pending stroke start as an ink dot when no movement arrived
     // yet (hold-still / slow-start latency fix). No-op once the stroke moved.
     // Returns true when a dot was painted.
@@ -886,6 +912,22 @@ public:
     // render) so the caller can skip the display flip. forceFull forces a
     // full-frame write, used when a freshly allocated buffer is handed in.
     bool renderToBuffer(quint8 *buffer, int w, int h, bool forceFull = false);
+
+    // 512 显示瓦片网格的帧准备: 等异步合并落定 + 逐块合成脏区, 然后把本帧脏区
+    // **快照**进 outRects (文档坐标, 最多 cap 块) 并清空引擎侧脏区, 返回块数。
+    // 投影留在 m_tileFrameProjection 里, 供随后的 renderTileToBuffer 逐瓦片读取 ——
+    // 一帧内每个瓦片看到的是同一份脏区快照, 不会因为第一个瓦片清了脏区而丢掉后面的。
+    // 返回 0 表示这一帧没有新像素 (调用方按"无操作"处理)。
+    int beginTileFrame(QRect *outRects, int cap);
+
+    // 把文档坐标 [docX, docY] 起、尺寸 bufW x bufH 的一块像素写进**瓦片局部**缓冲
+    // (原点 0,0 = 瓦片左上角, 行步长 bufW * 4)。dirtyRects/dirtyCount 给出本帧脏区
+    // (文档坐标): 只写它们与瓦片矩形的交集; dirtyCount <= 0 表示整块瓦片都要写
+    // (新分配或从后备池取出、内容已失效的瓦片)。
+    // 与 renderToBuffer 的 1:1 路径同源 (readLiquifyDisplayRegion + PixelAlpha),
+    // 区别只在目标缓冲是瓦片而非整幅画布。outWritten 回传实际写过的并集 (瓦片局部坐标)。
+    bool renderTileToBuffer(quint8 *buffer, int bufW, int bufH, int docX, int docY,
+                            const QRect *dirtyRects, int dirtyCount, QRect *outWritten);
 
     // Sample the composited color at document-space coordinates;
     // returns "#rrggbb" or empty if outside the document.
@@ -1129,6 +1171,8 @@ private:
     qreal m_brushOpacity = 1.0;
     qreal m_brushFlow = 1.0;
     qreal m_brushSpacing = 0.1;
+    qreal m_brushAngle = 0.0;
+    qreal m_brushRotation = 0.0;
     QString m_brushTipAsset;
     ToolMode m_toolMode = ToolBrush;
 
@@ -1175,9 +1219,12 @@ private:
     KisRandomSourceSP m_randomSource;
     KisPerStrokeRandomSourceSP m_perStrokeRandomSource;
     QElapsedTimer m_strokeTimer;
-    // Synchronous executor for the async dab-rendering pipeline (Krita uses
-    // this in its own tests; on-device it keeps dab rendering deterministic)
-    KisFakeRunnableStrokeJobsExecutor m_fakeExecutor;
+    // 保序条带并行执行器: 连续的 CONCURRENT dab 条带在 reverieBackgroundPool() 上 fork-join,
+    // SEQUENTIAL / BARRIER 任务仍在调用线程上严格按序执行，兼顾大笔刷吞吐与绘制确定性。
+    struct ParallelStrokeJobsExecutor : public KisFakeRunnableStrokeJobsExecutor {
+        void addRunnableJobs(const QVector<KisRunnableStrokeJobDataBase *> &list) override;
+    };
+    ParallelStrokeJobsExecutor m_fakeExecutor;
 
     // Stroke batching
     QVector<StrokeSample> m_strokeSamples;
@@ -1191,7 +1238,6 @@ private:
     // doubled the opacity there (darker bands for paint, over-erased bands
     // for the eraser) at every 8ms flush boundary.
     int m_strokeCarryCount = 0;
-    qint64 m_lastFlushMs = 0;
     // True when touchStrokeKickIdle already painted the stroke-start dot and
     // cleared the sample list: touchStrokeEnd must not re-append the start
     // point (it would dab the same spot a second time, doubling ink density).
@@ -1209,6 +1255,33 @@ private:
     qreal m_lastTiltX = 0.0;
     qreal m_lastTiltY = 0.0;
     qreal m_lastRotation = 0.0;
+    bool m_strokeUsedQuickPath = false;
+    bool m_strokeQuickPlanned = false;
+    // s12-F1: 当前打开笔画的笔画号 (Kotlin setMirrorStrokeSeq 设置, 0 = 不接受任何镜像批)。
+    int m_mirrorStrokeSeq = 0;
+    // 实时镜像折线的逐分支游标 (固定数组, 运笔热路径不分配)。
+    struct MirrorBranchCursor {
+        bool hasLast = false;
+        QPointF lastPos;
+        qreal lastPressure = 1.0;
+        qreal lastTiltX = 0.0;
+        qreal lastTiltY = 0.0;
+        qreal lastRotation = 0.0;
+        qreal lastTime = 0.0;
+        KisDistanceInformation distance;
+        // s12: 每个镜像分支自己的 painter + paintop (仿 Krita KisFreehandStrokeInfo /
+        // KisToolMultihand)。与主笔同一设备、同一 KisTransaction; 颜色/合成/选区每批从
+        // m_strokePainter 同步。由 releaseMirrorBranchOps() 释放 (endStrokeBatch 调用)。
+        KisPainter *painter = nullptr;
+        KisPaintOpSP op;
+    };
+    MirrorBranchCursor m_mirrorCursor[8];
+    // s12: 本笔已有镜像分支建过 paintop (实时出墨)。之后 paintMirrorPolyline 绝不再
+    // 返回 false, 否则 Kotlin 会在抬笔重放, 已实时画过的镜像墨被画第二遍。
+    bool m_mirrorLiveStarted = false;
+    bool m_mirrorDropLogged = false;
+    void releaseMirrorBranchOps();
+    KisPaintOpSP createStrokePaintOp(KisPainter *painter, KisImageSP image, int layerIndex, bool *fellBack);
     // Rendering: the last composited dirty region, used to copy only the
     // changed rows into the Android bitmap (m_bitmapInited gates the first
     // full copy).
@@ -1232,6 +1305,10 @@ private:
     QColor m_backgroundColor = Qt::white;
     QColor m_strokeColor;
     qreal m_strokeOpacity = 1.0;
+    // 间接绘制 (Wash 模式) 时挂到图层上的临时合成算子。KisPaintLayer::temporaryCompositeOp()
+    // 是 protected 取不到, 而 compositeLayersRange 的直通快路径要知道它是不是 normal, 所以在
+    // setTemporaryCompositeOp 的同一步镜像下来, 释放临时目标时清掉。只在 hasTemporaryTarget() 时读。
+    QString m_indirectTempCompositeOp;
     bool m_drawing = false;
     bool m_lastLoadHealed = false;
 
@@ -1280,10 +1357,14 @@ private:
 
     /** 复用的拼装设备; 保证 [r] 范围是干净的 */
     KisPaintDeviceSP strokeMergeScratch(const QRect &r);
+    /** 同一台拼装设备, 不清 (调用方会用 COMPOSITE_COPY 整块覆盖) */
+    KisPaintDeviceSP strokeMergeScratchDevice();
     KisPaintDeviceSP strokeOutScratch(const QRect &r);
 
     /** 丢弃笔触洋葱皮缓存 (切帧 / 改配置 / 关键帧结构变化时调) */
     void invalidateStrokeOnionCache() {
+        // 下层的洋葱皮也烤在静态底图里 (切帧 / 改配置后叠影变了)
+        invalidateStaticUnderlay();
         m_strokeOnionCache.clear();
         m_strokeOnionCacheTime = -1;
         m_strokeOnionCacheSeq = -1;
@@ -1319,11 +1400,26 @@ private:
     int m_renderBufW = -1;
     int m_renderBufH = -1;
     QRect m_dirtyRect;
+    // 有界离散脏区列表 (上限 8 块, 合并策略见 DirtyRectList.h), 与 m_dirtyRect 同步维护。
+    // m_dirtyRect 仍是总包围盒 (既有调用方与查询沿用), m_dirtyRects 是逐块合成与
+    // 逐块转换上屏的输入; 列表为空时回退到 m_dirtyRect 单块。
+    QVector<QRect> m_dirtyRects;
     QByteArray m_subRegionBuffer;
+    // beginTileFrame 留下的投影引用, 供同一帧的 renderTileToBuffer 复用。
+    // KisPaintDeviceSP 只是 shared pointer 拷贝, 不持有额外像素。
+    KisPaintDeviceSP m_tileFrameProjection;
     void markBlendChanged(int index);  // blend-only change: targeted thumb invalidation
     void flipCanvasCommon(bool horizontal); // flipCanvasHorizontal/Vertical shared body
 
+    QRect m_lastAsyncUpdateRect;
+    std::mutex m_asyncUpdateMutex;
+    bool m_nativeProjectionValid = false;
+    QMetaObject::Connection m_sigImageUpdatedConn;
+    void setupDocumentConnections(KisImageSP image);
+
     void markDirty() {
+        // 文档级改动 (滤镜/变换/撤销/图层操作) 说不清改了哪层, 静态底图无条件作废
+        invalidateStaticUnderlay();
         markRegionDirty(QRect(0, 0, m_docWidth, m_docHeight));
         // A document-wide content change invalidates every layer thumbnail:
         // filters/transforms/undo-redo/layer ops cannot say which layer
@@ -1332,10 +1428,79 @@ private:
             ++it->gen;
         }
     }
-    void markRegionDirty(const QRect &r) {
+    // 运笔内部标脏: 本笔只改当前层 k, 而底图是 [0, b) 且 b <= k (见 strokeStaticUnderlayStop),
+    // 底图不受影响, 只登记脏区。
+    void markStrokeDirty(const QRect &r) {
         m_dirtyRect = m_dirtyRect.isNull() ? r : m_dirtyRect.united(r);
+        addDirtyRegion(r);
         if (m_dirtyCb) m_dirtyCb(m_dirtyCtx);
     }
+    void markRegionDirty(const QRect &r) {
+        // 非笔画直接标脏一律按区域作废底图, 杜绝切图层/切帧/动画更新残留旧像素
+        invalidateStaticUnderlayRect(r);
+        markStrokeDirty(r);
+    }
+    // 把 r 并入离散脏区列表 (先裁剪到画布, 空矩形忽略), 不更新 m_dirtyRect、不回调。
+    void addDirtyRegion(const QRect &r);
+    // 同时清空总包围盒与离散列表。不要再直接写 m_dirtyRect = QRect(),
+    // 否则列表会残留上一帧的矩形, 被下一帧当成脏区重复合成。
+    void clearDirtyRegions() {
+        m_dirtyRect = QRect();
+        m_dirtyRects.clear();
+    }
+    // 整幅画布标脏 (缓冲重置 / 文档尺寸变化), 列表同步收敛成这一整块。
+    void setDirtyFullFrame(const QRect &full) {
+        invalidateStaticUnderlay();
+        m_dirtyRect = full;
+        m_dirtyRects.clear();
+        if (!full.isEmpty()) {
+            m_dirtyRects.append(full);
+        }
+    }
+    void setDirtyFullFrame() { setDirtyFullFrame(QRect(0, 0, m_docWidth, m_docHeight)); }
+    // 逐块把脏区 (m_dirtyRects, 为空时为 m_dirtyRect) 重新合成到 out。
+    void compositeDirtyRegions(KisPaintDeviceSP out);
+
+    // ---- 运笔静态底图 ----
+    // 运笔期间 [0, b) 那摞下层不变 (b 见 strokeStaticUnderlayStop), 把它的合成结果按 512 宏瓦片
+    // 懒烘焙进 m_staticUnderlay, 出帧时 COPY 上来再只合成 [b, size), 不必每帧重算全栈。
+    // 跨笔保留; 任何可能改动下层的路径都会作废: markRegionDirty (运笔以外的来源, 按区域),
+    // markDirty / setDirtyFullFrame / recompositeProjection / syncLayersFromImage /
+    // markBlendChanged / invalidateStrokeOnionCache (整体), 换文档、上界或文档对象变化 (整体)。
+    void bakeStaticUnderlay(const QRect &r);
+    void invalidateStaticUnderlay() {
+        m_staticUnderlay = nullptr;
+        m_staticUnderlayTiles.clear();
+        m_staticUnderlayTop = -1;
+        m_staticUnderlayDoc = nullptr;
+    }
+    // 只作废与 r 相交的宏瓦片 (像素留着, 下次烘焙前会先清掉再重算); 覆盖整幅时整体作废。
+    void invalidateStaticUnderlayRect(const QRect &r) {
+        if (m_staticUnderlayTiles.isEmpty() || r.isEmpty()) {
+            return;
+        }
+        if (r.contains(QRect(0, 0, m_docWidth, m_docHeight))) {
+            invalidateStaticUnderlay();
+            return;
+        }
+        const QRect c = r.intersected(QRect(0, 0, m_docWidth, m_docHeight));
+        if (c.isEmpty()) {
+            return;
+        }
+        const int tile = kStaticUnderlayTile;
+        for (int ty = c.top() / tile; ty <= c.bottom() / tile; ++ty) {
+            for (int tx = c.left() / tile; tx <= c.right() / tile; ++tx) {
+                m_staticUnderlayTiles.remove((quint64(quint32(ty)) << 32) | quint64(quint32(tx)));
+            }
+        }
+    }
+    static const int kStaticUnderlayTile = 512;
+    KisPaintDeviceSP m_staticUnderlay;
+    QSet<quint64> m_staticUnderlayTiles;  // 已烘焙的宏瓦片 (ty << 32 | tx)
+    int m_staticUnderlayTop = -1;         // 烘焙时的上界 b, 变了整体作废
+    const void *m_staticUnderlayDoc = nullptr;  // 防止换文档后复用旧像素
+
+    friend int strokeStaticUnderlayStop(const ReverieCore &core);
     // A stroke paints one layer: bump the thumbnail generation of the painted
     // node AND every ancestor group (their thumbs show the merged composite,
     // so editing a child must also refresh the group thumb). Strokes are the

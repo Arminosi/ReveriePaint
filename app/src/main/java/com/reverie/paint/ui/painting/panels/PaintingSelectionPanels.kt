@@ -389,7 +389,10 @@ internal fun SelectionFloatPanel(
                     iconRes = R.drawable.ic_bookmark_plus,
                     label = stringResource(R.string.selection_bottom_action_save),
                     active = vm.savedSelectionsPopupOpen,
-                    onClick = { vm.savedSelectionsPopupOpen = !vm.savedSelectionsPopupOpen },
+                    onClick = {
+                        vm.discardTransientTransformSelection()
+                        vm.savedSelectionsPopupOpen = !vm.savedSelectionsPopupOpen
+                    },
                 )
 
                 // 取消按钮

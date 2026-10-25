@@ -4630,7 +4630,10 @@ class CanvasTouchView(context: Context) : View(context) {
             v.cursorStyleMode != 4
 
         when (event.actionMasked) {
-            MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_MOVE -> {
+            MotionEvent.ACTION_HOVER_ENTER,
+            MotionEvent.ACTION_HOVER_MOVE,
+            MotionEvent.ACTION_BUTTON_PRESS,
+            MotionEvent.ACTION_BUTTON_RELEASE -> {
                 val predPos = calculatePredictedHoverPos(event.x, event.y, event.eventTime)
                 setLocalCursorPos(predPos.x, predPos.y)
                 vm?.lastPointerScreenPosition = Offset(event.x, event.y)
@@ -4643,10 +4646,11 @@ class CanvasTouchView(context: Context) : View(context) {
                 localPressure = 1f
                 physicalEraserActive = (event.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER)
 
-                // S Pen 悬空侧键: 按下/释放边沿时把事件交给驱动层状态机
-                // (悬停事件默认只更新光标, 从未到达 SamsungStylusAdapter, 导致悬空侧键动作失效)
+                // 悬空侧键: 按下/释放边沿时把事件交给驱动层状态机
                 val hoverButton = event.buttonState
-                if (hoverButton != 0 || lastHoverButtonState != 0) {
+                val isButtonAction = event.actionMasked == MotionEvent.ACTION_BUTTON_PRESS ||
+                        event.actionMasked == MotionEvent.ACTION_BUTTON_RELEASE
+                if (hoverButton != 0 || lastHoverButtonState != 0 || isButtonAction) {
                     getOrCreateStylusDriver()?.onStylusMotionEvent(event)
                 }
                 lastHoverButtonState = hoverButton
@@ -4702,16 +4706,23 @@ class CanvasTouchView(context: Context) : View(context) {
             return true
         }
         if (event.isFromSource(android.view.InputDevice.SOURCE_CLASS_POINTER)) {
-            if (event.actionMasked == MotionEvent.ACTION_HOVER_MOVE) {
+            val action = event.actionMasked
+            if (action == MotionEvent.ACTION_HOVER_MOVE ||
+                action == MotionEvent.ACTION_HOVER_ENTER ||
+                action == MotionEvent.ACTION_BUTTON_PRESS ||
+                action == MotionEvent.ACTION_BUTTON_RELEASE
+            ) {
                 val predPos = calculatePredictedHoverPos(event.x, event.y, event.eventTime)
                 setLocalCursorPos(predPos.x, predPos.y)
                 vm?.lastPointerScreenPosition = Offset(event.x, event.y)
                 val overUi = isHoverOverUi(event.x, event.y)
                 localIsHovering = !overUi
                 localIsTouching = false
-                // 与 onHoverEvent 一致: 悬空侧键边沿接入驱动层 (部分 ROM 从此路径派发悬停)
+                // 与 onHoverEvent 一致: 悬空侧键边沿接入驱动层 (部分 ROM 从此路径派发悬停与按键边沿)
                 val hoverButton = event.buttonState
-                if (hoverButton != 0 || lastHoverButtonState != 0) {
+                val isButtonAction = action == MotionEvent.ACTION_BUTTON_PRESS ||
+                        action == MotionEvent.ACTION_BUTTON_RELEASE
+                if (hoverButton != 0 || lastHoverButtonState != 0 || isButtonAction) {
                     getOrCreateStylusDriver()?.onStylusMotionEvent(event)
                 }
                 lastHoverButtonState = hoverButton

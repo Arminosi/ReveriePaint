@@ -432,5 +432,83 @@ class StylusModelsTest {
         assertTrue(primaryKeyCodes.contains(android.view.KeyEvent.KEYCODE_PAGE_DOWN))
         assertTrue(secondaryKeyCodes.contains(android.view.KeyEvent.KEYCODE_PAGE_UP))
     }
+
+    @Test
+    fun `generic stylus button bitmask excludes touch button primary and maps barrel buttons`() {
+        val btnTouch = android.view.MotionEvent.BUTTON_PRIMARY // 1
+        val btnStylusPrimary = android.view.MotionEvent.BUTTON_STYLUS_PRIMARY // 32
+        val btnStylusSecondary = android.view.MotionEvent.BUTTON_STYLUS_SECONDARY // 64
+        val btnSecondary = android.view.MotionEvent.BUTTON_SECONDARY // 2
+        val btnTertiary = android.view.MotionEvent.BUTTON_TERTIARY // 4
+        val btnBack = android.view.MotionEvent.BUTTON_BACK // 8
+        val btnForward = android.view.MotionEvent.BUTTON_FORWARD // 16
+
+        // 1. Stylus-specific bits present:
+        fun isPrimary(buttonState: Int): Boolean {
+            val hasStylusSpecific = (buttonState and (btnStylusPrimary or btnStylusSecondary)) != 0
+            return if (hasStylusSpecific) {
+                (buttonState and btnStylusPrimary) != 0
+            } else {
+                (buttonState and btnSecondary) != 0
+            }
+        }
+
+        fun isSecondary(buttonState: Int): Boolean {
+            val hasStylusSpecific = (buttonState and (btnStylusPrimary or btnStylusSecondary)) != 0
+            return if (hasStylusSpecific) {
+                (buttonState and btnStylusSecondary) != 0
+            } else {
+                (buttonState and (btnTertiary or btnBack or btnForward)) != 0
+            }
+        }
+
+        // Pen tip touching screen (BUTTON_PRIMARY = 1) must NEVER trigger side button
+        assertFalse("Pen tip touch (BUTTON_PRIMARY) must not trigger primary side button", isPrimary(btnTouch))
+        assertFalse("Pen tip touch (BUTTON_PRIMARY) must not trigger secondary side button", isSecondary(btnTouch))
+
+        // Standard Android stylus buttons (32 & 64)
+        assertTrue(isPrimary(btnStylusPrimary))
+        assertFalse(isSecondary(btnStylusPrimary))
+        assertFalse(isPrimary(btnStylusSecondary))
+        assertTrue(isSecondary(btnStylusSecondary))
+
+        // Mouse/EMR digitizer buttons (Ugee / XP-Pen / Wacom mouse-style mode: 2 & 4)
+        assertTrue("Lower barrel button emitting BUTTON_SECONDARY (2) maps to primary", isPrimary(btnSecondary))
+        assertFalse(isSecondary(btnSecondary))
+        assertFalse(isPrimary(btnTertiary))
+        assertTrue("Upper barrel button emitting BUTTON_TERTIARY (4) maps to secondary", isSecondary(btnTertiary))
+        assertTrue("Back button (8) maps to secondary", isSecondary(btnBack))
+        assertTrue("Forward button (16) maps to secondary", isSecondary(btnForward))
+    }
+
+    @Test
+    fun `generic stylus keycodes contain complete extended keycode set`() {
+        val primaryCodes = listOf(
+            android.view.KeyEvent.KEYCODE_STYLUS_BUTTON_PRIMARY,
+            android.view.KeyEvent.KEYCODE_BUTTON_1,
+            android.view.KeyEvent.KEYCODE_BUTTON_A,
+            304,
+            308,
+        )
+        val secondaryCodes = listOf(
+            android.view.KeyEvent.KEYCODE_STYLUS_BUTTON_SECONDARY,
+            android.view.KeyEvent.KEYCODE_BUTTON_2,
+            android.view.KeyEvent.KEYCODE_BUTTON_B,
+            305,
+            309,
+            android.view.KeyEvent.KEYCODE_BUTTON_3,
+            android.view.KeyEvent.KEYCODE_STYLUS_BUTTON_TERTIARY,
+            android.view.KeyEvent.KEYCODE_STYLUS_BUTTON_TAIL,
+            310,
+            311,
+        )
+
+        assertTrue(primaryCodes.contains(304))
+        assertTrue(primaryCodes.contains(308))
+        assertTrue(secondaryCodes.contains(305))
+        assertTrue(secondaryCodes.contains(309))
+        assertTrue(secondaryCodes.contains(310))
+        assertTrue(secondaryCodes.contains(311))
+    }
 }
 

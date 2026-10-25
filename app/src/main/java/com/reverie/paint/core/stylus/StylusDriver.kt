@@ -211,10 +211,10 @@ class StylusDriver(
             return true
         }
         val btn = event.buttonState
-        return (btn and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0 ||
-                (btn and MotionEvent.BUTTON_PRIMARY) != 0 ||
-                (btn and MotionEvent.BUTTON_STYLUS_SECONDARY) != 0 ||
-                (btn and MotionEvent.BUTTON_SECONDARY) != 0
+        return (btn and (MotionEvent.BUTTON_STYLUS_PRIMARY or
+                MotionEvent.BUTTON_STYLUS_SECONDARY or
+                MotionEvent.BUTTON_SECONDARY or
+                MotionEvent.BUTTON_TERTIARY)) != 0
     }
 
     /**
@@ -276,8 +276,10 @@ class StylusDriver(
             keyCode == KeyEvent.KEYCODE_BUTTON_1 ||
             keyCode == KeyEvent.KEYCODE_BUTTON_2 ||
             keyCode == KeyEvent.KEYCODE_BUTTON_3 ||
+            keyCode == KeyEvent.KEYCODE_BUTTON_A ||
+            keyCode == KeyEvent.KEYCODE_BUTTON_B ||
             keyCode == 304 || keyCode == 305 ||
-            keyCode == 308 || keyCode == 309 || keyCode == 310 ||
+            keyCode == 308 || keyCode == 309 || keyCode == 310 || keyCode == 311 ||
             keyCode == KeyEvent.KEYCODE_CAMERA ||
             keyCode == KeyEvent.KEYCODE_BUTTON_C ||
             keyCode == KeyEvent.KEYCODE_BUTTON_Z ||

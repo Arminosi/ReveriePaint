@@ -443,7 +443,10 @@ class MainActivity : ComponentActivity() {
                 return true
             }
             val btn = ev.buttonState
-            if (btn != 0 || lastGenericMotionButtonState != 0) {
+            val action = ev.actionMasked
+            val isButtonAction = action == android.view.MotionEvent.ACTION_BUTTON_PRESS ||
+                    action == android.view.MotionEvent.ACTION_BUTTON_RELEASE
+            if (btn != 0 || lastGenericMotionButtonState != 0 || isButtonAction) {
                 lastGenericMotionButtonState = btn
                 if (driver.onStylusMotionEvent(ev)) {
                     return true

@@ -1,0 +1,218 @@
+/*
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+package com.reverie.paint.model
+
+/**
+ * 3D 渲染显示风格模式
+ */
+enum class RenderMode3D(val id: String) {
+    CLAY("clay"),           // 石膏素模 (Matcap / 漫反射体积)
+    SHADING("shading"),     // 可调单向光源明暗切面
+    WIREFRAME("wireframe"), // 结构透视线框
+    ;
+
+    companion object {
+        fun fromId(id: String): RenderMode3D =
+            entries.find { it.id.equals(id, ignoreCase = true) } ?: CLAY
+    }
+}
+
+/**
+ * 内置基础 3D 参考几何与人体素模
+ */
+enum class BuiltinModel3D(val id: String, val displayNameRes: String) {
+    ANIME_BOY("boy", "人体标准素模 (男)"),
+    ANIME_GIRL("girl", "人体标准素模 (女)"),
+    CAT("cat", "3D 猫猫"),
+    BODY_MANNEQUIN("body", "全身人偶 (站姿)"),
+    BODY_SIT("body_sit", "全身人偶 (坐姿)"),
+    HEAD_MANNEQUIN("head", "Asaro 头部切面素模"),
+    CUBE("cube", "透视方块"),
+    SPHERE("sphere", "球体"),
+    CYLINDER("cylinder", "圆柱体"),
+    ;
+
+    companion object {
+        fun fromId(id: String): BuiltinModel3D? =
+            entries.find { it.id.equals(id, ignoreCase = true) }
+    }
+}
+
+/**
+ * 3D 交互手势模式 (单指触摸视口时的操控目标)
+ */
+enum class Interaction3DMode {
+    ROTATE, // 旋转模型视角
+    PAN,    // 平移模型位置
+    LIGHT,  // 调整光照朝向
+    BONE,   // 画布可视化骨骼触控调节
+}
+
+/**
+ * 3D 图层状态与渲染参数
+ */
+data class Model3DState(
+    val layerId: Long = 0L,
+    val layerIndex: Int = -1,
+    val layerName: String = "",
+    val modelType: String = BuiltinModel3D.ANIME_BOY.id, // "boy", "girl", "cat", "cube", "file:/path/to/mesh.obj"
+    val rotX: Float = 15f,     // 俯仰角 (Pitch)
+    val rotY: Float = -30f,    // 偏航角 (Yaw)
+    val rotZ: Float = 0f,      // 翻滚角 (Roll)
+    val panX: Float = 0f,      // 视口水平偏移 [-1f..1f]
+    val panY: Float = 0f,      // 视口垂直偏移 [-1f..1f]
+    val zoom: Float = 1.0f,    // 视口距离缩放 [0.2f..5.0f]
+    val lightYaw: Float = 45f, // 定向光源水平角
+    val lightPitch: Float = 35f,// 定向光源俯仰角
+    val renderMode: RenderMode3D = RenderMode3D.CLAY,
+    val baseColor: Long = 0xFFD8D4CE, // 默认灰模/素模底色 (莫兰迪暖灰)
+    val wireframeColor: Long = 0xFF36383B, // 默认线框颜色 (深灰炭笔色)
+    val posePreset: String = "stand",  // 姿态预设: stand, sit, action, crossed, hips, kneel 等
+    val jointAngles: Map<String, Float> = emptyMap(), // 骨骼关节细调角度增量 [jointKey -> degrees]
+) {
+    fun isBuiltin(): Boolean = BuiltinModel3D.fromId(modelType) != null
+
+    /**
+     * 判断当前模型是否具备骨骼与姿态调节能力
+     */
+    fun isRigged(): Boolean {
+        return modelType in setOf("boy", "girl", "cat", "body", "body_sit") ||
+                modelType.endsWith(".glb", ignoreCase = true) ||
+                modelType.endsWith(".vrm", ignoreCase = true) ||
+                modelType.endsWith(".pmx", ignoreCase = true)
+    }
+
+    /**
+     * 编码为用于工程 JSON 存储的紧凑键值对字符串
+     */
+    fun toJsonString(): String {
+        val anglesEncoded = jointAngles.entries.joinToString(";") { "${it.key}=${it.value}" }
+        return """{"layerId":$layerId,"layerIndex":$layerIndex,"layerName":"${layerName.replace("\"", "\\\"")}","modelType":"${modelType.replace("\"", "\\\"")}","rotX":$rotX,"rotY":$rotY,"rotZ":$rotZ,"panX":$panX,"panY":$panY,"zoom":$zoom,"lightYaw":$lightYaw,"lightPitch":$lightPitch,"renderMode":"${renderMode.id}","baseColor":$baseColor,"wireframeColor":$wireframeColor,"posePreset":"$posePreset","jointAngles":"$anglesEncoded"}"""
+    }
+
+    companion object {
+        fun fromJsonObject(json: org.json.JSONObject): Model3DState {
+            val anglesStr = json.optString("jointAngles", "")
+            val anglesMap = if (anglesStr.isNotEmpty()) {
+                anglesStr.split(";").mapNotNull { entry ->
+                    val parts = entry.split("=")
+                    if (parts.size == 2) {
+                        val angleVal = parts[1].toFloatOrNull()
+                        if (angleVal != null) parts[0] to angleVal else null
+                    } else null
+                }.toMap()
+            } else emptyMap()
+
+            return Model3DState(
+                layerId = json.optLong("layerId", 0L),
+                layerIndex = json.optInt("layerIndex", -1),
+                layerName = json.optString("layerName", ""),
+                modelType = json.optString("modelType", BuiltinModel3D.ANIME_BOY.id),
+                rotX = json.optDouble("rotX", 15.0).toFloat(),
+                rotY = json.optDouble("rotY", -30.0).toFloat(),
+                rotZ = json.optDouble("rotZ", 0.0).toFloat(),
+                panX = json.optDouble("panX", 0.0).toFloat(),
+                panY = json.optDouble("panY", 0.0).toFloat(),
+                zoom = json.optDouble("zoom", 1.0).toFloat(),
+                lightYaw = json.optDouble("lightYaw", 45.0).toFloat(),
+                lightPitch = json.optDouble("lightPitch", 35.0).toFloat(),
+                renderMode = RenderMode3D.fromId(json.optString("renderMode", "clay")),
+                baseColor = json.optLong("baseColor", 0xFFD8D4CEL),
+                wireframeColor = json.optLong("wireframeColor", 0xFF36383BL),
+                posePreset = json.optString("posePreset", "stand"),
+                jointAngles = anglesMap,
+            )
+        }
+
+        fun fromJson(json: String): Model3DState? {
+            return try {
+                fromJsonObject(org.json.JSONObject(json))
+            } catch (_: Throwable) {
+                fromJsonManual(json)
+            }
+        }
+
+        private fun fromJsonManual(json: String): Model3DState? {
+            return try {
+                val clean = json.trim().removeSurrounding("{", "}")
+                val pairs = clean.split(",")
+                var layerId = 0L
+                var layerIndex = -1
+                var layerName = ""
+                var modelType = BuiltinModel3D.ANIME_BOY.id
+                var rotX = 15f
+                var rotY = -30f
+                var rotZ = 0f
+                var panX = 0f
+                var panY = 0f
+                var zoom = 1.0f
+                var lightYaw = 45f
+                var lightPitch = 35f
+                var renderMode = RenderMode3D.CLAY
+                var baseColor = 0xFFD8D4CE
+                var wireframeColor = 0xFF36383B
+                var posePreset = "stand"
+                var jointAngles = emptyMap<String, Float>()
+
+                for (p in pairs) {
+                    val kv = p.split(":", limit = 2)
+                    if (kv.size != 2) continue
+                    val key = kv[0].trim().trim('"', '\'')
+                    val value = kv[1].trim().trim('"', '\'')
+                    when (key) {
+                        "layerId" -> layerId = value.toLongOrNull() ?: 0L
+                        "layerIndex" -> layerIndex = value.toIntOrNull() ?: -1
+                        "layerName" -> layerName = value
+                        "modelType" -> modelType = value
+                        "rotX" -> rotX = value.toFloatOrNull() ?: 15f
+                        "rotY" -> rotY = value.toFloatOrNull() ?: -30f
+                        "rotZ" -> rotZ = value.toFloatOrNull() ?: 0f
+                        "panX" -> panX = value.toFloatOrNull() ?: 0f
+                        "panY" -> panY = value.toFloatOrNull() ?: 0f
+                        "zoom" -> zoom = value.toFloatOrNull() ?: 1.0f
+                        "lightYaw" -> lightYaw = value.toFloatOrNull() ?: 45f
+                        "lightPitch" -> lightPitch = value.toFloatOrNull() ?: 35f
+                        "renderMode" -> renderMode = RenderMode3D.fromId(value)
+                        "baseColor" -> baseColor = value.toLongOrNull() ?: 0xFFD8D4CE
+                        "wireframeColor" -> wireframeColor = value.toLongOrNull() ?: 0xFF36383B
+                        "posePreset" -> posePreset = value
+                        "jointAngles" -> {
+                            if (value.isNotEmpty()) {
+                                jointAngles = value.split(";").mapNotNull { entry ->
+                                    val parts = entry.split("=")
+                                    if (parts.size == 2) {
+                                        val angleVal = parts[1].toFloatOrNull()
+                                        if (angleVal != null) parts[0] to angleVal else null
+                                    } else null
+                                }.toMap()
+                            }
+                        }
+                    }
+                }
+                Model3DState(
+                    layerId = layerId,
+                    layerIndex = layerIndex,
+                    layerName = layerName,
+                    modelType = modelType,
+                    rotX = rotX,
+                    rotY = rotY,
+                    rotZ = rotZ,
+                    panX = panX,
+                    panY = panY,
+                    zoom = zoom,
+                    lightYaw = lightYaw,
+                    lightPitch = lightPitch,
+                    renderMode = renderMode,
+                    baseColor = baseColor,
+                    wireframeColor = wireframeColor,
+                    posePreset = posePreset,
+                    jointAngles = jointAngles,
+                )
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
+}

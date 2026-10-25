@@ -133,11 +133,17 @@ internal fun PaintViewModel.saveProject(
             if (autoSaveTmp.exists()) {
                 autoSaveTmp.delete()
             }
+            for (layerId in active3DLayers.keys) {
+                ensure3DLayerClearedInCore(layerId)
+            }
             refreshProjects()
             maybeAutoBackup()
             onComplete?.invoke()
         },
     ) {
+        if (active3DLayers.isNotEmpty()) {
+            commitAllActive3DLayersSync()
+        }
         val fileToSave =
             currentProjectFile?.let { File(it) }?.takeIf { it.parentFile?.exists() == true && !it.name.contains(".autosave") }
                 ?: File(projectDir(), "$name.revp")
@@ -150,6 +156,11 @@ internal fun PaintViewModel.saveProject(
                 fileToSave
             }
 
+        val layers3DJson = active3DLayers.values.joinToString(",") { st ->
+            val idx = layers.indexOfFirst { it.id == st.layerId }
+            val name = if (idx in 0 until layers.size) layers[idx].name else ""
+            st.copy(layerIndex = idx, layerName = name).toJsonString()
+        }
         val extraJson =
             """
             {
@@ -161,7 +172,8 @@ internal fun PaintViewModel.saveProject(
                 "dpi": $docDpi,
                 "selectedLayerIndex": $currentLayerIndex,
                 "activeLayerIndex": $currentLayerIndex,
-                "collapsedGroups": [${collapsedGroupNames.joinToString(",") { "\"${it.replace("\\", "\\\\").replace("\"", "\\\"")}\"" }}]
+                "collapsedGroups": [${collapsedGroupNames.joinToString(",") { "\"${it.replace("\\", "\\\\").replace("\"", "\\\"")}\"" }}],
+                "active3DLayers": [$layers3DJson]
             }
             """.trimIndent()
         // Recording blob goes straight into the .revp via the C++ store
@@ -223,6 +235,11 @@ internal fun PaintViewModel.autoSaveProject(isPeriodic: Boolean = true) {
             return@runCore
         }
 
+        val layers3DJson = active3DLayers.values.joinToString(",") { st ->
+            val idx = layers.indexOfFirst { it.id == st.layerId }
+            val name = if (idx in 0 until layers.size) layers[idx].name else ""
+            st.copy(layerIndex = idx, layerName = name).toJsonString()
+        }
         val extraJson =
             """
             {
@@ -237,7 +254,8 @@ internal fun PaintViewModel.autoSaveProject(isPeriodic: Boolean = true) {
                 "dpi": $docDpi,
                 "selectedLayerIndex": $currentLayerIndex,
                 "activeLayerIndex": $currentLayerIndex,
-                "collapsedGroups": [${collapsedGroupNames.joinToString(",") { "\"${it.replace("\\", "\\\\").replace("\"", "\\\"")}\"" }}]
+                "collapsedGroups": [${collapsedGroupNames.joinToString(",") { "\"${it.replace("\\", "\\\\").replace("\"", "\\\"")}\"" }}],
+                "active3DLayers": [$layers3DJson]
             }
             """.trimIndent()
         val recBlob = recorder.serialize()
@@ -283,6 +301,11 @@ internal fun PaintViewModel.emergencySaveOnCrash() {
         val name = docName.ifBlank { if (LanguageManager.isChinese()) "未命名作品" else "Untitled Artwork" }
         val emergencyFile = File(autoSaveDir(), "$name.emergency.revp")
         val masterPath = currentProjectFile?.takeIf { !it.contains(".autosave") && !it.contains(".emergency") } ?: ""
+        val layers3DJson = active3DLayers.values.joinToString(",") { st ->
+            val idx = layers.indexOfFirst { it.id == st.layerId }
+            val name = if (idx in 0 until layers.size) layers[idx].name else ""
+            st.copy(layerIndex = idx, layerName = name).toJsonString()
+        }
         val extraJson =
             """
             {
@@ -297,7 +320,8 @@ internal fun PaintViewModel.emergencySaveOnCrash() {
                 "docName": "$name",
                 "dpi": $docDpi,
                 "selectedLayerIndex": $currentLayerIndex,
-                "activeLayerIndex": $currentLayerIndex
+                "activeLayerIndex": $currentLayerIndex,
+                "active3DLayers": [$layers3DJson]
             }
             """.trimIndent()
         val recBlob = try { recorder.serialize() } catch (_: Throwable) { null }
@@ -433,6 +457,7 @@ internal fun PaintViewModel.loadProject(p: com.reverie.paint.model.Project) {
     }
 
     var loadedCollapsedGroups: Set<String> = emptySet()
+    var loaded3DStates: List<com.reverie.paint.model.Model3DState> = emptyList()
     var documentLoaded = false
     var isHealed = false
     runCore(
@@ -475,6 +500,26 @@ internal fun PaintViewModel.loadProject(p: com.reverie.paint.model.Project) {
             val targetLayer = p.selectedLayerIndex
             if (targetLayer in 0 until layers.size && currentLayerIndex != targetLayer) {
                 currentLayerIndex = targetLayer
+            }
+
+            // 恢复 3D 参考图层 (保证在 syncLayersFromNative 更新 layers 之后准确绑定)
+            if (loaded3DStates.isNotEmpty()) {
+                val map = HashMap<Long, com.reverie.paint.model.Model3DState>()
+                for (st in loaded3DStates) {
+                    val target = layers.find { it.name == st.layerName && it.name.isNotBlank() && !map.containsKey(it.id) }
+                        ?: (if (st.layerIndex in 0 until layers.size && !map.containsKey(layers[st.layerIndex].id)) layers[st.layerIndex] else null)
+                        ?: layers.find { it.name.contains("3D", ignoreCase = true) && !map.containsKey(it.id) }
+                    if (target != null) {
+                        map[target.id] = st.copy(layerId = target.id, layerIndex = target.index, layerName = target.name)
+                    }
+                }
+                active3DLayers = map
+                // 清空底层 Krita 颜料图层的烘焙静态像素，交由实时 120Hz 视口 Canvas3DDrawer 渲染，避免重影叠画
+                for (layerId in map.keys) {
+                    ensure3DLayerClearedInCore(layerId)
+                }
+            } else {
+                active3DLayers = emptyMap()
             }
             isBlockingLoading = false
             startPaintingTimer()
@@ -539,7 +584,7 @@ internal fun PaintViewModel.loadProject(p: com.reverie.paint.model.Project) {
                 // 恢复退出时选中的图层
                 val nLayers = ReverieCoreBridge.layerCount()
                 var targetLayer = p.selectedLayerIndex
-                if (targetLayer !in 0 until nLayers && file.extension.equals("revp", ignoreCase = true)) {
+                if (file.extension.equals("revp", ignoreCase = true)) {
                     try {
                         ZipFile(file).use { zip ->
                             val metaEntry = zip.getEntry("meta.json")
@@ -549,6 +594,18 @@ internal fun PaintViewModel.loadProject(p: com.reverie.paint.model.Project) {
                                 val idx = json.optInt("selectedLayerIndex", json.optInt("activeLayerIndex", json.optInt("currentLayerIndex", -1)))
                                 if (idx in 0 until nLayers) {
                                     targetLayer = idx
+                                }
+                                val arr3D = json.optJSONArray("active3DLayers")
+                                if (arr3D != null && arr3D.length() > 0) {
+                                    val parsedStates = ArrayList<com.reverie.paint.model.Model3DState>()
+                                    for (k in 0 until arr3D.length()) {
+                                        val obj = arr3D.optJSONObject(k)
+                                        if (obj != null) {
+                                            val st = com.reverie.paint.model.Model3DState.fromJsonObject(obj)
+                                            parsedStates.add(st)
+                                        }
+                                    }
+                                    loaded3DStates = parsedStates
                                 }
                             }
                         }
@@ -1028,6 +1085,9 @@ internal fun PaintViewModel.exportDocument(
 ) {
     val fmt = format.lowercase()
     runCore(render = false) {
+        if (active3DLayers.isNotEmpty()) {
+            commitAllActive3DLayersSync()
+        }
         if (!embedAuthor || !authorProfile.enabled) {
             ReverieCoreBridge.setAuthorProfile("")
         } else {
@@ -1166,6 +1226,9 @@ internal fun PaintViewModel.exportDocument(
             }
         }
         mainHandler.post {
+            for (layerId in active3DLayers.keys) {
+                ensure3DLayerClearedInCore(layerId)
+            }
             if (ok && targetFile.exists() && targetFile.length() > 0) {
                 onSuccess(targetFile)
             } else {
@@ -1261,6 +1324,8 @@ internal fun PaintViewModel.goHome() {
     // Safety net: clear any stuck loading overlay (e.g. if a runCore op threw
     // before after() could set isBlockingLoading = false)
     isBlockingLoading = false
+    active3DLayers = emptyMap()
+    show3DPosePanel = false
     currentPage = Page.HOME
     refreshProjects()
 }
@@ -1372,6 +1437,8 @@ internal fun PaintViewModel.startPainting(
                 resetAnimationState()
             }
             collapsedGroupNames = emptySet()
+            active3DLayers = emptyMap()
+            show3DPosePanel = false
         },
     ) {
         try {

@@ -389,6 +389,10 @@ internal fun PaintViewModel.removeLayer(index: Int) {
         discardTransientTransformSelection()
     }
     clearLayerSelection()
+    val removed = layers.getOrNull(index)
+    if (removed != null && active3DLayers.containsKey(removed.id)) {
+        active3DLayers = active3DLayers - removed.id
+    }
     Breadcrumbs.record("Layer", "Remove layer: $index")
     if (recorder.recording) {
         recorder.layerOp(com.reverie.paint.model.RecordingEvents.L_REMOVE, index)
@@ -403,7 +407,9 @@ internal fun PaintViewModel.removeLayer(index: Int) {
 
 internal fun PaintViewModel.setCurrentLayer(i: Int) {
     Breadcrumbs.record("Layer", "Set current layer: $i")
-    val changed = currentLayerIndex != i
+    val prevIdx = currentLayerIndex
+    val changed = prevIdx != i
+
     currentLayerIndex = i
     if (changed && (transientTransformSelectionPending || canUndoTransformSelection || canRedoTransformSelection)) {
         discardTransientTransformSelection()
@@ -411,6 +417,12 @@ internal fun PaintViewModel.setCurrentLayer(i: Int) {
     // 选中索引会写进工程 (selectedLayerIndex), 所以记一笔"只差它没落盘": 不触发自动保存,
     // 但软件切后台时的静默保存会顺带存上。同一个图层重复点击不算变化。
     if (changed) selectionDirty = true
+
+    val newLayer = layers.getOrNull(i)
+    if (newLayer != null && active3DLayers.containsKey(newLayer.id) && changed) {
+        // 进入 3D 参考图层时，清空引擎中可能留存的静止像素，完全交由实时 120Hz Canvas3DDrawer 接管
+        ensure3DLayerClearedInCore(newLayer.id)
+    }
     if (recorder.recording) {
         recorder.layerOp(com.reverie.paint.model.RecordingEvents.L_SET_CURRENT, i)
     }
@@ -530,6 +542,8 @@ internal fun PaintViewModel.copyLayer(i: Int) {
     if (isCopyingLayer) return
     isCopyingLayer = true
     clearLayerSelection()
+    val srcLayer = layers.getOrNull(i)
+    val src3DState = srcLayer?.let { active3DLayers[it.id] }
     if (recorder.recording) {
         recorder.layerOp(com.reverie.paint.model.RecordingEvents.L_COPY, i)
     }
@@ -538,6 +552,13 @@ internal fun PaintViewModel.copyLayer(i: Int) {
         isCopyingLayer = false
         clearLayerSelection()
         notifyLayerChanged()
+        if (src3DState != null) {
+            val newLayer = layers.getOrNull(currentLayerIndex)
+            if (newLayer != null) {
+                active3DLayers = active3DLayers + (newLayer.id to src3DState.copy(layerId = newLayer.id))
+                ensure3DLayerClearedInCore(newLayer.id)
+            }
+        }
     }) {
         val newIdx = ReverieCoreBridge.copyLayer(i)
         if (!isZh && newIdx >= 0 && newIdx < ReverieCoreBridge.layerCount()) {
@@ -553,6 +574,10 @@ internal fun PaintViewModel.copyLayer(i: Int) {
 internal fun PaintViewModel.clearLayer(i: Int) {
     if (recorder.recording) {
         recorder.layerOp(com.reverie.paint.model.RecordingEvents.L_CLEAR, i)
+    }
+    val layer = layers.getOrNull(i)
+    if (layer != null && active3DLayers.containsKey(layer.id)) {
+        active3DLayers = active3DLayers - layer.id
     }
     runCore(after = ::notifyLayerChanged) {
         ReverieCoreBridge.clearLayer(i)
@@ -997,6 +1022,11 @@ internal fun PaintViewModel.applyMask(layerIndex: Int) {
 }
 
 internal fun PaintViewModel.rasterizeLayer(i: Int) {
+    val layer = layers.getOrNull(i)
+    if (layer != null && active3DLayers.containsKey(layer.id)) {
+        rasterize3DLayer(layer.id)
+        return
+    }
     if (recorder.recording) {
         recorder.layerOp(com.reverie.paint.model.RecordingEvents.L_RASTERIZE, i)
     }

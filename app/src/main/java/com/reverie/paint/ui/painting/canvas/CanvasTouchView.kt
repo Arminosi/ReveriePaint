@@ -326,6 +326,10 @@ class CanvasTouchView(context: Context) : View(context) {
     }
     private var localIsHovering = false
     private var localIsTouching = false
+        set(value) {
+            field = value
+            isCursorTouching?.value = value
+        }
 
     /** 运笔中 (孔洞掩码构建据此推迟到抬笔后)。 */
     internal val strokeInProgress: Boolean get() = localIsTouching
@@ -5258,7 +5262,7 @@ class CanvasTouchView(context: Context) : View(context) {
             v.gestureConfig.getActionForTrigger(com.reverie.paint.model.GestureTrigger.THREE_FINGER_TAP) != null
 
         if (!editMenuGestureActive && hasThreeFingerAction && numFingers == 3 &&
-            event.actionMasked == MotionEvent.ACTION_POINTER_DOWN &&
+            (event.actionMasked == MotionEvent.ACTION_POINTER_DOWN || (!isTransformActive && !isPinchMotion)) &&
             !isContinuousUndoing && !filterSessionActive && !isLiquifyGestureActive &&
             !v.anim.shiftTraceActive && tool != Tool.TRANSFORM && tool != Tool.CROP
         ) {
@@ -5295,6 +5299,9 @@ class CanvasTouchView(context: Context) : View(context) {
                 (editMenuPointersReleased && event.actionMasked == MotionEvent.ACTION_POINTER_DOWN)
             ) {
                 if (!editMenuSwipe.swiped) editMenuSwipe.reject()
+                if (numFingers > 3) {
+                    editMenuGestureActive = false
+                }
             }
             if (event.actionMasked == MotionEvent.ACTION_MOVE || event.actionMasked == MotionEvent.ACTION_POINTER_UP) {
                 for (i in 0..2) {
@@ -5725,10 +5732,13 @@ class CanvasTouchView(context: Context) : View(context) {
                                 v.redo()
                             }
                         }
-                    } else if (!isContinuousUndoing && !isPinchMotion && !filterSessionActive && maxTouchPointers == 4 && durationMs < 400L) {
-                        val tapAction = v.gestureConfig.getActionForTrigger(com.reverie.paint.model.GestureTrigger.FOUR_FINGER_TAP)
-                        if (tapAction != null) {
-                            v.dispatchGestureAction(tapAction)
+                    } else if (!isContinuousUndoing && !filterSessionActive && maxTouchPointers >= 4 && durationMs < 550L) {
+                        val distCentroidMoved = hypot(lastPos0.x - initialCentroid.x, lastPos0.y - initialCentroid.y)
+                        if (distCentroidMoved < 36f * density) {
+                            val tapAction = v.gestureConfig.getActionForTrigger(com.reverie.paint.model.GestureTrigger.FOUR_FINGER_TAP)
+                            if (tapAction != null) {
+                                v.dispatchGestureAction(tapAction)
+                            }
                         }
                     } else if (rotationSnapGesture.isActive && !v.isViewTransformLocked) {
                         // 正常画布手势结束: 若停在 90° 倍数吸附区内, 平滑收敛到精确倍数
@@ -5888,7 +5898,7 @@ class CanvasTouchView(context: Context) : View(context) {
                     val dx = screenPos.x - touchAndSlideStartPos.x
                     val dy = screenPos.y - touchAndSlideStartPos.y
                     val dist = hypot(dx, dy)
-                    val deadZone = 18f * density
+                    val deadZone = 48f * density
                     if (dist > deadZone) {
                         val deg = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
                         val slot = when {
@@ -6022,7 +6032,8 @@ class CanvasTouchView(context: Context) : View(context) {
                     touchAndSlideActive = false
                     val hovered = v.quickMenuHoverIndex
                     v.quickMenuHoverIndex = -1
-                    if (event.actionMasked == MotionEvent.ACTION_UP && hovered >= 0) {
+                    val slideDist = hypot(screenPos.x - touchAndSlideStartPos.x, screenPos.y - touchAndSlideStartPos.y)
+                    if (event.actionMasked == MotionEvent.ACTION_UP && hovered >= 0 && slideDist >= 48f * density) {
                         v.executeCanvasEditActionByIndex(hovered)
                         v.requestUiCommand("close_edit_menu")
                     } else if (event.actionMasked == MotionEvent.ACTION_CANCEL) {

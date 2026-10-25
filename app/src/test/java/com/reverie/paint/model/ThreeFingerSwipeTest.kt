@@ -119,4 +119,26 @@ class ThreeFingerSwipeTest {
             assertEquals(i == 0, gesture.swiped)
         }
     }
+
+    @Test fun `natural swipe down with uneven finger lengths is recognized`() {
+        val gesture = tracker()
+        // Index moves 45px, Middle moves 85px, Ring moves 60px (natural hand curvature)
+        gesture.update(0, 0f - 8f, 145f)
+        gesture.update(1, 40f, 185f)
+        gesture.update(2, 80f + 8f, 160f)
+        gesture.evaluate(1250L)
+        assertTrue(gesture.swiped)
+        assertEquals(SwipeDirection.DOWN, gesture.swipeDirection)
+    }
+
+    @Test fun `natural swipe up with uneven finger lengths is recognized`() {
+        val gesture = tracker()
+        // Index moves -45px, Middle moves -85px, Ring moves -60px
+        gesture.update(0, 0f - 8f, 55f)
+        gesture.update(1, 40f, 15f)
+        gesture.update(2, 80f + 8f, 40f)
+        gesture.evaluate(1250L)
+        assertTrue(gesture.swiped)
+        assertEquals(SwipeDirection.UP, gesture.swipeDirection)
+    }
 }

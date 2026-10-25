@@ -68,9 +68,10 @@ class ThreeFingerSwipe {
         val spreadDx = dx.max() - dx.min()
 
         // 1. Swipe Down
-        if (avgDy >= 36f * density && dy.all { it >= 24f * density } &&
-            dx.all { abs(it) <= 80f * density && abs(it) <= (dy.max() * 0.85f).coerceAtLeast(20f * density) } &&
-            spreadY <= 42f * density && spreadDx <= 36f * density
+        if (avgDy >= 28f * density && dy.all { it >= 10f * density } &&
+            abs(avgDy) >= abs(avgDx) * 1.1f &&
+            dx.all { abs(it) <= 90f * density && abs(it) <= (dy.max() * 0.95f).coerceAtLeast(24f * density) } &&
+            spreadY <= 55f * density && spreadDx <= 48f * density
         ) {
             swiped = true
             swipeDirection = SwipeDirection.DOWN
@@ -78,9 +79,10 @@ class ThreeFingerSwipe {
         }
 
         // 2. Swipe Up
-        if (avgDy <= -36f * density && dy.all { it <= -24f * density } &&
-            dx.all { abs(it) <= 80f * density && abs(it) <= (abs(dy.min()) * 0.85f).coerceAtLeast(20f * density) } &&
-            spreadY <= 42f * density && spreadDx <= 36f * density
+        if (avgDy <= -28f * density && dy.all { it <= -10f * density } &&
+            abs(avgDy) >= abs(avgDx) * 1.1f &&
+            dx.all { abs(it) <= 90f * density && abs(it) <= (abs(dy.min()) * 0.95f).coerceAtLeast(24f * density) } &&
+            spreadY <= 55f * density && spreadDx <= 48f * density
         ) {
             swiped = true
             swipeDirection = SwipeDirection.UP
@@ -88,9 +90,10 @@ class ThreeFingerSwipe {
         }
 
         // 3. Swipe Left
-        if (avgDx <= -36f * density && dx.all { it <= -24f * density } &&
-            dy.all { abs(it) <= 80f * density && abs(it) <= (abs(dx.min()) * 0.85f).coerceAtLeast(20f * density) } &&
-            spreadDx <= 42f * density && spreadY <= 36f * density
+        if (avgDx <= -28f * density && dx.all { it <= -10f * density } &&
+            abs(avgDx) >= abs(avgDy) * 1.1f &&
+            dy.all { abs(it) <= 90f * density && abs(it) <= (abs(dx.min()) * 0.95f).coerceAtLeast(24f * density) } &&
+            spreadDx <= 55f * density && spreadY <= 48f * density
         ) {
             swiped = true
             swipeDirection = SwipeDirection.LEFT
@@ -98,9 +101,10 @@ class ThreeFingerSwipe {
         }
 
         // 4. Swipe Right
-        if (avgDx >= 36f * density && dx.all { it >= 24f * density } &&
-            dy.all { abs(it) <= 80f * density && abs(it) <= (dx.max() * 0.85f).coerceAtLeast(20f * density) } &&
-            spreadDx <= 42f * density && spreadY <= 36f * density
+        if (avgDx >= 28f * density && dx.all { it >= 10f * density } &&
+            abs(avgDx) >= abs(avgDy) * 1.1f &&
+            dy.all { abs(it) <= 90f * density && abs(it) <= (dx.max() * 0.95f).coerceAtLeast(24f * density) } &&
+            spreadDx <= 55f * density && spreadY <= 48f * density
         ) {
             swiped = true
             swipeDirection = SwipeDirection.RIGHT

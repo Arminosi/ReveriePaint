@@ -63,7 +63,11 @@ import com.reverie.paint.core.importLegacyProjectReferences
 import com.reverie.paint.core.ensureReferenceImagesLoaded
 import com.reverie.paint.core.PaintViewModel
 import com.reverie.paint.core.updateBrushColor
+import com.reverie.paint.model.UiPanelSlot
 import com.reverie.paint.ui.components.ReSwitch
+import com.reverie.paint.ui.components.reportUiSlot
+import com.reverie.paint.ui.components.evadablePanelContent
+import com.reverie.paint.ui.components.evadablePanelSurface
 import com.reverie.paint.ui.theme.Morandi
 import com.reverie.paint.ui.theme.parseColor
 import com.reverie.paint.ui.theme.systemHoverIcon
@@ -160,20 +164,18 @@ fun ReferenceWindow(
                 IntOffset(x, y)
             }
             .size(vm.referenceWindowWidth.dp, vm.referenceWindowHeight.dp)
+            .reportUiSlot(vm, UiPanelSlot.REFERENCE_WINDOW)
             .shadow(14.dp, windowShape)
             .systemHoverIcon(context)
             .clip(windowShape)
-            .then(
-                if (vm.blurBackground && hazeState != null) {
-                    Modifier.hazeChild(
-                        state = hazeState,
-                        style = Glass.popupStyle(if (opacity >= 0.99f) 0.92f else opacity),
-                    )
-                } else {
-                    Modifier.background(Morandi.panel.copy(alpha = opacity))
-                }
+            .evadablePanelSurface(
+                vm = vm,
+                slot = UiPanelSlot.REFERENCE_WINDOW,
+                shape = windowShape,
+                baseOpacity = opacity,
+                hazeState = hazeState,
             )
-            .glassBorder(windowShape)
+            .evadablePanelContent(vm, UiPanelSlot.REFERENCE_WINDOW)
     ) {
         // 1. Full-bleed Viewport Content (Underneath navigation bars)
         Box(

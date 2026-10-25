@@ -48,7 +48,11 @@ import com.reverie.paint.R
 import com.reverie.paint.core.PaintViewModel
 import com.reverie.paint.model.QuickAction
 import com.reverie.paint.model.QuickActionLayoutMode
+import com.reverie.paint.model.UiPanelSlot
 import com.reverie.paint.ui.components.pressScale
+import com.reverie.paint.ui.components.reportUiSlot
+import com.reverie.paint.ui.components.evadablePanelContent
+import com.reverie.paint.ui.components.evadablePanelSurface
 import com.reverie.paint.ui.components.ReSwitch
 import com.reverie.paint.ui.theme.glassBorder
 import com.reverie.paint.ui.theme.Morandi
@@ -161,6 +165,7 @@ fun QuickActionWindow(
         // ---- 悬浮窗实体 ----
         Box(
             modifier = Modifier
+                .reportUiSlot(vm, UiPanelSlot.QUICK_ACTION)
                 .onSizeChanged { size ->
                     windowSize = size
                     vm.quickActionWindowWidth = size.width.toFloat()
@@ -169,16 +174,14 @@ fun QuickActionWindow(
                 .shadow(12.dp, windowShape)
                 .systemHoverIcon(context)
                 .clip(windowShape)
-                .then(
-                    if (vm.blurBackground && hazeState != null) {
-                        Modifier.hazeChild(
-                            state = hazeState,
-                            style = com.reverie.paint.ui.theme.Glass.popupStyle(if (opacity >= 0.99f) 0.92f else opacity),
-                        )
-                    } else {
-                        Modifier.background(Morandi.panel.copy(alpha = opacity))
-                    }
+                .evadablePanelSurface(
+                    vm = vm,
+                    slot = UiPanelSlot.QUICK_ACTION,
+                    shape = windowShape,
+                    baseOpacity = opacity,
+                    hazeState = hazeState,
                 )
+                .evadablePanelContent(vm, UiPanelSlot.QUICK_ACTION)
                 .animateContentSize(Motion.enterSpring())
         ) {
         if (isCollapsed) {

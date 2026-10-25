@@ -4,11 +4,14 @@
 
 package com.reverie.paint.perf
 
+import android.graphics.Bitmap
 import android.os.SystemClock
 import android.util.Log
 import com.reverie.paint.core.PerfTrace
 import com.reverie.paint.core.stylus.FrontBufferProbe
 import com.reverie.paint.model.CanvasPose
+import com.reverie.paint.model.FrontBufferReadyGate
+import com.reverie.paint.model.HoleMaskGrid
 
 /**
  * 前缓冲真墨的几何日志 (开发/真机定位用, **debug 构建专属**; release 源集是同签名空实现)。
@@ -49,6 +52,105 @@ internal object FbGeomLog {
         }
         Log.i(TAG, sb.toString())
     }
+
+    /**
+     * 落笔时的前缓冲就绪门控快照 (L-02/L-03)。UI 线程, 每笔一行, 紧跟 stroke_begin。
+     *
+     *     ev=stroke_ready seq=.. held=.. decision=READY_EVENTS|READY_FALLBACK|NOT_READY gate=on
+     *       mask=0x1f/0x1f missing=[..] inferred=[idle,hz] t=+812ms fallbackIn=2388ms
+     *       sv=0,0 1600x2560 view=1600x2560 stable=5 hz=120.0/120.0
+     *       render=4096x3072 grid=4096x3072 gen=3 invalid=false
+     *       proj[zoom=..,fit=..,pan=..,..,rot=..] merger[sched=..,followUp=..,inFlight=..] loading=false
+     *
+     * `t` 是距静默窗起点 (进画布 / 工程加载完成) 的毫秒数。
+     */
+    fun strokeReady(
+        strokeSeq: Long,
+        held: Boolean,
+        decision: Int,
+        mask: Int,
+        inferredMask: Int,
+        gateEnabled: Boolean,
+        msSinceQuietStart: Long,
+        msUntilFallback: Long,
+        surfaceX: Int,
+        surfaceY: Int,
+        surfaceW: Int,
+        surfaceH: Int,
+        viewW: Int,
+        viewH: Int,
+        stableFrames: Int,
+        refreshHz: Float,
+        targetRefreshHz: Float,
+        renderW: Int,
+        renderH: Int,
+        gridW: Int,
+        gridH: Int,
+        tileGeneration: Int,
+        bufferInvalid: Boolean,
+        zoom: Float,
+        fitScale: Float,
+        panX: Float,
+        panY: Float,
+        rotation: Float,
+        renderScheduled: Boolean,
+        renderFollowUp: Boolean,
+        renderInFlight: Boolean,
+        loading: Boolean,
+    ) {
+        if (!PerfTrace.enabled) return
+        val sb = StringBuilder(384)
+        sb.append("ev=stroke_ready seq=").append(strokeSeq)
+        sb.append(" held=").append(held)
+        sb.append(" decision=").append(
+            when (decision) {
+                FrontBufferReadyGate.READY_EVENTS -> "READY_EVENTS"
+                FrontBufferReadyGate.READY_FALLBACK -> "READY_FALLBACK"
+                else -> "NOT_READY"
+            },
+        )
+        sb.append(" gate=").append(if (gateEnabled) "on" else "off")
+        sb.append(" mask=0x").append(Integer.toHexString(mask))
+            .append("/0x").append(Integer.toHexString(FrontBufferReadyGate.ALL))
+        sb.append(" missing=[")
+        appendConds(sb, mask.inv() and FrontBufferReadyGate.ALL)
+        sb.append("] inferred=[")
+        appendConds(sb, inferredMask)
+        sb.append(']')
+        sb.append(" t=+").append(msSinceQuietStart).append("ms")
+        sb.append(" fallbackIn=").append(if (msUntilFallback > 0L) msUntilFallback else 0L).append("ms")
+        sb.append(" sv=").append(surfaceX).append(',').append(surfaceY)
+            .append(' ').append(surfaceW).append('x').append(surfaceH)
+        sb.append(" view=").append(viewW).append('x').append(viewH)
+        sb.append(" stable=").append(stableFrames)
+        sb.append(" hz=").append(fmt(refreshHz)).append('/').append(fmt(targetRefreshHz))
+        sb.append(" render=").append(renderW).append('x').append(renderH)
+        sb.append(" grid=").append(gridW).append('x').append(gridH)
+        sb.append(" gen=").append(tileGeneration)
+        sb.append(" invalid=").append(bufferInvalid)
+        sb.append(" proj[zoom=").append(fmt(zoom))
+        sb.append(",fit=").append(fmt(fitScale))
+        sb.append(",pan=").append(fmt(panX)).append(',').append(fmt(panY))
+        sb.append(",rot=").append(fmt(rotation)).append(']')
+        sb.append(" merger[sched=").append(renderScheduled)
+        sb.append(",followUp=").append(renderFollowUp)
+        sb.append(",inFlight=").append(renderInFlight).append(']')
+        sb.append(" loading=").append(loading)
+        Log.i(TAG, sb.toString())
+    }
+
+    private fun appendConds(sb: StringBuilder, bits: Int) {
+        var first = true
+        for (i in COND_NAMES.indices) {
+            if (bits and (1 shl i) == 0) continue
+            if (!first) sb.append(',')
+            sb.append(COND_NAMES[i])
+            first = false
+        }
+    }
+
+    /** 与 FrontBufferReadyGate.COND_* 位序一致。 */
+    private val COND_NAMES = arrayOf("tiles", "idle", "geom", "hz", "notLoading")
 
     /** 每一帧真墨贴图一行 (限频)。渲染线程调用。 */
     fun presentFrame(
@@ -93,6 +195,226 @@ internal object FbGeomLog {
         if (bakedCount > n) sb.append(" (+").append(bakedCount - n).append(" more)")
         Log.i(TAG, sb.toString())
     }
+
+    // ================= H-min 孔洞 (H-7) =================
+    //
+    //     adb shell setprop debug.reverie.perf 1
+    //     adb logcat -s FbGeomLog:I
+    //     ev=hole_mask  gen=.. 1600x2560 holePx=.. cov=0.031 build=1.84ms      (后台线程, 几何变化后)
+    //     ev=hole_arm   seq=.. mode=hmin arm=WITH_MASK cov=0.031
+    //     ev=hole_end   seq=.. packets=.. hit=.. rects=.. hitRects=.. hitArea=..px
+    //                   test=avg/max us window=n avg/max us front=n avg/max us handback=.. idViolations=..
+    //
+    // 一致性自检 (逐包扫备份层孔洞像素必须全 0, 很慢, 只为验收):
+    //     adb shell setprop debug.reverie.fb_identity_check 1   (重启应用生效)
+    //     ev=identity_mismatch seq=.. rect=l,t-r,b bad=.. (每笔最多 8 行)
+
+    /** 一致性自检开关 (进程内只读一次, 不依赖 PerfTrace)。 */
+    val identityCheckEnabled: Boolean by lazy { PerfTrace.debugPropInt("debug.reverie.fb_identity_check", 0) == 1 }
+
+    /** 热路径计时是否值得取 nanoTime。 */
+    val timingEnabled: Boolean get() = PerfTrace.enabled
+
+    private val holeLock = Any()
+    private var hSeq = 0L
+    private var hPackets = 0L
+    private var hHitPackets = 0L
+    private var hRects = 0L
+    private var hHitRects = 0L
+    private var hHitArea = 0L
+    private var hTestNs = 0L
+    private var hTestMax = 0L
+    private var hWindowN = 0L
+    private var hWindowNs = 0L
+    private var hWindowMax = 0L
+    private var hFrontN = 0L
+    private var hFrontNs = 0L
+    private var hFrontMax = 0L
+    private var hHandback = 0L
+    private var hRedrawReq = 0L
+    private var hIdBad = 0L
+    private var hIdLines = 0
+    private var idRow: IntArray = IntArray(0)
+
+    fun holeMaskBuilt(gen: Int, w: Int, h: Int, holePixels: Long, coverage: Float, buildNs: Long) {
+        if (!PerfTrace.enabled) return
+        Log.i(TAG, "ev=hole_mask gen=$gen ${w}x$h holePx=$holePixels cov=${fmt3(coverage)} build=${ms(buildNs)}ms")
+    }
+
+    fun holeArm(strokeSeq: Long, mode: Int, arm: Int, coverage: Float) {
+        if (!PerfTrace.enabled) return
+        synchronized(holeLock) {
+            hSeq = strokeSeq
+            hPackets = 0; hHitPackets = 0; hRects = 0; hHitRects = 0; hHitArea = 0
+            hTestNs = 0; hTestMax = 0; hWindowN = 0; hWindowNs = 0; hWindowMax = 0
+            hFrontN = 0; hFrontNs = 0; hFrontMax = 0; hHandback = 0; hRedrawReq = 0; hIdBad = 0; hIdLines = 0
+            cPackets = 0; cFootRects = 0; cBakePx = 0; cBakeNs = 0; cBakeMax = 0; cSlotPx = 0
+        }
+        val m = when (mode) { 1 -> "hmin"; 2 -> "e"; 3 -> "compose"; else -> "off" }
+        val a = when (arm) { 0 -> "NO_HOLES"; 1 -> "WITH_MASK"; 3 -> "COMPOSE"; else -> "NORMAL" }
+        Log.i(TAG, "ev=hole_arm seq=$strokeSeq mode=$m arm=$a cov=${fmt3(coverage)}")
+    }
+
+    /** 渲染线程, 每包一次 (只累加)。[decision] 见 FrontBufferHolePolicy.PACKET_*。 */
+    fun holePacket(strokeSeq: Long, rects: Int, hitRects: Int, hitArea: Long, testNs: Long, decision: Int) {
+        if (!PerfTrace.enabled) return
+        synchronized(holeLock) {
+            if (strokeSeq != hSeq) return
+            hPackets++
+            hRects += rects
+            if (hitRects > 0) hHitPackets++
+            hHitRects += hitRects
+            hHitArea += hitArea
+            hTestNs += testNs
+            if (testNs > hTestMax) hTestMax = testNs
+            if (decision == 2) hHandback++
+        }
+    }
+
+    // compose 统计 (holeLock 保护)
+    private var cPackets = 0L
+    private var cFootRects = 0L
+    private var cBakePx = 0L
+    private var cBakeNs = 0L
+    private var cBakeMax = 0L
+    private var cSlotPx = 0L
+
+    /**
+     * 渲染线程, compose 每包一次: 足迹块数、烘焙面积 (墨 + 足迹, 屏幕像素)、槽位图面积 (HWUI 上传
+     * 的是整张槽位图) 与烘焙耗时 (含打包, 不含 GPU)。
+     */
+    fun composePacket(strokeSeq: Long, footRects: Int, bakePx: Long, slotPx: Long, bakeNs: Long) {
+        if (!PerfTrace.enabled) return
+        synchronized(holeLock) {
+            if (strokeSeq != hSeq) return
+            cPackets++
+            cFootRects += footRects
+            cBakePx += bakePx
+            cSlotPx += slotPx
+            cBakeNs += bakeNs
+            if (bakeNs > cBakeMax) cBakeMax = bakeNs
+        }
+    }
+
+    fun holeRedrawRequested() {
+        if (!PerfTrace.enabled) return
+        synchronized(holeLock) { hRedrawReq++ }
+    }
+
+    /** UI 线程: 按住且有孔洞时主窗口 onDraw 的耗时 (录制侧)。 */
+    fun holeWindowDraw(ns: Long) {
+        if (!PerfTrace.enabled) return
+        synchronized(holeLock) {
+            hWindowN++
+            hWindowNs += ns
+            if (ns > hWindowMax) hWindowMax = ns
+        }
+    }
+
+    /** GL 线程: 有孔洞的笔画每个前缓冲包的绘制耗时 (CPU 侧, 不含 GPU)。 */
+    fun frontPresented(ns: Long) {
+        if (!PerfTrace.enabled) return
+        synchronized(holeLock) {
+            hFrontN++
+            hFrontNs += ns
+            if (ns > hFrontMax) hFrontMax = ns
+        }
+    }
+
+    fun holeStrokeEnd(strokeSeq: Long) {
+        if (!PerfTrace.enabled) return
+        val line = synchronized(holeLock) {
+            if (strokeSeq != hSeq || hPackets == 0L && hFrontN == 0L) return
+            hSeq = -1
+            "ev=hole_end seq=$strokeSeq packets=$hPackets hit=$hHitPackets rects=$hRects hitRects=$hHitRects " +
+                "hitArea=${hHitArea}px ratio=${fmt3(if (hPackets > 0) hHitPackets.toFloat() / hPackets else 0f)} " +
+                "test=${us(avg(hTestNs, hPackets))}/${us(hTestMax)}us " +
+                "window=$hWindowN ${us(avg(hWindowNs, hWindowN))}/${us(hWindowMax)}us " +
+                "front=$hFrontN ${us(avg(hFrontNs, hFrontN))}/${us(hFrontMax)}us " +
+                "redrawReq=$hRedrawReq handback=$hHandback idViolations=$hIdBad" +
+                (if (cPackets > 0) {
+                    " compose=$cPackets foot=$cFootRects bakePx=${avg(cBakePx, cPackets)} " +
+                        "slotPx=${avg(cSlotPx, cPackets)} bake=${us(avg(cBakeNs, cPackets))}/${us(cBakeMax)}us"
+                } else {
+                    ""
+                })
+        }
+        Log.i(TAG, line)
+    }
+
+    /**
+     * GL 线程, 仅 [identityCheckEnabled]: 前缓冲备份层 [layer] (与前缓冲逐像素相同) 在孔洞像素上
+     * 必须完全透明。违反则记一行 (每笔最多 8 行) 并计数。
+     */
+    fun identityCheck(layer: Bitmap, grid: HoleMaskGrid, rects: IntArray, count: Int) {
+        if (!identityCheckEnabled) return
+        val lw = layer.width
+        val lh = layer.height
+        for (i in 0 until count) {
+            val d = i * 4
+            val l = rects[d].coerceIn(0, lw)
+            val t = rects[d + 1].coerceIn(0, lh)
+            val r = rects[d + 2].coerceIn(0, lw)
+            val b = rects[d + 3].coerceIn(0, lh)
+            if (r <= l || b <= t || !grid.anyExact(l, t, r, b)) continue
+            val w = r - l
+            if (idRow.size < w) idRow = IntArray(w)
+            var bad = 0
+            for (y in t until b) {
+                layer.getPixels(idRow, 0, w, l, y, w, 1)
+                for (x in 0 until w) {
+                    if (idRow[x] ushr 24 != 0 && grid.isHole(l + x, y)) bad++
+                }
+            }
+            if (bad > 0) {
+                val log = synchronized(holeLock) {
+                    hIdBad += bad
+                    hIdLines++ < 8
+                }
+                if (log) Log.w(TAG, "ev=identity_mismatch seq=$hSeq rect=$l,$t-$r,$b bad=$bad")
+            }
+        }
+    }
+
+    /**
+     * GL 线程, 仅 [identityCheckEnabled]: compose 包贴上屏的每块里, 文档完整覆盖的像素 ([docInner])
+     * 必须不透明 —— 否则前缓冲在这里透出窗口的旧帧 (旧帧没有新墨), 与关低延迟时不同图。
+     * [slot] 是这一包的槽位图, 第 i 块在其中的左上角是 `packXY[2i], packXY[2i+1]`。
+     */
+    fun composeIdentityCheck(slot: Bitmap, packXY: IntArray, rects: IntArray, count: Int, docInner: IntArray) {
+        if (!identityCheckEnabled) return
+        if (slot.isRecycled) return
+        for (i in 0 until count) {
+            val d = i * 4
+            val l = maxOf(rects[d], docInner[0])
+            val t = maxOf(rects[d + 1], docInner[1])
+            val r = minOf(rects[d + 2], docInner[2])
+            val b = minOf(rects[d + 3], docInner[3])
+            if (r <= l || b <= t) continue
+            val sx = packXY[i * 2] + (l - rects[d])
+            val sy = packXY[i * 2 + 1] + (t - rects[d + 1])
+            val w = r - l
+            if (sx < 0 || sy < 0 || sx + w > slot.width || sy + (b - t) > slot.height) continue
+            if (idRow.size < w) idRow = IntArray(w)
+            var bad = 0
+            for (y in 0 until b - t) {
+                slot.getPixels(idRow, 0, w, sx, sy + y, w, 1)
+                for (x in 0 until w) if (idRow[x] ushr 24 != 0xFF) bad++
+            }
+            if (bad > 0) {
+                val log = synchronized(holeLock) {
+                    hIdBad += bad
+                    hIdLines++ < 8
+                }
+                if (log) Log.w(TAG, "ev=identity_mismatch mode=compose seq=$hSeq rect=$l,$t-$r,$b bad=$bad")
+            }
+        }
+    }
+
+    private fun avg(sum: Long, n: Long): Long = if (n > 0) sum / n else 0L
+    private fun us(ns: Long): String = String.format(java.util.Locale.US, "%.1f", ns / 1000f)
+    private fun ms(ns: Long): String = String.format(java.util.Locale.US, "%.2f", ns / 1_000_000f)
+    private fun fmt3(v: Float): String = String.format(java.util.Locale.US, "%.3f", v)
 
     private fun fmt(v: Float): String = String.format(java.util.Locale.US, "%.2f", v)
 }

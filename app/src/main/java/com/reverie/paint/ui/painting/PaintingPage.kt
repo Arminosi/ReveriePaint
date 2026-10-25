@@ -93,9 +93,11 @@ import com.reverie.paint.R
 import com.reverie.paint.core.*
 import com.reverie.paint.model.Tool
 import com.reverie.paint.model.ToolGroup
+import com.reverie.paint.model.UiPanelSlot
 import com.reverie.paint.ui.components.ReSlider
 import com.reverie.paint.ui.components.ReIconButton
 import com.reverie.paint.ui.components.noRippleClickable
+import com.reverie.paint.ui.components.reportUiSlot
 import com.reverie.paint.ui.theme.Morandi
 import com.reverie.paint.ui.theme.systemHoverIcon
 import com.reverie.paint.ui.painting.animation.AnimationTimelinePanel
@@ -214,6 +216,8 @@ fun PaintingPage(
     var textDialogPos by remember { mutableStateOf<Pair<Float, Float>?>(null) }
     var brushPanelOpen by remember { mutableStateOf(false) }
     var layerPanelOpen by remember { mutableStateOf(false) }
+    // 图层面板未钉住且在滤镜调节页 (无遮罩, 画布可落笔) 时由 LayerPanel 回报。
+    var layerPanelPassThrough by remember { mutableStateOf(false) }
     var targetFilterLayers by remember { mutableStateOf<List<Int>?>(null) }
     var targetLayerDetailId by remember { mutableStateOf<Long?>(null) }
     LaunchedEffect(layerPanelOpen) {
@@ -737,10 +741,22 @@ fun PaintingPage(
                 liquifyHardness = liquifyHardness,
                 liquifyMode = liquifyMode,
                 liquifyBrushSize = liquifyBrushSize,
-                overlayPanelsOpen = (brushPanelOpen && !(vm.panelPinningEnabled && vm.isBrushPanelPinned)) ||
-                    (layerPanelOpen && !(vm.panelPinningEnabled && vm.isLayerPanelPinned)) ||
-                    (colorPanelOpen && !vm.isColorPanelPinned) || settingsPanelOpen || moreToolsOpen ||
-                    drawingGuidePanelOpen,
+                overlayPanelsOpen = com.reverie.paint.model.RealInkHoldPolicy.overlayPanelsBlockHold(
+                    brushPanelBlocking = com.reverie.paint.model.RealInkHoldPolicy.brushPanelBlocksHold(
+                        open = brushPanelOpen, pinned = vm.panelPinningEnabled && vm.isBrushPanelPinned,
+                    ),
+                    layerPanelBlocking = com.reverie.paint.model.RealInkHoldPolicy.layerPanelBlocksHold(
+                        open = layerPanelOpen,
+                        pinned = vm.panelPinningEnabled && vm.isLayerPanelPinned,
+                        filterAdjustPassThrough = layerPanelPassThrough,
+                    ),
+                    colorPanelBlocking = com.reverie.paint.model.RealInkHoldPolicy.colorPanelBlocksHold(
+                        open = colorPanelOpen, pinned = vm.isColorPanelPinned,
+                    ),
+                    settingsPanelOpen = settingsPanelOpen,
+                    moreToolsOpen = moreToolsOpen,
+                    drawingGuidePanelOpen = drawingGuidePanelOpen,
+                ),
                 drawingGuidePanelOpen = drawingGuidePanelOpen,
                 filterSessionActive = (filterController != null),
                 onFilterSlideDelta = filterController?.let { c -> { delta -> c.onSlideDelta(delta) } },
@@ -1773,7 +1789,7 @@ fun PaintingPage(
                         targetScale = 0.95f,
                     ),
         ) {
-            ToolFloatPanel(modifier = Modifier, vm = vm, hazeState = hazeState) {
+            ToolFloatPanel(modifier = Modifier, vm = vm, hazeState = hazeState, slot = UiPanelSlot.SOLO_MODE_BAR) {
                 androidx.compose.foundation.layout.Row(
                     horizontalArrangement =
                         androidx.compose.foundation.layout.Arrangement
@@ -1985,6 +2001,7 @@ fun PaintingPage(
         ) {
             Box(
                 modifier = Modifier
+                    .reportUiSlot(vm, UiPanelSlot.ACTIVE_SELECTION_PILL)
                     .shadow(10.dp, CircleShape, spotColor = Color.Black.copy(alpha = 0.3f))
                     .clip(CircleShape)
                     .background(Morandi.panelHi)
@@ -2080,6 +2097,7 @@ fun PaintingPage(
             Box(
                 modifier =
                     Modifier
+                        .reportUiSlot(vm, UiPanelSlot.TOP_HUD_TOAST)
                         .shadow(8.dp, RoundedCornerShape(10.dp), spotColor = Color.Black.copy(alpha = 0.3f))
                         .clip(RoundedCornerShape(10.dp))
                         .background(Morandi.panelHi.copy(alpha = 0.94f))
@@ -2111,6 +2129,7 @@ fun PaintingPage(
 
         // ---- Transform indicator (top-center, animated pill) ----
         TransformIndicatorHud(
+            vm = vm,
             indicatorState = indicatorState,
             isFilterAdjustActive = vm.isFilterAdjustActive,
             hasActionToast = vm.actionToastMessage != null,
@@ -2208,6 +2227,7 @@ fun PaintingPage(
                 initialTargetFilters = targetFilterLayers,
                 initialDetailLayerId = targetLayerDetailId,
                 onInitialDetailConsumed = { targetLayerDetailId = null },
+                onCanvasPassThroughChanged = { layerPanelPassThrough = it },
                 initialFilterCategoryId = filterCategoryHint,
                 onStartFilterSession = { session ->
                     layerPanelOpen = false
@@ -2667,6 +2687,7 @@ private class TransformIndicatorState {
 
 @Composable
 private fun TransformIndicatorHud(
+    vm: PaintViewModel,
     indicatorState: TransformIndicatorState,
     isFilterAdjustActive: Boolean,
     hasActionToast: Boolean,
@@ -2714,6 +2735,7 @@ private fun TransformIndicatorHud(
         Box(
             modifier =
                 Modifier
+                    .reportUiSlot(vm, UiPanelSlot.TOP_HUD_TOAST)
                     .shadow(8.dp, RoundedCornerShape(8.dp), spotColor = Color.Black.copy(alpha = 0.3f))
                     .clip(RoundedCornerShape(8.dp))
                     .background(Morandi.panelHi.copy(alpha = 0.94f))

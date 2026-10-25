@@ -286,4 +286,21 @@ class RealInkPresentTest {
         assertEquals(420, out[2])
         assertEquals(380, out[3])
     }
+
+    @Test
+    fun `bake coverage holds only for axis aligned poses that contain the rect`() {
+        // pose(): center (500, 400), half (100, 100), scale 1 -> src x 100 maps to screen 500
+        assertTrue(RealInkPresent.bakeCoversScreenRect(pose(), 90f, 90f, 120f, 120f, 491, 441, 519, 469))
+        // 屏幕矩形顶到映射边界之外 1px -> 盖不全
+        assertFalse(RealInkPresent.bakeCoversScreenRect(pose(), 90f, 90f, 120f, 120f, 489, 441, 519, 469))
+        // 90 度: 仍是轴对齐, 轴互换
+        assertTrue(RealInkPresent.bakeCoversScreenRect(pose(rotation = 90f), 100f, 50f, 110f, 70f, 481, 401, 499, 409))
+        // 非 90 度倍数一律不跳过预清
+        assertFalse(RealInkPresent.bakeCoversScreenRect(pose(rotation = 30f), 0f, 0f, 200f, 200f, 499, 399, 501, 401))
+        // 镜像 + 缩放
+        assertTrue(
+            RealInkPresent.bakeCoversScreenRect(pose(scale = 2f, signX = -1f), 10f, 20f, 30f, 40f, 641, 341, 679, 379),
+        )
+        assertFalse(RealInkPresent.bakeCoversScreenRect(pose(), 90f, 90f, 90f, 120f, 491, 441, 519, 469))
+    }
 }

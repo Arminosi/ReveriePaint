@@ -374,11 +374,14 @@ bool ReverieCore::renderToBuffer(quint8 *buffer, int w, int h, bool forceFull)
                 break;
             }
         }
-        if ((!gate.waitForMerger && !m_nativeProjectionValid) || (m_nativeProjectionValid && hasSpecialCompositeLayer)) {
-            if (m_drawing || hasSpecialCompositeLayer || !m_dirtyRect.isEmpty()) {
-                // 逐块合成离散脏区, 不再先把几处笔迹并成一个大包围盒再整体合成。
-                compositeDirtyRegions(proj);
-            }
+        const bool haveDirtyWork =
+            m_drawing || hasSpecialCompositeLayer || !m_dirtyRect.isEmpty();
+        const bool mustComposite =
+            m_drawing || hasSpecialCompositeLayer ||
+            !m_nativeProjectionValid || gate.waitForMerger;
+        if (haveDirtyWork && mustComposite) {
+            // 逐块合成离散脏区, 不再先把几处笔迹并成一个大包围盒再整体合成。
+            compositeDirtyRegions(proj);
         }
         m_nativeProjectionValid = false;
     }
@@ -547,10 +550,10 @@ int ReverieCore::beginTileFrame(QRect *outRects, int cap)
         return 0;
     }
 
-    // 与 renderToBuffer 同一套准备: 异步合并没落定就等, 落定了就不必再合成
-    // (Krita 的 merger 已经把投影算干净了)。
-    const bool wasAsyncBusy = !image->isIdle();
-    if (wasAsyncBusy) {
+    // 与 renderToBuffer 同一套准备: 锁图时放行同步合成脏区, 未锁且调度器忙才等待
+    const reverie::RenderGate gate =
+        reverie::renderGateFor(image->locked(), [&] { return image->isIdle(); });
+    if (gate.waitForMerger) {
         image->waitForDone();
     }
 
@@ -567,10 +570,13 @@ int ReverieCore::beginTileFrame(QRect *outRects, int cap)
                 break;
             }
         }
-        if ((!wasAsyncBusy && !m_nativeProjectionValid) || (m_nativeProjectionValid && hasSpecialCompositeLayer)) {
-            if (m_drawing || hasSpecialCompositeLayer || !m_dirtyRect.isEmpty()) {
-                compositeDirtyRegions(proj);
-            }
+        const bool haveDirtyWork =
+            m_drawing || hasSpecialCompositeLayer || !m_dirtyRect.isEmpty();
+        const bool mustComposite =
+            m_drawing || hasSpecialCompositeLayer ||
+            !m_nativeProjectionValid || gate.waitForMerger;
+        if (haveDirtyWork && mustComposite) {
+            compositeDirtyRegions(proj);
         }
         m_nativeProjectionValid = false;
     }

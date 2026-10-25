@@ -43,10 +43,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.reverie.paint.R
 import com.reverie.paint.core.*
+import com.reverie.paint.model.UiPanelSlot
 import com.reverie.paint.ui.components.DragPillHandle
 import com.reverie.paint.ui.components.PanelCloseButton
 import com.reverie.paint.ui.components.PinButton
 import com.reverie.paint.ui.components.noRippleClickable
+import com.reverie.paint.ui.components.reportUiSlot
+import com.reverie.paint.ui.components.evadablePanelContent
+import com.reverie.paint.ui.components.evadablePanelSurface
 import com.reverie.paint.ui.theme.Glass
 import com.reverie.paint.ui.theme.Morandi
 import com.reverie.paint.ui.theme.systemHoverIcon
@@ -116,17 +120,15 @@ fun ColorPanel(
                 .width(280.dp)
                 .shadow(16.dp, panelShape, spotColor = Color.Black.copy(alpha = 0.5f))
                 .clip(panelShape)
-                .then(
-                    if (vm.blurBackground && hazeState != null) {
-                        Modifier.hazeChild(
-                            state = hazeState,
-                            style = Glass.popupStyle(if (opacity >= 0.99f) 0.90f else opacity),
-                        )
-                    } else {
-                        Modifier.background(Morandi.panel.copy(alpha = opacity))
-                    }
+                .evadablePanelSurface(
+                    vm = vm,
+                    slot = UiPanelSlot.PINNED_COLOR_PANEL,
+                    shape = panelShape,
+                    baseOpacity = opacity,
+                    hazeState = hazeState,
+                    drawBorder = vm.isColorPanelPinned,
                 )
-                .glassBorder(panelShape)
+                .evadablePanelContent(vm, UiPanelSlot.PINNED_COLOR_PANEL)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -252,7 +254,7 @@ fun ColorPanel(
     }
 
     if (vm.isColorPanelPinned) {
-        cardContent(modifier)
+        cardContent(modifier.reportUiSlot(vm, UiPanelSlot.PINNED_COLOR_PANEL))
     } else {
         Box(
             modifier = modifier

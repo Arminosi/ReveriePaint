@@ -10,6 +10,7 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
 import androidx.annotation.StringRes
+import androidx.compose.animation.core.Animatable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableFloatStateOf
@@ -1707,16 +1708,67 @@ class PaintViewModel : ViewModel() {
     /** 自由悬浮布局配置 (平板专属) */
     var floatingUiConfig by mutableStateOf(com.reverie.paint.model.FloatingUiConfig())
 
+    // ---- 前缓冲 UI 裁剪槽位状态 (Phase 1) ----
+    /** 21 个面板槽位的实测边界与 owner token (UI 线程独占)。 */
+    val panelOcclusion = com.reverie.paint.model.UiPanelOcclusionTracker()
+
+    /** 每个槽位独立的 Compose 状态, 避免全局 mask 牵连所有面板重组。 */
+    internal val slotEvading =
+        Array(com.reverie.paint.model.UiPanelSlot.COUNT) { mutableStateOf(false) }
+
     /**
-     * 顶栏 / 工具栏按钮 / 滑块栏的实测屏幕边界 (root 坐标, px), 由 Compose 侧用
-     * onGloballyPositioned 写入。画布视图的前缓冲 UI 避让区用它取代硬编码的 dp 矩形
-     * (悬浮/贴边/左手/横竖屏下真实几何差异很大)。UI 线程写、触控/渲染线程读; null = 尚未测量。
+     * 每个槽位唯一的透明度动画（1.0f <-> 0.5f, 70ms）。
+     *
+     * `evadablePanelSurface` 与 `evadablePanelContent` 必须共享同一个
+     * [Animatable]，禁止两处各自 `animateFloatAsState` 造成相位差。
      */
-    @Volatile var measuredTopBarRect: android.graphics.RectF? = null
+    internal val slotEvadeAlpha =
+        Array(com.reverie.paint.model.UiPanelSlot.COUNT) { Animatable(1f) }
 
-    @Volatile var measuredToolRailRect: android.graphics.RectF? = null
+    /** 运笔时自动避让悬浮面板（设置 -> 视图显示, 默认开启, 与预测模式无关）。 */
+    var autoHidePanelsOnStroke by mutableStateOf(true)
 
-    @Volatile var measuredSliderRailRect: android.graphics.RectF? = null
+    /**
+     * 当前是否存在活跃笔画会话。绘画态优先协议：为 true 时面板只做被动避让，
+     * 不消费额外指针事件；为 false 时面板恢复正常点击/拖拽。
+     */
+    @Volatile
+    var isStrokeSessionActive: Boolean = false
+
+    /** 更新单个槽位的避让状态（动画由 Compose 侧共享 [slotEvadeAlpha] 驱动）。 */
+    internal fun setSlotEvading(slot: com.reverie.paint.model.UiPanelSlot, evading: Boolean) {
+        val index = slot.ordinal
+        if (slotEvading[index].value != evading) slotEvading[index].value = evading
+    }
+
+    /** 立即清除全部避让状态（12 条强制复位路径共用）。 */
+    internal fun clearAllSlotEvasion() {
+        panelOcclusion.clearAllEvasion()
+        for (i in slotEvading.indices) {
+            if (slotEvading[i].value) slotEvading[i].value = false
+        }
+        // 复位路径要求立即恢复 100%，跳过 70ms 过渡。
+        viewModelScope.launch {
+            for (i in slotEvadeAlpha.indices) {
+                slotEvadeAlpha[i].snapTo(1f)
+            }
+        }
+    }
+
+    fun updateAutoHidePanelsOnStroke(enabled: Boolean) {
+        autoHidePanelsOnStroke = enabled
+        if (!enabled) clearAllSlotEvasion()
+        if (::appContext.isInitialized) {
+            appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                .edit().putBoolean("autoHidePanelsOnStroke", enabled).apply()
+        }
+    }
+
+    /** 画布背景是否不透明: 背景层可见且 opacity≈1。保留备用, 不参与 ShiftTrace 门控。 */
+    val canvasBackgroundOpaque: Boolean
+        get() = layers.firstOrNull { it.isBackground }
+            ?.let { it.visible && it.opacity >= 0.999 } ?: false
+
     var selectionMaskColorHex by mutableStateOf("#141416") // 选区蒙版遮罩颜色 (默认深空灰黑)
     var selectionMaskOpacity by mutableFloatStateOf(0.47f) // 选区蒙版遮罩不透明度 (0.10 - 0.90, 默认 0.47)
 
@@ -1889,13 +1941,13 @@ class PaintViewModel : ViewModel() {
     var stylusAudioEnabled by mutableStateOf(false)
     var stylusAudioVolume by mutableFloatStateOf(0.6f)
     var stylusAudioType by mutableStateOf(StylusAudioType.PENCIL)
-    var stylusStrokePredictionEnabled by mutableStateOf(true)
+    var stylusStrokePredictionEnabled by mutableStateOf(false)
     /**
-     * 前缓冲预测 (本次低延迟技术的总开关, 默认关)。
+     * 前缓冲预测 (本次低延迟技术的总开关, 默认开 = "APP软件算法")。
      * 开启时启用: 卡尔曼运动预测 + 墨迹空窗回填 + 前缓冲直出 + 光标跟随 + 悬停前瞻;
      * 关闭时回到上游原版行为 (仅"超低延迟笔迹预测"开关的 OEM 硬件尾线)。
      */
-    var frontBufferPredictionEnabled by mutableStateOf(false)
+    var frontBufferPredictionEnabled by mutableStateOf(true)
 
     /**
      * 新建画布后，前缓冲在这段 uptime 之前不贴真墨、也不贴 #81 预览。
@@ -3060,11 +3112,11 @@ class PaintViewModel : ViewModel() {
             updateStylusStrokePredictionEnabled(false)
             updateFrontBufferPredictionEnabled(false)
         } else {
-            // 重新开启时默认优先选择当前记忆的算法，或默认开启硬件 SDK 预测
+            // 重新开启时默认优先选择当前记忆的算法，没记忆过则默认 APP 软件算法
             val prefAlgo = if (::appContext.isInitialized) {
                 appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
-                    .getString("stylusPredictionLastAlgorithm", "HARDWARE") ?: "HARDWARE"
-            } else "HARDWARE"
+                    .getString("stylusPredictionLastAlgorithm", "SOFTWARE") ?: "SOFTWARE"
+            } else "SOFTWARE"
 
             if (prefAlgo == "SOFTWARE") {
                 updateFrontBufferPredictionEnabled(true)
@@ -3900,6 +3952,7 @@ class PaintViewModel : ViewModel() {
             layerHeaderInheritAlpha = prefs.getBoolean("layerHeaderInheritAlpha", false)
             drawingGuideLinesVisible = prefs.getBoolean("drawing_guide_lines_visible", true)
             leftHandMode = prefs.getBoolean("leftHandMode", false)
+            autoHidePanelsOnStroke = prefs.getBoolean("autoHidePanelsOnStroke", true)
             val isTabletDevice = DeviceUtils.isTablet(appContext)
             val floatingSavedEnabled = prefs.getBoolean("floatingUi_enabled", isTabletDevice)
             val topBarEdgeName = prefs.getString("floatingUi_topBarEdge", "TOP") ?: "TOP"
@@ -3973,11 +4026,15 @@ class PaintViewModel : ViewModel() {
             stylusAudioVolume = prefs.getFloat("stylusAudioVolume", 0.6f)
             stylusAudioType = StylusAudioType.fromOrdinal(prefs.getInt("stylusAudioType", StylusAudioType.PENCIL.ordinal))
             samsungSideButtonErase = prefs.getBoolean("samsungSideButtonErase", true)
-            stylusStrokePredictionEnabled = prefs.getBoolean("stylusStrokePredictionEnabled", true)
+            // 首次安装 (预测开关都没存过) 默认 APP 软件算法 (前缓冲); 存过的老用户保留原选择与原默认。
+            val predictionPrefSaved = prefs.contains("stylusStrokePredictionEnabled") ||
+                prefs.contains("frontBufferPredictionEnabled") ||
+                prefs.contains("stylusFrontBufferPreviewEnabled")
+            stylusStrokePredictionEnabled = prefs.getBoolean("stylusStrokePredictionEnabled", predictionPrefSaved)
             // 迁移: 旧版"前缓冲笔尖直出"独立开关升级为"前缓冲预测"总开关, 保留老用户选择
             frontBufferPredictionEnabled = prefs.getBoolean(
                 "frontBufferPredictionEnabled",
-                prefs.getBoolean("stylusFrontBufferPreviewEnabled", false),
+                prefs.getBoolean("stylusFrontBufferPreviewEnabled", !predictionPrefSaved),
             )
             motionPredictorEnabled = stylusStrokePredictionEnabled
             samsungSingleClickAction = prefs.getString("samsungSingleClickAction", "toggle_eraser") ?: "toggle_eraser"
@@ -4953,6 +5010,12 @@ class PaintViewModel : ViewModel() {
 
     @Volatile internal var renderScheduled = false
 
+    /**
+     * 有一次不经 [renderScheduled] 记账的渲染已投递 (立即渲染 / 脏区未清完的 4ms 重试)。
+     * 只给前缓冲就绪门控 (L-02) 作"渲染空闲"的**推断**信号; doRender 开头清掉。
+     */
+    @Volatile internal var renderFollowUpPending = false
+
     /** Pending multi-layer target set from the last replayed T_*_LAYERS
      *  recording event; consumed once by the following BEGIN / MOVE_CONTENT. */
     internal var pendingReplayLayers: IntArray? = null
@@ -5880,6 +5943,7 @@ class PaintViewModel : ViewModel() {
             pendingRenderRunnable?.let { h.removeCallbacks(it) }
             pendingRenderRunnable = null
             renderScheduled = false
+            renderFollowUpPending = true
             h.post { doRender() }
             return
         }
@@ -5917,8 +5981,21 @@ class PaintViewModel : ViewModel() {
 
     internal var renderDeferCount = 0
 
+    /** 渲染线程正在执行 [doRender] (L-02 "渲染空闲"推断信号的一部分)。 */
+    @Volatile internal var renderInFlight = false
+
     internal fun doRender() {
+        renderInFlight = true
+        try {
+            doRenderBody()
+        } finally {
+            renderInFlight = false
+        }
+    }
+
+    private fun doRenderBody() {
         renderScheduled = false
+        renderFollowUpPending = false
         renderDeferCount = 0
         val rh = renderHandler
         val w = renderW
@@ -6005,6 +6082,7 @@ class PaintViewModel : ViewModel() {
         PerfTrace.tick("render.calls", 1000L)
         if (!ok) {
             if (ReverieCoreBridge.renderPendingDirty()) {
+                renderFollowUpPending = true
                 rh?.postDelayed({ doRender() }, 4L)
             } else if (liquifyPresentation.isPending(liquifyPresentationGesture)) {
                 displayBitmap?.let { liquifyPresentation.publish(liquifyPresentationGesture, it) }

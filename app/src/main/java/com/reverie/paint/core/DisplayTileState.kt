@@ -5,6 +5,7 @@
 package com.reverie.paint.core
 
 import android.graphics.Bitmap
+import com.reverie.paint.model.TileDeltaLedger
 import com.reverie.paint.model.DisplayTileGrid
 import java.util.concurrent.atomic.AtomicIntegerArray
 import java.util.concurrent.atomic.AtomicReferenceArray
@@ -60,6 +61,11 @@ internal class DisplayTileState {
     var published: PublishedTiles? = null
         private set
 
+    /** 发布代际: 每次发布新网格 / 清空网格自增 (渲染线程写, 日志读; L-03 FbGeomLog)。 */
+    @Volatile
+    var generation = 0
+        private set
+
     // 重建中的网格: 尺寸/文档变化时新网格先在这里填像素, 全部写完之后才在帧末发布 ——
     // 未填像素的新网格一旦被 onDraw 读到, 画面上就是"画布裂成几块"。只在渲染线程读写。
     var staging: PublishedTiles? = null
@@ -86,8 +92,30 @@ internal class DisplayTileState {
     fun retireToCooling(b: Bitmap) {
         if (!b.isRecycled) {
             spareCoolingStage0.add(b)
+        } else {
+            deltaLedger.removeTag(b)
         }
     }
+
+    /**
+     * 退役一张仍持有瓦片 [idx] 版本 [ver] 完整内容的位图: 之后它作为同一块瓦片的后备位图被取回时,
+     * COW 只需补拷 [ver] 之后写过的区域 (见 [TileDeltaLedger])。
+     */
+    fun retireTileToCooling(b: Bitmap, idx: Int, ver: Long) {
+        if (b.isRecycled) {
+            deltaLedger.removeTag(b)
+            return
+        }
+        deltaLedger.tagBitmap(b, idx, ver)
+        spareCoolingStage0.add(b)
+    }
+
+    /** COW 增量拷贝账本 (渲染线程)。 */
+    val deltaLedger = TileDeltaLedger()
+
+    /** [obtainSpare] 取回的位图所持有的瓦片版本; -1 = 内容未知 (要整块拷贝)。 */
+    var obtainedSpareVersion = -1L
+        private set
 
     // 瓦片渲染重试连续失败计数 (用于熔断防护，避免 OOM 期间全速空转烧 CPU)
     var consecutiveRetryFailures = 0
@@ -141,6 +169,7 @@ internal class DisplayTileState {
         touched = BooleanArray(count)
         hitList = IntArray(count)
         hitScratch = IntArray(2 * count)
+        deltaLedger.reset(count)
         spareReady.clear()
         spareCoolingStage0.clear()
         spareCoolingStage1.clear()
@@ -152,6 +181,7 @@ internal class DisplayTileState {
         val s = staging ?: return
         published = s
         staging = null
+        generation++
     }
 
     /** 渲染线程: 已有完整网格时丢掉多余的暂存。 */
@@ -161,12 +191,14 @@ internal class DisplayTileState {
 
     /** 渲染线程: 丢掉全部网格与池 (切回整图路径 / 换文档)。 */
     fun clear() {
+        if (published != null || staging != null) generation++
         published = null
         staging = null
         needsFullWrite = BooleanArray(0)
         touched = BooleanArray(0)
         hitList = IntArray(0)
         hitScratch = IntArray(0)
+        deltaLedger.reset(0)
         spareReady.clear()
         spareCoolingStage0.clear()
         spareCoolingStage1.clear()
@@ -181,6 +213,9 @@ internal class DisplayTileState {
             for (b in spareCoolingStage2) {
                 if (spareReady.size < SPARE_CAP && !b.isRecycled) {
                     spareReady.addLast(b)
+                } else {
+                    // 丢给 GC 的位图不能还被标签表强引用着。
+                    deltaLedger.removeTag(b)
                 }
             }
             spareCoolingStage2.clear()
@@ -195,14 +230,28 @@ internal class DisplayTileState {
         }
     }
 
-    /** 渲染线程: 从后备池取一张尺寸匹配的位图; 池里没有就新分配 (OOM 返回 null)。 */
-    fun obtainSpare(w: Int, h: Int): Bitmap? {
+    /**
+     * 渲染线程: 从后备池取一张尺寸匹配的位图, 优先取瓦片 [idx] 自己退役的旧版本 (增量拷贝);
+     * 池里没有就新分配 (OOM 返回 null)。取回位图的内容版本写进 [obtainedSpareVersion]。
+     */
+    fun obtainSpare(w: Int, h: Int, idx: Int = -1): Bitmap? {
+        obtainedSpareVersion = -1L
+        var pick = -1
         for (i in 0 until spareReady.size) {
             val b = spareReady[i]
             if (!b.isRecycled && b.width == w && b.height == h) {
-                spareReady.removeAt(i)
-                return b
+                if (idx >= 0 && deltaLedger.hasTagFor(b, idx)) {
+                    pick = i
+                    break
+                }
+                if (pick < 0) pick = i
             }
+        }
+        if (pick >= 0) {
+            val b = spareReady.removeAt(pick)
+            // 无论是否同一块瓦片都取走标签: 这张位图马上会被改写, 旧标签不再成立。
+            obtainedSpareVersion = deltaLedger.takeTag(b, idx)
+            return b
         }
         return try {
             Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)

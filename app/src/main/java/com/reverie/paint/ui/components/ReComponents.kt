@@ -4,7 +4,6 @@
 
 package com.reverie.paint.ui.components
 
-import android.graphics.RectF
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -57,11 +56,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.drawOutline
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
-import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.node.GlobalPositionAwareModifierNode
+import androidx.compose.ui.node.ModifierNodeElement
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -97,12 +103,15 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.layout.offset
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.hazeChild
+import dev.chrisbanes.haze.hazeEffect
 import com.reverie.paint.core.PaintViewModel
+import com.reverie.paint.model.UiPanelSlot
 import com.reverie.paint.ui.theme.Glass
 import com.reverie.paint.ui.theme.Motion
 import com.reverie.paint.ui.theme.Theme
@@ -1799,15 +1808,198 @@ fun ReDropdownMenuItem(
     )
 }
 
+/** 50% 避让唯一的过渡规格：进入/离开均 70ms，避免两套动画相位差。 */
+private val EvadeEnterSpec = tween<Float>(durationMillis = 70, easing = FastOutSlowInEasing)
+private val EvadeExitSpec = tween<Float>(durationMillis = 70, easing = FastOutLinearInEasing)
+
 /**
- * 把本节点的 root 坐标系实测边界 (px) 写回 [setter], 供 CanvasTouchView 做前缓冲的 UI 避让。
+ * 把面板的 root 实测边界登记到 [PaintViewModel.panelOcclusion]。
  *
- * 避让区必须用真实布局边界: 悬浮/贴边/左手/横竖屏下顶栏与工具栏的位置尺寸差异极大, 原先的
- * 硬编码 dp 矩形会在画布上挖掉不属于 UI 的区域 (按住运笔时前缓冲被裁出矩形空缺)。
- * 节点移除时不会回调, 上次的边界会留着 (只会多避让, 不会让墨盖到 UI 上)。
+ * ownerToken 只在 Modifier.Node 生命周期内申请与清除, 调用点不得传入, 避免父组件
+ * 每次重组都换 token。必须挂在面板最外层视觉容器上, 且在 `.shadow` / `.clip` /
+ * `.background` / `.hazeChild` 之前, 保证 bounds 覆盖阴影与背景整体。
+ *
+ * 阴影外扩 dp 在此按当前 density 换算为像素后登记，供前缓冲孔径裁剪使用；
+ * 32dp/40dp 避让距离判定仍只使用面板本体 bounds。
  */
-internal fun Modifier.reportUiBounds(setter: (RectF?) -> Unit): Modifier =
-    onGloballyPositioned { coords ->
-        val b = coords.boundsInRoot()
-        setter(RectF(b.left, b.top, b.right, b.bottom))
+internal fun Modifier.reportUiSlot(vm: PaintViewModel?, slot: UiPanelSlot): Modifier =
+    if (vm == null) {
+        this
+    } else {
+        composed {
+            val density = LocalDensity.current.density
+            this.then(UiSlotElement(vm, slot, density))
+        }
     }
+
+/**
+ * 可避让面板的外壳背景、毛玻璃交叉淡化与 100% 轮廓修饰符。
+ *
+ * 必须在 `.reportUiSlot(vm, slot).shadow(elevation, shape).clip(shape)` 之后调用：
+ * - 外层 `.shadow` 不受本修饰符影响，保持 100% 阴影；
+ * - `EVADING` 态卸载 `hazeChild` 实时模糊，通过 `drawWithContent` 将面板底色
+ *   平滑过渡到 50%；
+ * - `drawWithContent` 在内容之上以 100% 不透明度绘制 1.dp 面板边框，保留清晰轮廓。
+ *
+ * 与 [evadablePanelContent] 共享 [PaintViewModel.slotEvadeAlpha] 同一个 Animatable。
+ */
+internal fun Modifier.evadablePanelSurface(
+    vm: PaintViewModel,
+    slot: UiPanelSlot,
+    shape: Shape,
+    baseOpacity: Float,
+    hazeState: HazeState?,
+    isBarStyle: Boolean = false,
+    panelColor: Color = Morandi.panel,
+    drawBorder: Boolean = true,
+): Modifier = composed {
+    if (!slot.evadable) return@composed this
+    val isEvading = vm.slotEvading[slot.ordinal].value
+    val evadeAlpha = vm.slotEvadeAlpha[slot.ordinal]
+    // 每个槽位只允许这一处驱动动画；content 修饰符只读取同一个 Animatable。
+    LaunchedEffect(isEvading) {
+        evadeAlpha.animateTo(
+            targetValue = if (isEvading) 0.5f else 1f,
+            animationSpec = if (isEvading) EvadeEnterSpec else EvadeExitSpec,
+        )
+    }
+    val borderStrokePx = with(LocalDensity.current) { 1.dp.toPx() }
+    val borderColor = Morandi.border
+    val useHaze = vm.blurBackground && hazeState != null && !isEvading && evadeAlpha.value >= 0.999f
+    val hazeModifier = if (useHaze) {
+        val style = if (isBarStyle) {
+            Glass.barStyle(if (baseOpacity >= 0.99f) 0.92f else baseOpacity)
+        } else {
+            Glass.popupStyle(if (baseOpacity >= 0.99f) 0.90f else baseOpacity)
+        }
+        Modifier.hazeEffect(state = hazeState!!, style = style)
+    } else {
+        Modifier
+    }
+    this
+        .then(hazeModifier)
+        .drawWithContent {
+            val factor = evadeAlpha.value
+            if (!useHaze || factor < 0.999f) {
+                val bgAlpha = if (!useHaze) {
+                    (baseOpacity * factor).coerceIn(0f, 1f)
+                } else {
+                    // 从 EVADING 返回 NORMAL 的 70ms 内，纯色层平滑淡出交给 hazeChild。
+                    val crossfade = ((1f - factor) * 2f).coerceIn(0f, 1f)
+                    (baseOpacity * 0.5f * crossfade).coerceIn(0f, 1f)
+                }
+                if (bgAlpha > 0f) {
+                    drawRect(color = panelColor.copy(alpha = bgAlpha))
+                }
+            }
+            drawContent()
+            if (drawBorder) {
+                val outline = shape.createOutline(size, layoutDirection, this)
+                drawOutline(
+                    outline = outline,
+                    color = borderColor,
+                    alpha = 1f,
+                    style = Stroke(width = borderStrokePx * 2f),
+                )
+            }
+        }
+}
+
+/**
+ * 可避让面板的内部内容透明度与绘画态被动穿透修饰符。
+ *
+ * - 在 RenderNode 层级将内部控件/图标/色轮透明度设为 `evadeAlpha`
+ *   （1.0f <-> 0.5f），零重组、零 Measure/Layout；
+ * - 当 [PaintViewModel.isStrokeSessionActive] 为 true 时处于被动避让态，
+ *   在 Initial pass 消费额外触点，绝不抢断正在进行的笔画。
+ */
+internal fun Modifier.evadablePanelContent(
+    vm: PaintViewModel,
+    slot: UiPanelSlot,
+): Modifier = if (!slot.evadable) {
+    this
+} else {
+    val evadeAlpha = vm.slotEvadeAlpha[slot.ordinal]
+    this
+        .graphicsLayer { alpha = evadeAlpha.value }
+        .pointerInput(slot) {
+            awaitPointerEventScope {
+                while (true) {
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                    if (vm.isStrokeSessionActive) {
+                        event.changes.forEach { it.consume() }
+                    }
+                }
+            }
+        }
+}
+
+private data class UiSlotElement(
+    val vm: PaintViewModel,
+    val slot: UiPanelSlot,
+    val density: Float,
+) : ModifierNodeElement<UiSlotNode>() {
+    override fun create(): UiSlotNode = UiSlotNode(vm, slot, density)
+
+    override fun update(node: UiSlotNode) {
+        if (node.vm !== vm || node.slot != slot) {
+            node.unregister()
+            node.vm = vm
+            node.slot = slot
+            node.density = density
+            if (node.isAttached) node.register()
+        } else {
+            node.density = density
+        }
+    }
+}
+
+private class UiSlotNode(
+    var vm: PaintViewModel,
+    var slot: UiPanelSlot,
+    var density: Float,
+) : Modifier.Node(), GlobalPositionAwareModifierNode {
+
+    private var ownerToken = 0
+
+    override fun onAttach() {
+        register()
+    }
+
+    override fun onDetach() {
+        unregister()
+    }
+
+    override fun onReset() {
+        unregister()
+    }
+
+    fun register() {
+        ownerToken = vm.panelOcclusion.nextToken()
+    }
+
+    fun unregister() {
+        if (ownerToken != 0) {
+            vm.panelOcclusion.clear(slot, ownerToken)
+            ownerToken = 0
+        }
+    }
+
+    override fun onGloballyPositioned(coordinates: LayoutCoordinates) {
+        if (!coordinates.isAttached) return
+        if (ownerToken == 0) return
+        val b = coordinates.boundsInRoot()
+        val d = density
+        vm.panelOcclusion.update(
+            slot,
+            ownerToken,
+            b.left,
+            b.top,
+            b.right,
+            b.bottom,
+            padH = slot.shadowPadHDp * d,
+            padT = slot.shadowPadTopDp * d,
+            padB = slot.shadowPadBottomDp * d,
+        )
+    }
+}

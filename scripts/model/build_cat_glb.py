@@ -74,6 +74,41 @@ for nm in ('headend',):
     if nm in eb:
         eb[nm].name = 'muzzle'
 print("[rig] Head bone", tuple(round(v, 3) for v in hd.head), "->", tuple(round(v, 3) for v in hd.tail))
+
+# 再把四肢/脊椎骨的方向压进矢状面 (去掉骨方向的横向分量):
+# 骨骼局部 X 必须同时垂直于骨长和世界 X, 骨本身若朝外斜, X 就永远回不到世界 +X.
+# 耳骨本身是横向的, 跳过.
+_lateral = []
+for _b in eb:
+    _d = _b.tail - _b.head
+    if _d.length < 1e-6:
+        continue
+    _dn = _d.normalized()
+    if abs(_dn.x) > 0.30:
+        _lateral.append((_b.name, round(_dn.x, 2)))
+        continue
+    _b.tail = Vector((_b.head.x, _b.tail.y, _b.tail.z))
+print("[rig] lateral bones kept as-is:", _lateral)
+
+# 对齐所有骨的滚转: App 的 pitch 是绕骨骼局部 X 轴旋转, 只有局部 X 严格等于世界 +X,
+# 弯曲才会落在矢状面上. Meshy 导出的滚转是乱的 (Hips 甚至是 -X, 大腿偏 14 度),
+# 直接导致弯腿时整条腿往侧向甩 —— 这是"骨骼看起来有问题"的主因.
+_X = Vector((1.0, 0.0, 0.0))
+_flipped = []
+for _b in eb:
+    _d = (_b.tail - _b.head)
+    if _d.length < 1e-6:
+        continue
+    _d.normalize()
+    _z = _X.cross(_d)
+    if _z.length < 1e-4:      # 骨头本身与世界 X 平行, 无法定义滚转
+        continue
+    _before = _b.matrix.to_3x3().col[0].copy()
+    _b.align_roll(_z.normalized())
+    _after = _b.matrix.to_3x3().col[0]
+    if _before.dot(_X) < 0:
+        _flipped.append(_b.name)
+print("[rig] rolls aligned, X-axis flipped on:", _flipped)
 bpy.ops.object.mode_set(mode='OBJECT')
 
 # ---- custom skinning (distance to bone segments) ---------------------------

@@ -131,29 +131,29 @@ private fun buildEulerMap(
         when (posePreset.lowercase()) {
             // 端坐: 骨盆落地, 躯干立起到 55°, 后肢折在体侧, 前肢竖直撑地
             "sit" -> {
-                hipP = 11f; spineArch = -29.5f; headP = 24f
-                flSh = 43f; frSh = 43f; flLeg = -27f; frLeg = -27f
-                hlLeg = -119f; hrLeg = -119f
-                hlShank = 124f; hrShank = 124f
-                hlFoot = -28f; hrFoot = -28f
+                hipP = 14f; spineArch = -17f; headP = 16f
+                flSh = 38f; frSh = 38f; flLeg = -35f; frLeg = -35f
+                hlLeg = -111f; hrLeg = -111f
+                hlShank = 130f; hrShank = 130f
+                hlFoot = -52f; hrFoot = -52f
                 tailP = -40f; tailSide = 25f
             }
             // 农民揣 (狮身人面式): 躯干压到贴近地面, 前爪收到胸下, 后肢折进腹下
             "loaf" -> {
-                hipP = 0f; spineArch = -14f; headP = 6f
+                hipP = 0f; spineArch = -14.4f; headP = 6f
                 flSh = 69f; frSh = 69f; flLeg = -86f; frLeg = -86f
-                hlLeg = -109f; hrLeg = -109f
-                hlShank = 127f; hrShank = 127f
-                hlFoot = -76f; hrFoot = -76f
+                hlLeg = -107f; hrLeg = -107f
+                hlShank = 128f; hrShank = 128f
+                hlFoot = -90f; hrFoot = -90f
                 tailP = -25f; tailSide = 35f
             }
             // 伸懒腰: 前肢前伸贴地, 胸口压低, 后躯抬高, 头抬起, 尾巴上翘
             "stretch" -> {
                 hipP = -5f; spineArch = -10.6f; headP = -15f
                 flSh = -36f; frSh = -36f; flLeg = -9f; frLeg = -9f
-                hlLeg = 23f; hrLeg = 23f
+                hlLeg = 22f; hrLeg = 22f
                 hlShank = 8f; hrShank = 8f
-                hlFoot = -18f; hrFoot = -18f
+                hlFoot = -20f; hrFoot = -20f
                 tailP = 35f; tailSide = 0f
             }
         }

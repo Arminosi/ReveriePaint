@@ -169,4 +169,23 @@ class Model3DTest {
             assertEquals(1.0, len, 0.001)
         }
     }
+
+    @Test
+    fun `Mesh3D createBodyMannequin and createSittingMannequin generate valid geometry`() {
+        val body = Mesh3D.createBodyMannequin()
+        assertTrue("Body mannequin should have vertices", body.vertexCount >= 100)
+        assertTrue("Body mannequin should have triangles", body.triangleCount >= 100)
+        assertTrue("Body mannequin should have wireframe lines", body.wireframeLineCount >= 100)
+        assertEquals(body.triangleCount * 9, body.flatPositions.size)
+
+        val sit = Mesh3D.createSittingMannequin()
+        assertTrue("Sitting mannequin should have vertices", sit.vertexCount >= 100)
+        assertTrue("Sitting mannequin should have triangles", sit.triangleCount >= 100)
+        assertTrue("Sitting mannequin should have wireframe lines", sit.wireframeLineCount >= 100)
+        assertEquals(sit.triangleCount * 9, sit.flatPositions.size)
+
+        // Verify BuiltinModel3D mapping
+        assertEquals(BuiltinModel3D.BODY_MANNEQUIN, BuiltinModel3D.fromId("body"))
+        assertEquals(BuiltinModel3D.BODY_SIT, BuiltinModel3D.fromId("body_sit"))
+    }
 }

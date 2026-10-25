@@ -23,10 +23,12 @@ enum class RenderMode3D(val id: String) {
  * 内置基础 3D 参考几何与人体素模
  */
 enum class BuiltinModel3D(val id: String, val displayNameRes: String) {
-    CUBE("cube", "透视方块"),
-    CYLINDER("cylinder", "圆柱体"),
-    SPHERE("sphere", "球体"),
+    BODY_MANNEQUIN("body", "全身人偶 (站姿)"),
+    BODY_SIT("body_sit", "全身人偶 (坐姿)"),
     HEAD_MANNEQUIN("head", "头部比例素模"),
+    CUBE("cube", "透视方块"),
+    SPHERE("sphere", "球体"),
+    CYLINDER("cylinder", "圆柱体"),
     ;
 
     companion object {

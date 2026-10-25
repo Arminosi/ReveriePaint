@@ -26,10 +26,12 @@ internal fun PaintViewModel.getMeshForState(state: Model3DState): Mesh3D {
 
     val builtin = BuiltinModel3D.fromId(key)
     val mesh = when (builtin) {
+        BuiltinModel3D.BODY_MANNEQUIN -> Mesh3D.createBodyMannequin()
+        BuiltinModel3D.BODY_SIT -> Mesh3D.createSittingMannequin()
+        BuiltinModel3D.HEAD_MANNEQUIN -> Mesh3D.createHeadMannequin()
         BuiltinModel3D.CUBE -> Mesh3D.createCube(1.8f)
         BuiltinModel3D.SPHERE -> Mesh3D.createSphere(1.2f, 18, 24)
         BuiltinModel3D.CYLINDER -> Mesh3D.createCylinder(1.0f, 2.0f, 24)
-        BuiltinModel3D.HEAD_MANNEQUIN -> Mesh3D.createHeadMannequin()
         null -> {
             if (key.startsWith("file:")) {
                 try {

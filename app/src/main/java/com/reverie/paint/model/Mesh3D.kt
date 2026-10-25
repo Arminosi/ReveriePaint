@@ -471,6 +471,195 @@ class Mesh3D(
         }
 
         /**
+         * 经典人体比例体块生成器 (八头身伯里曼/卢米斯解剖体块)
+         */
+        private class LimbBuilder {
+            val v = ArrayList<Float>()
+            val tri = ArrayList<Int>()
+            val wire = ArrayList<Int>()
+
+            fun addSegment(
+                x1: Float, y1: Float, z1: Float,
+                x2: Float, y2: Float, z2: Float,
+                topW: Float, topD: Float,
+                botW: Float, botD: Float,
+            ) {
+                val baseIdx = v.size / 3
+                val dx = x2 - x1
+                val dy = y2 - y1
+                val dz = z2 - z1
+                val len = hypot(hypot(dx, dy), dz).coerceAtLeast(1e-5f)
+                val dirX = dx / len; val dirY = dy / len; val dirZ = dz / len
+
+                var upX = 0f; var upY = 1f; var upZ = 0f
+                if (abs(dirY) > 0.95f) {
+                    upX = 0f; upY = 0f; upZ = 1f
+                }
+
+                var sideX = dirY * upZ - dirZ * upY
+                var sideY = dirZ * upX - dirX * upZ
+                var sideZ = dirX * upY - dirY * upX
+                val sLen = hypot(hypot(sideX, sideY), sideZ).coerceAtLeast(1e-5f)
+                sideX /= sLen; sideY /= sLen; sideZ /= sLen
+
+                val fwdX = sideY * dirZ - sideZ * dirY
+                val fwdY = sideZ * dirX - sideX * dirZ
+                val fwdZ = sideX * dirY - sideY * dirX
+
+                val hw1 = topW * 0.5f; val hd1 = topD * 0.5f
+                val hw2 = botW * 0.5f; val hd2 = botD * 0.5f
+
+                v.add(x1 + sideX * hw1 + fwdX * hd1); v.add(y1 + sideY * hw1 + fwdY * hd1); v.add(z1 + sideZ * hw1 + fwdZ * hd1)
+                v.add(x1 - sideX * hw1 + fwdX * hd1); v.add(y1 - sideY * hw1 + fwdY * hd1); v.add(z1 - sideZ * hw1 + fwdZ * hd1)
+                v.add(x1 - sideX * hw1 - fwdX * hd1); v.add(y1 - sideY * hw1 - fwdY * hd1); v.add(z1 - sideZ * hw1 - fwdZ * hd1)
+                v.add(x1 + sideX * hw1 - fwdX * hd1); v.add(y1 + sideY * hw1 - fwdY * hd1); v.add(z1 + sideZ * hw1 - fwdZ * hd1)
+
+                v.add(x2 + sideX * hw2 + fwdX * hd2); v.add(y2 + sideY * hw2 + fwdY * hd2); v.add(z2 + sideZ * hw2 + fwdZ * hd2)
+                v.add(x2 - sideX * hw2 + fwdX * hd2); v.add(y2 - sideY * hw2 + fwdY * hd2); v.add(z2 - sideZ * hw2 + fwdZ * hd2)
+                v.add(x2 - sideX * hw2 - fwdX * hd2); v.add(y2 - sideY * hw2 - fwdY * hd2); v.add(z2 - sideZ * hw2 - fwdZ * hd2)
+                v.add(x2 + sideX * hw2 - fwdX * hd2); v.add(y2 + sideY * hw2 - fwdY * hd2); v.add(z2 + sideZ * hw2 - fwdZ * hd2)
+
+                val i0 = baseIdx; val i1 = baseIdx + 1; val i2 = baseIdx + 2; val i3 = baseIdx + 3
+                val i4 = baseIdx + 4; val i5 = baseIdx + 5; val i6 = baseIdx + 6; val i7 = baseIdx + 7
+
+                tri.add(i0); tri.add(i2); tri.add(i1)
+                tri.add(i0); tri.add(i3); tri.add(i2)
+                tri.add(i4); tri.add(i5); tri.add(i6)
+                tri.add(i4); tri.add(i6); tri.add(i7)
+                tri.add(i0); tri.add(i1); tri.add(i5)
+                tri.add(i0); tri.add(i5); tri.add(i4)
+                tri.add(i2); tri.add(i3); tri.add(i7)
+                tri.add(i2); tri.add(i7); tri.add(i6)
+                tri.add(i1); tri.add(i2); tri.add(i6)
+                tri.add(i1); tri.add(i6); tri.add(i5)
+                tri.add(i3); tri.add(i0); tri.add(i4)
+                tri.add(i3); tri.add(i4); tri.add(i7)
+
+                wire.add(i0); wire.add(i1);  wire.add(i1); wire.add(i2)
+                wire.add(i2); wire.add(i3);  wire.add(i3); wire.add(i0)
+                wire.add(i4); wire.add(i5);  wire.add(i5); wire.add(i6)
+                wire.add(i6); wire.add(i7);  wire.add(i7); wire.add(i4)
+                wire.add(i0); wire.add(i4);  wire.add(i1); wire.add(i5)
+                wire.add(i2); wire.add(i6);  wire.add(i3); wire.add(i7)
+            }
+
+            fun build(): Mesh3D {
+                val numVerts = v.size / 3
+                val vertArr = FloatArray(v.size) { v[it] }
+                val triArr = IntArray(tri.size) { tri[it] }
+                val wireArr = IntArray(wire.size) { wire[it] }
+
+                val normArr = FloatArray(v.size)
+                var t = 0
+                while (t + 2 < triArr.size) {
+                    val i0 = triArr[t]; val i1 = triArr[t + 1]; val i2 = triArr[t + 2]
+                    val p0x = vertArr[i0 * 3]; val p0y = vertArr[i0 * 3 + 1]; val p0z = vertArr[i0 * 3 + 2]
+                    val p1x = vertArr[i1 * 3]; val p1y = vertArr[i1 * 3 + 1]; val p1z = vertArr[i1 * 3 + 2]
+                    val p2x = vertArr[i2 * 3]; val p2y = vertArr[i2 * 3 + 1]; val p2z = vertArr[i2 * 3 + 2]
+                    val e1x = p1x - p0x; val e1y = p1y - p0y; val e1z = p1z - p0z
+                    val e2x = p2x - p0x; val e2y = p2y - p0y; val e2z = p2z - p0z
+                    val fnx = e1y * e2z - e1z * e2y
+                    val fny = e1z * e2x - e1x * e2z
+                    val fnz = e1x * e2y - e1y * e2x
+                    normArr[i0 * 3] += fnx; normArr[i0 * 3 + 1] += fny; normArr[i0 * 3 + 2] += fnz
+                    normArr[i1 * 3] += fnx; normArr[i1 * 3 + 1] += fny; normArr[i1 * 3 + 2] += fnz
+                    normArr[i2 * 3] += fnx; normArr[i2 * 3 + 1] += fny; normArr[i2 * 3 + 2] += fnz
+                    t += 3
+                }
+                for (i in 0 until numVerts) {
+                    val nx = normArr[i * 3]; val ny = normArr[i * 3 + 1]; val nz = normArr[i * 3 + 2]
+                    val len = hypot(hypot(nx, ny), nz).coerceAtLeast(1e-6f)
+                    normArr[i * 3] = nx / len
+                    normArr[i * 3 + 1] = ny / len
+                    normArr[i * 3 + 2] = nz / len
+                }
+
+                return Mesh3D(vertArr, normArr, triArr, wireArr)
+            }
+        }
+
+        /**
+         * 全身人体经典站姿体块素模 (八头身严谨比例，适用于全身透视与起稿打形)
+         */
+        fun createBodyMannequin(): Mesh3D {
+            val b = LimbBuilder()
+            // 头部与颅骨体块
+            b.addSegment(0f, 1.40f, 0.04f, 0f, 1.15f, 0.02f, 0.28f, 0.32f, 0.26f, 0.30f)
+            b.addSegment(0f, 1.15f, 0.04f, 0f, 0.98f, 0.06f, 0.26f, 0.28f, 0.16f, 0.20f)
+            // 颈部
+            b.addSegment(0f, 1.00f, 0.01f, 0f, 0.88f, 0.01f, 0.14f, 0.15f, 0.16f, 0.16f)
+            // 胸腔体块 (上宽下窄，带清晰正面与侧面折面)
+            b.addSegment(0f, 0.88f, 0.01f, 0f, 0.44f, 0.0f, 0.62f, 0.34f, 0.42f, 0.26f)
+            // 腹部/腰节
+            b.addSegment(0f, 0.44f, 0.0f, 0f, 0.30f, 0.0f, 0.40f, 0.25f, 0.44f, 0.26f)
+            // 骨盆体块 (上窄下收，支撑大腿关节)
+            b.addSegment(0f, 0.30f, 0.0f, 0f, 0.04f, -0.01f, 0.48f, 0.30f, 0.36f, 0.24f)
+
+            // 双臂 (A-pose 微向外展)
+            // 左上臂与右上臂
+            b.addSegment(-0.35f, 0.82f, 0f, -0.46f, 0.40f, -0.02f, 0.14f, 0.14f, 0.11f, 0.11f)
+            b.addSegment(0.35f, 0.82f, 0f, 0.46f, 0.40f, -0.02f, 0.14f, 0.14f, 0.11f, 0.11f)
+            // 左前臂与右前臂
+            b.addSegment(-0.46f, 0.40f, -0.02f, -0.52f, 0.02f, 0.01f, 0.11f, 0.11f, 0.09f, 0.09f)
+            b.addSegment(0.46f, 0.40f, -0.02f, 0.52f, 0.02f, 0.01f, 0.11f, 0.11f, 0.09f, 0.09f)
+            // 左手与右手
+            b.addSegment(-0.52f, 0.02f, 0.01f, -0.55f, -0.16f, 0.02f, 0.10f, 0.06f, 0.07f, 0.04f)
+            b.addSegment(0.52f, 0.02f, 0.01f, 0.55f, -0.16f, 0.02f, 0.10f, 0.06f, 0.07f, 0.04f)
+
+            // 双腿 (稳健直立站姿)
+            // 大腿
+            b.addSegment(-0.16f, 0.04f, 0f, -0.18f, -0.58f, 0.02f, 0.20f, 0.20f, 0.15f, 0.15f)
+            b.addSegment(0.16f, 0.04f, 0f, 0.18f, -0.58f, 0.02f, 0.20f, 0.20f, 0.15f, 0.15f)
+            // 小腿
+            b.addSegment(-0.18f, -0.58f, 0.02f, -0.17f, -1.18f, -0.01f, 0.15f, 0.15f, 0.10f, 0.10f)
+            b.addSegment(0.18f, -0.58f, 0.02f, 0.17f, -1.18f, -0.01f, 0.15f, 0.15f, 0.10f, 0.10f)
+            // 脚掌 (前伸楔形)
+            b.addSegment(-0.17f, -1.18f, -0.04f, -0.17f, -1.30f, 0.20f, 0.11f, 0.10f, 0.11f, 0.06f)
+            b.addSegment(0.17f, -1.18f, -0.04f, 0.17f, -1.30f, 0.20f, 0.11f, 0.10f, 0.11f, 0.06f)
+
+            return b.build()
+        }
+
+        /**
+         * 全身人体经典坐姿体块素模 (躯干与大腿呈直角折屈，便于推敲坐姿纵深透视)
+         */
+        fun createSittingMannequin(): Mesh3D {
+            val b = LimbBuilder()
+            // 头部与颅骨
+            b.addSegment(0f, 1.40f, 0.04f, 0f, 1.15f, 0.02f, 0.28f, 0.32f, 0.26f, 0.30f)
+            b.addSegment(0f, 1.15f, 0.04f, 0f, 0.98f, 0.06f, 0.26f, 0.28f, 0.16f, 0.20f)
+            // 颈部
+            b.addSegment(0f, 1.00f, 0.01f, 0f, 0.88f, 0.01f, 0.14f, 0.15f, 0.16f, 0.16f)
+            // 胸腔体块
+            b.addSegment(0f, 0.88f, 0.01f, 0f, 0.44f, 0.0f, 0.62f, 0.34f, 0.42f, 0.26f)
+            // 腹部/腰节
+            b.addSegment(0f, 0.44f, 0.0f, 0f, 0.30f, 0.0f, 0.40f, 0.25f, 0.44f, 0.26f)
+            // 骨盆体块 (坐底支承面)
+            b.addSegment(0f, 0.30f, 0.0f, 0f, 0.10f, -0.06f, 0.48f, 0.32f, 0.42f, 0.32f)
+
+            // 双腿 (前伸大腿 + 垂直下垂小腿)
+            // 大腿水平前伸
+            b.addSegment(-0.16f, 0.18f, -0.04f, -0.16f, 0.18f, 0.52f, 0.20f, 0.18f, 0.15f, 0.15f)
+            b.addSegment(0.16f, 0.18f, -0.04f, 0.16f, 0.18f, 0.52f, 0.20f, 0.18f, 0.15f, 0.15f)
+            // 小腿垂直向下
+            b.addSegment(-0.16f, 0.16f, 0.52f, -0.16f, -0.46f, 0.52f, 0.15f, 0.15f, 0.10f, 0.10f)
+            b.addSegment(0.16f, 0.16f, 0.52f, 0.16f, -0.46f, 0.52f, 0.15f, 0.15f, 0.10f, 0.10f)
+            // 脚掌着地
+            b.addSegment(-0.16f, -0.46f, 0.48f, -0.16f, -0.56f, 0.72f, 0.11f, 0.08f, 0.11f, 0.05f)
+            b.addSegment(0.16f, -0.46f, 0.48f, 0.16f, -0.56f, 0.72f, 0.11f, 0.08f, 0.11f, 0.05f)
+
+            // 双臂 (自然屈肘搭于腿上)
+            b.addSegment(-0.35f, 0.82f, 0f, -0.38f, 0.46f, 0.08f, 0.14f, 0.14f, 0.11f, 0.11f)
+            b.addSegment(0.35f, 0.82f, 0f, 0.38f, 0.46f, 0.08f, 0.14f, 0.14f, 0.11f, 0.11f)
+            b.addSegment(-0.38f, 0.46f, 0.08f, -0.25f, 0.26f, 0.30f, 0.11f, 0.11f, 0.09f, 0.09f)
+            b.addSegment(0.38f, 0.46f, 0.08f, 0.25f, 0.26f, 0.30f, 0.11f, 0.11f, 0.09f, 0.09f)
+            b.addSegment(-0.25f, 0.26f, 0.30f, -0.22f, 0.24f, 0.42f, 0.09f, 0.05f, 0.07f, 0.04f)
+            b.addSegment(0.25f, 0.26f, 0.30f, 0.22f, 0.24f, 0.42f, 0.09f, 0.05f, 0.07f, 0.04f)
+
+            return b.build()
+        }
+
+        /**
          * 解析标准 Wavefront OBJ 文件流
          */
         fun parseObj(reader: BufferedReader): Mesh3D {

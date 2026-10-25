@@ -161,10 +161,12 @@ fun Model3DPickerSheet(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // 2x2 预设卡片
+                // 预设模型卡片
                 val builtins = listOf(
-                    Triple(BuiltinModel3D.CUBE, R.string.layer_3d_model_cube, R.string.layer_3d_model_cube_sub),
+                    Triple(BuiltinModel3D.BODY_MANNEQUIN, R.string.layer_3d_model_body, R.string.layer_3d_model_body_sub),
+                    Triple(BuiltinModel3D.BODY_SIT, R.string.layer_3d_model_body_sit, R.string.layer_3d_model_body_sit_sub),
                     Triple(BuiltinModel3D.HEAD_MANNEQUIN, R.string.layer_3d_model_head, R.string.layer_3d_model_head_sub),
+                    Triple(BuiltinModel3D.CUBE, R.string.layer_3d_model_cube, R.string.layer_3d_model_cube_sub),
                     Triple(BuiltinModel3D.SPHERE, R.string.layer_3d_model_sphere, R.string.layer_3d_model_sphere_sub),
                     Triple(BuiltinModel3D.CYLINDER, R.string.layer_3d_model_cylinder, R.string.layer_3d_model_cylinder_sub),
                 )
@@ -173,12 +175,16 @@ fun Model3DPickerSheet(
                     columns = GridCells.Fixed(2),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 270.dp),
                 ) {
                     items(builtins) { (model, titleRes, subRes) ->
                         val iconRes = when (model) {
+                            BuiltinModel3D.BODY_MANNEQUIN -> R.drawable.ic_author
+                            BuiltinModel3D.BODY_SIT -> R.drawable.ic_author
+                            BuiltinModel3D.HEAD_MANNEQUIN -> R.drawable.ic_focus_view
                             BuiltinModel3D.CUBE -> R.drawable.ic_rect
-                            BuiltinModel3D.HEAD_MANNEQUIN -> R.drawable.ic_author
                             BuiltinModel3D.SPHERE -> R.drawable.ic_circle
                             BuiltinModel3D.CYLINDER -> R.drawable.ic_sliders
                         }

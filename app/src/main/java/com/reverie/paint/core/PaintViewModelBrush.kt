@@ -423,8 +423,8 @@ import kotlinx.coroutines.withContext
 
     /** Reset all parameters for the current brush back to factory defaults */
     private fun PaintViewModel.resetSingleBrushPresetState(presetName: String) {
-        // v2：先复位存储（清覆盖/物化回快照），再继续下面的上游重置逻辑（拷 asset/删记录/defaultParams）
-        BrushStoreVm.reset(this, presetName)
+        // v2：先复位存储；白名单（import/abr）连记录一起回到导入态并短路，其余继续走上游逻辑
+        if (BrushStoreVm.reset(this, presetName)) return
         val dir = File(appContext.filesDir, "paintoppresets")
         val isMyb = File(dir, "$presetName.myb").exists() || (appContext.assets.list("paintoppresets")?.contains("$presetName.myb") == true)
         val ext = if (isMyb) "myb" else "kpp"

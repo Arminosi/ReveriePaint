@@ -12,6 +12,7 @@ import com.reverie.paint.core.brushstore.BrushIdentity
 import com.reverie.paint.core.brushstore.BrushOverrideStore
 import com.reverie.paint.core.brushstore.BrushStoreBootstrap
 import com.reverie.paint.core.brushstore.EffectivePresetBuilder
+import com.reverie.paint.core.brushstore.ImportedResetRecord
 import com.reverie.paint.core.brushstore.PresetReadback
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -95,6 +96,29 @@ internal object BrushStoreVm {
         return true
     }
 
+    /**
+     * #136 A 取证：选笔/恢复入口的记录与索引快照（只读，不改任何状态）。
+     *
+     * 用来区分「记录层 / 笔尖名层 / 索引层」三种致因：`rec/dc/dyn` 看记录是否被写坏，
+     * `tip` 看笔尖名，`presetIdx/vmIdx/toolIdx/origIdx` 看索引是否漂移。
+     */
+    private fun selectEvidence(vm: PaintViewModel, name: String, presetIdx: Int, origIdx: Int?): List<Pair<String, Any?>> {
+        val r = vm.brushParams[name]
+        val out = mutableListOf<Pair<String, Any?>>(
+            "name" to name,
+            "presetIdx" to presetIdx,
+            "vmIdx" to vm.brushPresetIndex,
+            "toolIdx" to (vm.toolBrushStates[vm.currentToolId]?.presetIndex ?: -1),
+            "rec" to (r != null),
+            "cust" to (r?.isCustomized ?: false),
+            "dc" to (r?.dynamicsCustomized ?: false),
+            "dyn" to (r?.dynamicOptions?.size ?: 0),
+            "tip" to (r?.tipAsset ?: "-"),
+        )
+        if (origIdx != null) out += "origIdx" to origIdx
+        return out
+    }
+
     /** v2 选笔前的落盘准备：不碰引擎、不写 UI（引擎与 UI 由上游链负责） */
     fun prepareSelect(vm: PaintViewModel, preset: BrushPresetInfo?) {
         if (preset == null) return
@@ -102,7 +126,7 @@ internal object BrushStoreVm {
         val dir = presetDir() ?: return
         // 上一支笔的待提交编辑必须先落盘，且必须先于 loadBrushPreset（同步执行）
         BrushEditSession.flushAll(dir)
-        BrushDiagnostics.log("v2_prepare_select", "name" to preset.name)
+        BrushDiagnostics.log("v2_prepare_select", *selectEvidence(vm, preset.name, preset.index, null).toTypedArray())
     }
 
     /** v2 橡皮恢复前的落盘准备：仅同步 flush 当前预设的待提交编辑，无引擎调用 */
@@ -110,7 +134,10 @@ internal object BrushStoreVm {
         val e = preset?.let { BrushStoreBootstrap.managedEntry(it.name) } ?: return
         val dir = presetDir() ?: return
         BrushEditSession.flush(e.id, dir)
-        BrushDiagnostics.log("v2_prepare_restore", "name" to preset.name)
+        BrushDiagnostics.log(
+            "v2_prepare_restore",
+            *selectEvidence(vm, preset.name, preset.index, vm.activeStrokeOriginalPresetIndex).toTypedArray(),
+        )
     }
 
     /** 每次选笔 after 完成时捕获的 UI 基线（id → 上游 after 值），供 mergeEdit 判定"用户真正改了什么" */
@@ -285,7 +312,16 @@ internal object BrushStoreVm {
 
     // ------------------------------------------------------------ 重置 / 已修改（W-06）
 
-    /** v2 重置：只复位存储（清覆盖、物化回快照、取消待提交、清 uiBaseline）；记录处理走上游旧逻辑 */
+    /**
+     * v2 重置。分两段，必须主线程调用（[PaintViewModel.brushParams] 是 Compose 状态）。
+     *
+     * 1. 存储复位：对所有 managed 预设无条件执行（清覆盖、物化回快照、取消待提交、清 uiBaseline）。
+     *    [BrushEditSession.reset] 是仓库里唯一清 [BrushOverrideStore] 的地方，跳过它会让
+     *    [isModified] 的角标不消失、旧覆盖在下次保存时复活，所以这一段不能按 provenance 早退。
+     * 2. 记录回到导入态：只对 provenance ∈ {import, abr} 生效（[ImportedResetRecord]）。
+     *    命中则落盘记录、清工具参数记忆并返回 true 短路调用方的上游旧逻辑；
+     *    未命中返回 false，调用方继续走上游，行为与改动前逐字节一致。
+     */
     fun reset(vm: PaintViewModel, name: String): Boolean {
         val e = BrushStoreBootstrap.managedEntry(name) ?: return false
         val dir = presetDir() ?: return false
@@ -293,6 +329,28 @@ internal object BrushStoreVm {
         persistJob?.cancel()
         BrushEditSession.reset(e.id, dir) ?: return false
         uiBaseline.remove(e.id)
+        val action = ImportedResetRecord.actionFor(e.id, vm.brushParams[name])
+        when (action) {
+            is ImportedResetRecord.Action.NotApplicable -> {
+                BrushDiagnostics.log("reset_record", "name" to name, "id" to e.id, "action" to "not_applicable")
+                return false
+            }
+            is ImportedResetRecord.Action.Delete -> {
+                vm.brushParams.remove(name)
+                BrushDiagnostics.log("reset_record", "name" to name, "id" to e.id, "action" to "delete")
+            }
+            is ImportedResetRecord.Action.Restore -> {
+                vm.brushParams[name] = action.p
+                BrushDiagnostics.log(
+                    "reset_record",
+                    "name" to name, "id" to e.id, "action" to "restore",
+                    "dc" to action.p.dynamicsCustomized, "dyn" to action.p.dynamicOptions.size,
+                )
+            }
+        }
+        vm.persistBrushParams()
+        vm.toolBrushStates = vm.toolBrushStates.mapValues { (_, s) -> s.copy(paramMemory = s.paramMemory - name) }
+        vm.persistToolBrushStates()
         return true
     }
 

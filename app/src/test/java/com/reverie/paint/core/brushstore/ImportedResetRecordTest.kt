@@ -136,10 +136,18 @@ class ImportedResetRecordTest {
         val edited = converted.bp.copy(size = 999.0, dynamicOptions = mapOf("opacity" to "<curve>0,0;1,1;</curve>"))
         val restored = restoreOf(ImportedResetRecord.actionFor(id, edited))
         assertNotEquals(999.0, restored.size, 1e-9)
-        assertEquals(converted.bp.size, restored.size, 1e-9)
-        assertEquals(converted.bp.pressureEnabled, restored.pressureEnabled)
-        assertEquals(converted.bp.pressureSize, restored.pressureSize, 1e-9)
-        assertEquals(converted.bp.pressureOpacity, restored.pressureOpacity, 1e-9)
+        // 整对象相等：任何字段（含 size/opacity/flow/角度/压感/动力曲线/笔尖/纹理/色彩动力学/
+        // 遮罩/传感器）只要没回到导入时的官方 bp 就会红。逐字段挑着断言会漏掉将来新增的字段。
+        //
+        // spacing 是唯一例外：spacingCustomized=false 时解码器按设计把它归一成 0.1
+        // （LegacyBrushParamsCodec:109「未定制间距一律以 kpp 为准」），往返一次必然不等。
+        // 用哨兵覆盖后比较其余全部字段，spacingCustomized 本身单独断言。
+        assertEquals(
+            "重置必须逐字段回到导入时的官方 bp",
+            converted.bp.copy(spacing = 0.0),
+            restored.copy(spacing = 0.0),
+        )
+        assertEquals(converted.bp.spacingCustomized, restored.spacingCustomized)
         assertTrue("官方 bp 不带 dynamicOptions", restored.dynamicOptions.isEmpty())
     }
 

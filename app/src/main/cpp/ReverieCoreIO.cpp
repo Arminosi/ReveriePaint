@@ -635,6 +635,10 @@ bool ReverieCore::saveRevp(const QString &path, const QString &extraMetaJson, co
         layerObj["clipped"] = e.clipped;
         layerObj["alphaInherited"] = e.alphaInherited;
         layerObj["isGroup"] = e.isGroup;
+        if (e.isGroup) {
+            const KisGroupLayer *grp = dynamic_cast<const KisGroupLayer *>(e.node);
+            layerObj["passThrough"] = grp && grp->passThroughMode();
+        }
         layerObj["depth"] = e.depth;
         layerObj["colorLabel"] = e.colorLabel;
         layerObj["background"] = e.background;
@@ -1304,8 +1308,22 @@ static bool loadKraNodesDom(const QDomElement &parentElem,
             if (KisLayer *l = dynamic_cast<KisLayer *>(node.data())) {
                 const bool isClipped = (el.attribute("clipped", "0") == "1") ||
                                        (el.attribute("clipping", "0") == "1");
-                const bool inheritAlpha = (el.attribute("inherit-alpha", "0") == "1") ||
-                                          (el.attribute("inherit_alpha", "0") == "1");
+                bool inheritAlpha = (el.attribute("inherit-alpha", "0") == "1") ||
+                                    (el.attribute("inherit_alpha", "0") == "1");
+                if (!inheritAlpha && el.hasAttribute("channelflags")) {
+                    const QString cf = el.attribute("channelflags");
+                    const KoColorSpace *layerCs = l->colorSpace() ? l->colorSpace() : cs;
+                    if (layerCs && !cf.isEmpty()) {
+                        QBitArray cfBits(cf.length());
+                        for (int b = 0; b < cf.length(); ++b) {
+                            cfBits.setBit(b, cf[b] != '0');
+                        }
+                        const QBitArray alphaFlags = layerCs->channelFlags(false, true) & cfBits;
+                        if (alphaFlags.count(true) == 0) {
+                            inheritAlpha = true;
+                        }
+                    }
+                }
                 if (isClipped) {
                     l->enableClippingLayer(true);
                 } else if (inheritAlpha) {
@@ -1313,11 +1331,38 @@ static bool loadKraNodesDom(const QDomElement &parentElem,
                 }
                 const QString op = el.attribute("compositeop").trimmed();
                 if (!op.isEmpty()) {
-                    l->setCompositeOpId(op);
+                    if (op.compare("pass_through", Qt::CaseInsensitive) == 0 ||
+                        op.compare("pass through", Qt::CaseInsensitive) == 0) {
+                        l->setCompositeOpId(QStringLiteral("normal"));
+                    } else {
+                        l->setCompositeOpId(op);
+                    }
+                }
+                if (KisGroupLayer *g = dynamic_cast<KisGroupLayer *>(node.data())) {
+                    const QString ptAttr = el.attribute("passthrough", el.attribute("pass_through", "0")).toLower();
+                    const bool passThrough = (ptAttr == "1" || ptAttr == "true") ||
+                                             (op.compare("pass_through", Qt::CaseInsensitive) == 0 ||
+                                              op.compare("pass through", Qt::CaseInsensitive) == 0);
+                    g->setPassThroughMode(passThrough);
                 }
                 if (KisPaintLayer *pl = dynamic_cast<KisPaintLayer *>(l)) {
-                    const bool lockAlpha = (el.attribute("lockalpha", "0") == "1") ||
-                                           (el.attribute("alpha_locked", "0") == "1");
+                    bool lockAlpha = (el.attribute("lockalpha", "0") == "1") ||
+                                     (el.attribute("alpha_locked", "0") == "1");
+                    if (!lockAlpha && el.hasAttribute("channellockflags")) {
+                        const QString clf = el.attribute("channellockflags");
+                        const KoColorSpace *layerCs = pl->paintDevice() && pl->paintDevice()->colorSpace()
+                            ? pl->paintDevice()->colorSpace() : (l->colorSpace() ? l->colorSpace() : cs);
+                        if (layerCs && !clf.isEmpty()) {
+                            QBitArray clfBits(clf.length());
+                            for (int b = 0; b < clf.length(); ++b) {
+                                clfBits.setBit(b, clf[b] != '0');
+                            }
+                            const QBitArray alphaFlags = layerCs->channelFlags(false, true) & clfBits;
+                            if (alphaFlags.count(true) == 0) {
+                                lockAlpha = true;
+                            }
+                        }
+                    }
                     pl->setAlphaLocked(lockAlpha);
                 }
             }
@@ -2127,6 +2172,8 @@ static void writeKraNodesXml(QXmlStreamWriter &xml,
         const QString clippingStr = layer->clippingEnabled() ? QStringLiteral("1") : QStringLiteral("0");
 
         if (isGroup) {
+            const KisGroupLayer *grp = dynamic_cast<const KisGroupLayer *>(layer);
+            const bool passThrough = grp && grp->passThroughMode();
             xml.writeStartElement(QStringLiteral("layer"));
             xml.writeAttribute(QStringLiteral("name"), name);
             xml.writeAttribute(QStringLiteral("opacity"), QString::number(opacityVal));
@@ -2137,6 +2184,7 @@ static void writeKraNodesXml(QXmlStreamWriter &xml,
             xml.writeAttribute(QStringLiteral("clipping"), clippingStr);
             xml.writeAttribute(QStringLiteral("channelflags"),
                                kraChannelFlagsString(layer->colorSpace(), layer->alphaChannelDisabled()));
+            xml.writeAttribute(QStringLiteral("passthrough"), passThrough ? QStringLiteral("1") : QStringLiteral("0"));
             xml.writeAttribute(QStringLiteral("colorspacename"), QStringLiteral("RGBA"));
             xml.writeAttribute(QStringLiteral("nodetype"), QStringLiteral("grouplayer"));
             xml.writeAttribute(QStringLiteral("uuid"), QUuid::createUuid().toString());
@@ -2168,6 +2216,9 @@ static void writeKraNodesXml(QXmlStreamWriter &xml,
             xml.writeAttribute(QStringLiteral("channelflags"),
                                kraChannelFlagsString(pl->paintDevice() ? pl->paintDevice()->colorSpace() : nullptr,
                                                      layer->alphaChannelDisabled()));
+            xml.writeAttribute(QStringLiteral("channellockflags"),
+                               kraChannelFlagsString(pl->paintDevice() ? pl->paintDevice()->colorSpace() : nullptr,
+                                                     pl->alphaLocked()));
             xml.writeAttribute(QStringLiteral("filename"), layerFileName);
             xml.writeAttribute(QStringLiteral("colorspacename"), csName);
             xml.writeAttribute(QStringLiteral("nodetype"), QStringLiteral("paintlayer"));

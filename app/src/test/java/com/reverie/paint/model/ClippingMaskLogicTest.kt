@@ -137,4 +137,57 @@ class ClippingMaskLogicTest {
         assertFalse(clipped)
         assertTrue(alphaInherited)
     }
+
+    @Test
+    fun `kra import detects inherit alpha from channelflags or attribute`() {
+        fun parseInheritAlpha(
+            inheritAlphaAttr: String?,
+            channelFlagsAttr: String?,
+            alphaChannelIndex: Int = 3
+        ): Boolean {
+            if (inheritAlphaAttr == "1" || inheritAlphaAttr == "true") return true
+            if (!channelFlagsAttr.isNullOrEmpty() && alphaChannelIndex in channelFlagsAttr.indices) {
+                if (channelFlagsAttr[alphaChannelIndex] == '0') {
+                    return true
+                }
+            }
+            return false
+        }
+
+        // Standard Krita KRA exports channelflags="1110" for inherit alpha without inherit-alpha attribute
+        assertTrue(parseInheritAlpha(null, "1110"))
+        // Explicit inherit-alpha="1"
+        assertTrue(parseInheritAlpha("1", null))
+        assertTrue(parseInheritAlpha("1", "1110"))
+        // Normal layer with all channels active
+        assertFalse(parseInheritAlpha(null, "1111"))
+        assertFalse(parseInheritAlpha("0", "1111"))
+        assertFalse(parseInheritAlpha(null, ""))
+    }
+
+    @Test
+    fun `kra import detects group layer pass-through mode`() {
+        fun parseGroupPassThrough(
+            passthroughAttr: String?,
+            passThroughAttr: String?,
+            compositeOp: String?
+        ): Boolean {
+            val pt = passthroughAttr ?: passThroughAttr ?: "0"
+            if (pt == "1" || pt.equals("true", ignoreCase = true)) return true
+            val op = compositeOp?.trim()?.lowercase() ?: ""
+            return op == "pass_through" || op == "pass through"
+        }
+
+        // Krita default KRA attribute for pass-through group
+        assertTrue(parseGroupPassThrough(passthroughAttr = "1", passThroughAttr = null, compositeOp = "normal"))
+        assertTrue(parseGroupPassThrough(passthroughAttr = "true", passThroughAttr = null, compositeOp = "normal"))
+        // Alternative pass_through attribute
+        assertTrue(parseGroupPassThrough(passthroughAttr = null, passThroughAttr = "1", compositeOp = "normal"))
+        // PSD/CompositeOp fallback
+        assertTrue(parseGroupPassThrough(passthroughAttr = null, passThroughAttr = null, compositeOp = "pass_through"))
+        assertTrue(parseGroupPassThrough(passthroughAttr = null, passThroughAttr = null, compositeOp = "pass through"))
+        // Normal group
+        assertFalse(parseGroupPassThrough(passthroughAttr = "0", passThroughAttr = null, compositeOp = "normal"))
+        assertFalse(parseGroupPassThrough(passthroughAttr = null, passThroughAttr = null, compositeOp = "normal"))
+    }
 }

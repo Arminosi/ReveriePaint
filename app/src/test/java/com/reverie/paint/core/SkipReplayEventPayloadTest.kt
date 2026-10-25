@@ -15,6 +15,7 @@ import com.reverie.paint.model.RecordingEvents.T_GRADIENT_V3
 import com.reverie.paint.model.RecordingEvents.T_LIQUIFY_PROFILE
 import com.reverie.paint.model.RecordingEvents.T_LIQUIFY_SIZE
 import com.reverie.paint.model.RecordingEvents.T_POLYGON
+import com.reverie.paint.model.RecordingEvents.T_PRESET_SELECT_V2
 import com.reverie.paint.model.RecordingEvents.T_SELECT_ALL
 import com.reverie.paint.model.RecordingEvents.T_SHAPE
 import com.reverie.paint.model.RecordingEvents.T_WARP
@@ -212,5 +213,63 @@ class SkipReplayEventPayloadTest {
             u8(T_LIQUIFY_SIZE)
             f32(20f)
         }
+    }
+
+    // ------------------------------------------------------------ #136：v2 选笔事件
+
+    private fun RecordingBuffer.presetSelectV2(
+        index: Int = 3,
+        name: String = "Maru pen",
+        presetId: String = "imp_0a1b2c3d",
+        md5: String = "d41d8cd98f00b204e9800998ecf8427e",
+    ) {
+        u8(T_PRESET_SELECT_V2)
+        u16(index)
+        str(name)
+        str(presetId)
+        str(md5)
+    }
+
+    @Test
+    fun `tool preset select v2 payload`() {
+        skipAndAssert(TOOL_OP) {
+            presetSelectV2()
+        }
+    }
+
+    @Test
+    fun `v2 选笔事件不再让有效时长退回 -1`() {
+        val buf = RecordingBuffer(64)
+        // 从 v2 笔刷库选预设（#127 W-12 写入 op 50），随后一条普通笔画
+        buf.u8(TOOL_OP)
+        buf.varint(10)
+        buf.presetSelectV2()
+        buf.u8(STROKE_MOVE)
+        buf.varint(20)
+        buf.f32(1f)
+        buf.f32(2f)
+        buf.f32(0.5f)
+
+        assertEquals(
+            "op 50 的 payload 被完整跳过后才能得到 10+20=30ms；错位会返回 -1",
+            30L,
+            ReplayTimeline.effectiveTotalMs(buf.data.copyOf(buf.size), 2, 1000L, 2),
+        )
+    }
+
+    @Test
+    fun `未登记的事件类型降级为 -1 而不是静默错位`() {
+        // 顶层类型未登记：无法得知 payload 长度，必须明确失败
+        val top = RecordingBuffer(16)
+        top.u8(0x7E)
+        top.varint(10)
+        assertEquals(-1L, ReplayTimeline.effectiveTotalMs(top.data.copyOf(top.size), 2, 1000L))
+
+        // 工具子类型未登记：同上，跳过 u8 后 payload 仍无从跳过
+        val sub = RecordingBuffer(16)
+        sub.u8(TOOL_OP)
+        sub.varint(10)
+        sub.u8(0x7E)
+        assertEquals(-1L, ReplayTimeline.effectiveTotalMs(sub.data.copyOf(sub.size), 2, 1000L))
     }
 }

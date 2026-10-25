@@ -163,12 +163,12 @@ fun Model3DPickerSheet(
 
                 // 预设模型卡片
                 val builtins = listOf(
-                    Triple(BuiltinModel3D.BODY_MANNEQUIN, R.string.layer_3d_model_body, R.string.layer_3d_model_body_sub),
-                    Triple(BuiltinModel3D.BODY_SIT, R.string.layer_3d_model_body_sit, R.string.layer_3d_model_body_sit_sub),
+                    Triple(BuiltinModel3D.ANIME_BOY, R.string.layer_3d_model_boy, R.string.layer_3d_model_boy_sub),
+                    Triple(BuiltinModel3D.ANIME_GIRL, R.string.layer_3d_model_girl, R.string.layer_3d_model_girl_sub),
+                    Triple(BuiltinModel3D.CAT, R.string.layer_3d_model_cat, R.string.layer_3d_model_cat_sub),
                     Triple(BuiltinModel3D.HEAD_MANNEQUIN, R.string.layer_3d_model_head, R.string.layer_3d_model_head_sub),
                     Triple(BuiltinModel3D.CUBE, R.string.layer_3d_model_cube, R.string.layer_3d_model_cube_sub),
                     Triple(BuiltinModel3D.SPHERE, R.string.layer_3d_model_sphere, R.string.layer_3d_model_sphere_sub),
-                    Triple(BuiltinModel3D.CYLINDER, R.string.layer_3d_model_cylinder, R.string.layer_3d_model_cylinder_sub),
                 )
 
                 LazyVerticalGrid(
@@ -177,16 +177,19 @@ fun Model3DPickerSheet(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 270.dp),
+                        .heightIn(max = 280.dp),
                 ) {
                     items(builtins) { (model, titleRes, subRes) ->
                         val iconRes = when (model) {
-                            BuiltinModel3D.BODY_MANNEQUIN -> R.drawable.ic_author
-                            BuiltinModel3D.BODY_SIT -> R.drawable.ic_author
+                            BuiltinModel3D.ANIME_BOY -> R.drawable.ic_author
+                            BuiltinModel3D.ANIME_GIRL -> R.drawable.ic_author
+                            BuiltinModel3D.CAT -> R.drawable.ic_heart
                             BuiltinModel3D.HEAD_MANNEQUIN -> R.drawable.ic_focus_view
                             BuiltinModel3D.CUBE -> R.drawable.ic_rect
                             BuiltinModel3D.SPHERE -> R.drawable.ic_circle
                             BuiltinModel3D.CYLINDER -> R.drawable.ic_sliders
+                            BuiltinModel3D.BODY_MANNEQUIN -> R.drawable.ic_author
+                            BuiltinModel3D.BODY_SIT -> R.drawable.ic_author
                         }
 
                         Box(

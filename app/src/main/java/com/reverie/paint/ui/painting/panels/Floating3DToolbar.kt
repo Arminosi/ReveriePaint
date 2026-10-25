@@ -58,6 +58,7 @@ fun Floating3DToolbar(
 
     var showStyleMenu by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
+    var showPosePanel by remember { mutableStateOf(false) }
 
     AnimatedVisibility(
         visible = vm.isCurrentLayer3D,
@@ -219,7 +220,17 @@ fun Floating3DToolbar(
                     }
                 }
 
-                // 3. 更多功能下拉菜单 (复位 / 提取线稿 / 栅格化)
+                // 4. 骨骼与姿态调节 (仅支持骨骼的人体与动物模型显示)
+                if (state.isRigged()) {
+                    CompactModeIconButton(
+                        icon = R.drawable.ic_author,
+                        tooltip = stringResource(R.string.layer_3d_pose_rigging),
+                        active = showPosePanel,
+                        onClick = { showPosePanel = true },
+                    )
+                }
+
+                // 5. 更多功能下拉菜单 (复位 / 提取线稿 / 栅格化)
                 Box {
                     CompactModeIconButton(
                         icon = R.drawable.ic_dots_vertical,
@@ -261,6 +272,13 @@ fun Floating3DToolbar(
                 }
             }
         }
+    }
+
+    if (showPosePanel) {
+        PoseAdjustmentPanel(
+            vm = vm,
+            onDismiss = { showPosePanel = false },
+        )
     }
 }
 

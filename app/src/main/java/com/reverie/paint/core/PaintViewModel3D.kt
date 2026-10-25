@@ -21,21 +21,26 @@ private val meshCache = ConcurrentHashMap<String, Mesh3D>()
  * 获取或构造 3D 网格对象
  */
 internal fun PaintViewModel.getMeshForState(state: Model3DState): Mesh3D {
-    val key = state.modelType
+    val anglesKey = if (state.jointAngles.isEmpty()) "" else state.jointAngles.entries.sortedBy { it.key }.joinToString(",") { "${it.key}:${it.value}" }
+    val key = "${state.modelType}#${state.posePreset}#$anglesKey"
     meshCache[key]?.let { return it }
 
-    val builtin = BuiltinModel3D.fromId(key)
+    val builtin = BuiltinModel3D.fromId(state.modelType)
     val mesh = when (builtin) {
-        BuiltinModel3D.BODY_MANNEQUIN -> Mesh3D.createBodyMannequin()
-        BuiltinModel3D.BODY_SIT -> Mesh3D.createSittingMannequin()
+        BuiltinModel3D.ANIME_BOY -> Mesh3D.createAnimeMannequin(isFemale = false, posePreset = state.posePreset, angles = state.jointAngles)
+        BuiltinModel3D.ANIME_GIRL -> Mesh3D.createAnimeMannequin(isFemale = true, posePreset = state.posePreset, angles = state.jointAngles)
+        BuiltinModel3D.CAT -> Mesh3D.createCatModel(posePreset = state.posePreset, angles = state.jointAngles)
+        BuiltinModel3D.BODY_MANNEQUIN -> Mesh3D.createAnimeMannequin(isFemale = false, posePreset = state.posePreset, angles = state.jointAngles)
+        BuiltinModel3D.BODY_SIT -> Mesh3D.createAnimeMannequin(isFemale = false, posePreset = "sit", angles = state.jointAngles)
         BuiltinModel3D.HEAD_MANNEQUIN -> Mesh3D.createHeadMannequin()
         BuiltinModel3D.CUBE -> Mesh3D.createCube(1.8f)
         BuiltinModel3D.SPHERE -> Mesh3D.createSphere(1.2f, 18, 24)
         BuiltinModel3D.CYLINDER -> Mesh3D.createCylinder(1.0f, 2.0f, 24)
         null -> {
-            if (key.startsWith("file:")) {
+            val rawKey = state.modelType
+            if (rawKey.startsWith("file:")) {
                 try {
-                    val file = java.io.File(key.substring(5))
+                    val file = java.io.File(rawKey.substring(5))
                     if (file.exists()) {
                         file.inputStream().use { stream ->
                             Mesh3D.parseObj(BufferedReader(InputStreamReader(stream)))
@@ -44,17 +49,17 @@ internal fun PaintViewModel.getMeshForState(state: Model3DState): Mesh3D {
                         Mesh3D.createCube(1.8f)
                     }
                 } catch (e: Exception) {
-                    Log.e("RP_3D", "Failed to parse OBJ from file: $key", e)
+                    Log.e("RP_3D", "Failed to parse OBJ from file: $rawKey", e)
                     Mesh3D.createCube(1.8f)
                 }
-            } else if (key.startsWith("uri:")) {
+            } else if (rawKey.startsWith("uri:")) {
                 try {
-                    val uri = Uri.parse(key.substring(4))
+                    val uri = Uri.parse(rawKey.substring(4))
                     appContext.contentResolver.openInputStream(uri)?.use { stream ->
                         Mesh3D.parseObj(BufferedReader(InputStreamReader(stream)))
                     } ?: Mesh3D.createCube(1.8f)
                 } catch (e: Exception) {
-                    Log.e("RP_3D", "Failed to parse OBJ from uri: $key", e)
+                    Log.e("RP_3D", "Failed to parse OBJ from uri: $rawKey", e)
                     Mesh3D.createCube(1.8f)
                 }
             } else {
@@ -63,15 +68,51 @@ internal fun PaintViewModel.getMeshForState(state: Model3DState): Mesh3D {
         }
     }
 
+    if (meshCache.size > 40) {
+        meshCache.clear()
+    }
     meshCache[key] = mesh
     return mesh
+}
+
+/**
+ * 切换当前 3D 模型的姿态预设
+ */
+internal fun PaintViewModel.set3DPosePreset(preset: String) {
+    val state = currentLayer3DState ?: return
+    val updated = state.copy(posePreset = preset, jointAngles = emptyMap())
+    update3DState(updated)
+}
+
+/**
+ * 调整指定骨骼关节的微调角度
+ */
+internal fun PaintViewModel.set3DJointAngle(jointKey: String, angle: Float) {
+    val state = currentLayer3DState ?: return
+    val newAngles = state.jointAngles.toMutableMap()
+    if (kotlin.math.abs(angle) < 0.01f) {
+        newAngles.remove(jointKey)
+    } else {
+        newAngles[jointKey] = angle
+    }
+    val updated = state.copy(jointAngles = newAngles)
+    update3DState(updated)
+}
+
+/**
+ * 重置当前 3D 模型的骨骼微调角度
+ */
+internal fun PaintViewModel.reset3DJointAngles() {
+    val state = currentLayer3DState ?: return
+    val updated = state.copy(jointAngles = emptyMap())
+    update3DState(updated)
 }
 
 /**
  * 新建内置 3D 参考图层
  */
 internal fun PaintViewModel.create3DLayer(
-    builtin: BuiltinModel3D = BuiltinModel3D.CUBE,
+    builtin: BuiltinModel3D = BuiltinModel3D.ANIME_BOY,
     customName: String? = null,
 ) {
     val displayName = customName ?: (getString(R.string.layer_3d_tag) + " (" + builtin.displayNameRes + ")")

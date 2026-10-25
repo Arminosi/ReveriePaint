@@ -579,84 +579,393 @@ class Mesh3D(
         }
 
         /**
+         * 骨骼运动链正向运动学节点 (Hierarchical Forward Kinematics Node)
+         */
+        private class BoneNode(
+            val m: FloatArray = Math3D.identity()
+        ) {
+            fun child(
+                tx: Float = 0f, ty: Float = 0f, tz: Float = 0f,
+                pitch: Float = 0f, yaw: Float = 0f, roll: Float = 0f
+            ): BoneNode {
+                var res = Math3D.translate(m, tx, ty, tz)
+                if (yaw != 0f) res = Math3D.rotate(res, yaw, 0f, 1f, 0f)
+                if (pitch != 0f) res = Math3D.rotate(res, pitch, 1f, 0f, 0f)
+                if (roll != 0f) res = Math3D.rotate(res, roll, 0f, 0f, 1f)
+                return BoneNode(res)
+            }
+
+            fun pt(x: Float = 0f, y: Float = 0f, z: Float = 0f): FloatArray {
+                val px = m[0] * x + m[4] * y + m[8] * z + m[12]
+                val py = m[1] * x + m[5] * y + m[9] * z + m[13]
+                val pz = m[2] * x + m[6] * y + m[10] * z + m[14]
+                return floatArrayOf(px, py, pz)
+            }
+        }
+
+        /**
+         * 二次元人体素模 (支持男体/女体比例切换、姿态预设与骨骼关节自由调节)
+         */
+        fun createAnimeMannequin(
+            isFemale: Boolean = false,
+            posePreset: String = "stand",
+            angles: Map<String, Float> = emptyMap(),
+        ): Mesh3D {
+            val b = LimbBuilder()
+
+            fun getAngle(key: String, base: Float = 0f): Float {
+                return base + (angles[key] ?: 0f)
+            }
+
+            var spinePitchBase = 0f
+            var spineYawBase = 0f
+            var headPitchBase = 0f
+            var headYawBase = 0f
+            var lArmPitchBase = 0f
+            var lArmYawBase = -15f
+            var lElbowBase = 10f
+            var rArmPitchBase = 0f
+            var rArmYawBase = 15f
+            var rElbowBase = 10f
+            var lThighPitchBase = 0f
+            var lThighYawBase = -3f
+            var lKneeBase = 0f
+            var rThighPitchBase = 0f
+            var rThighYawBase = 3f
+            var rKneeBase = 0f
+
+            when (posePreset.lowercase()) {
+                "sit" -> {
+                    lThighPitchBase = -85f; lKneeBase = 85f
+                    rThighPitchBase = -85f; rKneeBase = 85f
+                    lArmPitchBase = -25f; lArmYawBase = -10f; lElbowBase = 55f
+                    rArmPitchBase = -25f; rArmYawBase = 10f; rElbowBase = 55f
+                }
+                "action" -> {
+                    spinePitchBase = 18f; spineYawBase = -15f
+                    headYawBase = 15f; headPitchBase = -10f
+                    lArmPitchBase = -50f; lArmYawBase = -20f; lElbowBase = 70f
+                    rArmPitchBase = 40f; rArmYawBase = 20f; rElbowBase = 30f
+                    lThighPitchBase = -40f; lThighYawBase = -5f; lKneeBase = 55f
+                    rThighPitchBase = 35f; rThighYawBase = 5f; rKneeBase = 25f
+                }
+                "crossed" -> {
+                    spinePitchBase = -4f
+                    lArmPitchBase = -32f; lArmYawBase = 40f; lElbowBase = 95f
+                    rArmPitchBase = -32f; rArmYawBase = -40f; rElbowBase = 95f
+                    lThighYawBase = -5f; rThighYawBase = 5f
+                }
+                "hips" -> {
+                    lArmPitchBase = 12f; lArmYawBase = -40f; lElbowBase = 95f
+                    rArmPitchBase = 12f; rArmYawBase = 40f; rElbowBase = 95f
+                    lThighYawBase = -6f; rThighYawBase = 6f
+                }
+                "kneel" -> {
+                    spinePitchBase = 20f
+                    lThighPitchBase = 15f; lKneeBase = 90f
+                    rThighPitchBase = -75f; rKneeBase = 80f
+                    rArmPitchBase = -45f; rElbowBase = 50f
+                }
+            }
+
+            val spinePitch = getAngle("spine_pitch", spinePitchBase)
+            val spineYaw = getAngle("spine_yaw", spineYawBase)
+            val headPitch = getAngle("head_pitch", headPitchBase)
+            val headYaw = getAngle("head_yaw", headYawBase)
+
+            val lArmPitch = getAngle("l_arm_pitch", lArmPitchBase)
+            val lArmYaw = getAngle("l_arm_yaw", lArmYawBase)
+            val lElbow = getAngle("l_elbow", lElbowBase).coerceIn(0f, 150f)
+
+            val rArmPitch = getAngle("r_arm_pitch", rArmPitchBase)
+            val rArmYaw = getAngle("r_arm_yaw", rArmYawBase)
+            val rElbow = getAngle("r_elbow", rElbowBase).coerceIn(0f, 150f)
+
+            val lThighPitch = getAngle("l_thigh_pitch", lThighPitchBase)
+            val lThighYaw = getAngle("l_thigh_yaw", lThighYawBase)
+            val lKnee = getAngle("l_knee", lKneeBase).coerceIn(0f, 150f)
+
+            val rThighPitch = getAngle("r_thigh_pitch", rThighPitchBase)
+            val rThighYaw = getAngle("r_thigh_yaw", rThighYawBase)
+            val rKnee = getAngle("r_knee", rKneeBase).coerceIn(0f, 150f)
+
+            val shoulderX = if (isFemale) 0.28f else 0.36f
+            val chestTopW = if (isFemale) 0.46f else 0.60f
+            val chestTopD = if (isFemale) 0.28f else 0.34f
+            val chestBotW = if (isFemale) 0.32f else 0.42f
+            val chestBotD = if (isFemale) 0.24f else 0.26f
+            val waistTopW = chestBotW
+            val waistTopD = chestBotD
+            val waistBotW = if (isFemale) 0.36f else 0.40f
+            val waistBotD = if (isFemale) 0.24f else 0.25f
+            val pelvisW = if (isFemale) 0.46f else 0.42f
+            val pelvisD = if (isFemale) 0.28f else 0.28f
+            val pelvisBotW = if (isFemale) 0.38f else 0.36f
+            val pelvisBotD = 0.24f
+            val hipX = if (isFemale) 0.16f else 0.17f
+
+            val headW = if (isFemale) 0.26f else 0.28f
+            val headD = if (isFemale) 0.28f else 0.30f
+            val chinW = if (isFemale) 0.14f else 0.16f
+            val chinD = if (isFemale) 0.18f else 0.20f
+            val neckW = if (isFemale) 0.12f else 0.15f
+
+            val uArmW = if (isFemale) 0.11f else 0.14f
+            val uArmD = uArmW
+            val uArmBotW = if (isFemale) 0.09f else 0.11f
+            val uArmBotD = uArmBotW
+            val fArmW = uArmBotW
+            val fArmD = uArmBotD
+            val fArmBotW = if (isFemale) 0.07f else 0.09f
+            val fArmBotD = fArmBotW
+
+            val thighW = if (isFemale) 0.21f else 0.20f
+            val thighD = thighW
+            val thighBotW = if (isFemale) 0.14f else 0.15f
+            val thighBotD = thighBotW
+            val calfW = thighBotW
+            val calfD = thighBotD
+            val calfBotW = if (isFemale) 0.08f else 0.10f
+            val calfBotD = calfBotW
+
+            val upperArmLen = 0.42f
+            val forearmLen = 0.38f
+            val handLen = 0.16f
+            val thighLen = 0.58f
+            val calfLen = 0.58f
+
+            val root = BoneNode()
+
+            // 1. 骨盆体块 (Pelvis)
+            val pPelvisTop = root.pt(0f, 0.30f, 0f)
+            val pPelvisBot = root.pt(0f, 0.04f, 0f)
+            b.addSegment(pPelvisTop[0], pPelvisTop[1], pPelvisTop[2], pPelvisBot[0], pPelvisBot[1], pPelvisBot[2], pelvisW, pelvisD, pelvisBotW, pelvisBotD)
+
+            // 2. 脊椎与腹部/腰节 (Spine & Waist)
+            val spineNode = root.child(0f, 0.30f, 0f, pitch = spinePitch, yaw = spineYaw)
+            val pWaistEnd = spineNode.pt(0f, 0.14f, 0f)
+            b.addSegment(pPelvisTop[0], pPelvisTop[1], pPelvisTop[2], pWaistEnd[0], pWaistEnd[1], pWaistEnd[2], waistBotW, waistBotD, waistTopW, waistTopD)
+
+            // 3. 胸腔体块 (Chest)
+            val chestNode = spineNode.child(0f, 0.14f, 0f)
+            val pChestEnd = chestNode.pt(0f, 0.44f, 0f)
+            b.addSegment(pWaistEnd[0], pWaistEnd[1], pWaistEnd[2], pChestEnd[0], pChestEnd[1], pChestEnd[2], chestBotW, chestBotD, chestTopW, chestTopD)
+
+            // 4. 颈部与头部 (Neck & Anime Head)
+            val neckNode = chestNode.child(0f, 0.44f, 0f, pitch = headPitch, yaw = headYaw)
+            val pNeckEnd = neckNode.pt(0f, 0.12f, 0f)
+            b.addSegment(pChestEnd[0], pChestEnd[1], pChestEnd[2], pNeckEnd[0], pNeckEnd[1], pNeckEnd[2], neckW, neckW, neckW * 0.9f, neckW * 0.9f)
+
+            val headNode = neckNode.child(0f, 0.12f, 0f)
+            val pHeadMid = headNode.pt(0f, 0.22f, 0.02f)
+            val pHeadTop = headNode.pt(0f, 0.42f, 0.03f)
+            // 二次元收窄下颌
+            b.addSegment(pNeckEnd[0], pNeckEnd[1], pNeckEnd[2] + 0.03f, pHeadMid[0], pHeadMid[1], pHeadMid[2], chinW, chinD, headW, headD)
+            // 颅骨
+            b.addSegment(pHeadMid[0], pHeadMid[1], pHeadMid[2], pHeadTop[0], pHeadTop[1], pHeadTop[2], headW, headD, headW * 0.85f, headD * 0.85f)
+
+            // 5. 左臂 (Left Arm)
+            val lArmNode = chestNode.child(-shoulderX, 0.38f, 0f, pitch = lArmPitch, yaw = lArmYaw)
+            val pLShoulder = lArmNode.pt(0f, 0f, 0f)
+            val pLElbow = lArmNode.pt(0f, -upperArmLen, 0f)
+            b.addSegment(pLShoulder[0], pLShoulder[1], pLShoulder[2], pLElbow[0], pLElbow[1], pLElbow[2], uArmW, uArmD, uArmBotW, uArmBotD)
+
+            val lElbowNode = lArmNode.child(0f, -upperArmLen, 0f, pitch = lElbow)
+            val pLWrist = lElbowNode.pt(0f, -forearmLen, 0f)
+            b.addSegment(pLElbow[0], pLElbow[1], pLElbow[2], pLWrist[0], pLWrist[1], pLWrist[2], fArmW, fArmD, fArmBotW, fArmBotD)
+            val pLHand = lElbowNode.pt(0f, -forearmLen - handLen, 0.01f)
+            b.addSegment(pLWrist[0], pLWrist[1], pLWrist[2], pLHand[0], pLHand[1], pLHand[2], fArmBotW, fArmBotD * 0.7f, fArmBotW * 0.6f, fArmBotD * 0.4f)
+
+            // 6. 右臂 (Right Arm)
+            val rArmNode = chestNode.child(shoulderX, 0.38f, 0f, pitch = rArmPitch, yaw = rArmYaw)
+            val pRShoulder = rArmNode.pt(0f, 0f, 0f)
+            val pRElbow = rArmNode.pt(0f, -upperArmLen, 0f)
+            b.addSegment(pRShoulder[0], pRShoulder[1], pRShoulder[2], pRElbow[0], pRElbow[1], pRElbow[2], uArmW, uArmD, uArmBotW, uArmBotD)
+
+            val rElbowNode = rArmNode.child(0f, -upperArmLen, 0f, pitch = rElbow)
+            val pRWrist = rElbowNode.pt(0f, -forearmLen, 0f)
+            b.addSegment(pRElbow[0], pRElbow[1], pRElbow[2], pRWrist[0], pRWrist[1], pRWrist[2], fArmW, fArmD, fArmBotW, fArmBotD)
+            val pRHand = rElbowNode.pt(0f, -forearmLen - handLen, 0.01f)
+            b.addSegment(pRWrist[0], pRWrist[1], pRWrist[2], pRHand[0], pRHand[1], pRHand[2], fArmBotW, fArmBotD * 0.7f, fArmBotW * 0.6f, fArmBotD * 0.4f)
+
+            // 7. 左腿 (Left Leg)
+            val lLegNode = root.child(-hipX, 0.04f, 0f, pitch = lThighPitch, yaw = lThighYaw)
+            val pLHip = lLegNode.pt(0f, 0f, 0f)
+            val pLKnee = lLegNode.pt(0f, -thighLen, 0f)
+            b.addSegment(pLHip[0], pLHip[1], pLHip[2], pLKnee[0], pLKnee[1], pLKnee[2], thighW, thighD, thighBotW, thighBotD)
+
+            val lKneeNode = lLegNode.child(0f, -thighLen, 0f, pitch = lKnee)
+            val pLAnkle = lKneeNode.pt(0f, -calfLen, 0f)
+            b.addSegment(pLKnee[0], pLKnee[1], pLKnee[2], pLAnkle[0], pLAnkle[1], pLAnkle[2], calfW, calfD, calfBotW, calfBotD)
+            val pLToe = lKneeNode.pt(0f, -calfLen - 0.08f, 0.18f)
+            b.addSegment(pLAnkle[0], pLAnkle[1], pLAnkle[2], pLToe[0], pLToe[1], pLToe[2], calfBotW * 1.1f, calfBotD, calfBotW * 0.8f, calfBotD * 0.5f)
+
+            // 8. 右腿 (Right Leg)
+            val rLegNode = root.child(hipX, 0.04f, 0f, pitch = rThighPitch, yaw = rThighYaw)
+            val pRHip = rLegNode.pt(0f, 0f, 0f)
+            val pRKnee = rLegNode.pt(0f, -thighLen, 0f)
+            b.addSegment(pRHip[0], pRHip[1], pRHip[2], pRKnee[0], pRKnee[1], pRKnee[2], thighW, thighD, thighBotW, thighBotD)
+
+            val rKneeNode = rLegNode.child(0f, -thighLen, 0f, pitch = rKnee)
+            val pRAnkle = rKneeNode.pt(0f, -calfLen, 0f)
+            b.addSegment(pRKnee[0], pRKnee[1], pRKnee[2], pRAnkle[0], pRAnkle[1], pRAnkle[2], calfW, calfD, calfBotW, calfBotD)
+            val pRToe = rKneeNode.pt(0f, -calfLen - 0.08f, 0.18f)
+            b.addSegment(pRAnkle[0], pRAnkle[1], pRAnkle[2], pRToe[0], pRToe[1], pRToe[2], calfBotW * 1.1f, calfBotD, calfBotW * 0.8f, calfBotD * 0.5f)
+
+            return b.build()
+        }
+
+        /**
+         * 3D 猫猫模型 (带猫耳、口吻、四肢、猫爪与多节灵动尾巴，支持四种姿态与骨骼调节)
+         */
+        fun createCatModel(
+            posePreset: String = "stand",
+            angles: Map<String, Float> = emptyMap(),
+        ): Mesh3D {
+            val b = LimbBuilder()
+
+            fun getAngle(key: String, base: Float = 0f): Float {
+                return base + (angles[key] ?: 0f)
+            }
+
+            var catHeadPitchBase = 0f
+            var catHeadYawBase = 0f
+            var catSpineArchBase = 0f
+            var catFlLegBase = 0f
+            var catFrLegBase = 0f
+            var catHlLegBase = 0f
+            var catHrLegBase = 0f
+            var catTailPitchBase = 35f
+            var catTailYawBase = 10f
+
+            when (posePreset.lowercase()) {
+                "sit" -> {
+                    catSpineArchBase = -15f
+                    catHeadPitchBase = 12f
+                    catFlLegBase = -5f; catFrLegBase = -5f
+                    catHlLegBase = -70f; catHrLegBase = -70f
+                    catTailPitchBase = -45f; catTailYawBase = 35f
+                }
+                "loaf" -> {
+                    catSpineArchBase = 8f
+                    catFlLegBase = -75f; catFrLegBase = -75f
+                    catHlLegBase = -80f; catHrLegBase = -80f
+                    catTailPitchBase = -60f; catTailYawBase = 50f
+                }
+                "stretch" -> {
+                    catSpineArchBase = 28f
+                    catHeadPitchBase = -15f
+                    catFlLegBase = 45f; catFrLegBase = 45f
+                    catHlLegBase = 20f; catHrLegBase = 20f
+                    catTailPitchBase = 65f; catTailYawBase = 5f
+                }
+            }
+
+            val headPitch = getAngle("cat_head_pitch", catHeadPitchBase)
+            val headYaw = getAngle("cat_head_yaw", catHeadYawBase)
+            val spineArch = getAngle("cat_spine_arch", catSpineArchBase)
+            val flLeg = getAngle("cat_fl_leg", catFlLegBase)
+            val frLeg = getAngle("cat_fr_leg", catFrLegBase)
+            val hlLeg = getAngle("cat_hl_leg", catHlLegBase)
+            val hrLeg = getAngle("cat_hr_leg", catHrLegBase)
+            val tailPitch = getAngle("cat_tail_pitch", catTailPitchBase)
+            val tailYaw = getAngle("cat_tail_yaw", catTailYawBase)
+
+            val root = BoneNode()
+
+            // 1. 后躯/骨盆 (Pelvis & Rear Torso)
+            val rearHip = root.child(0f, 0.32f, -0.22f)
+            val pRearFront = rearHip.pt(0f, 0f, 0.18f)
+            val pRearBack = rearHip.pt(0f, 0f, -0.18f)
+            b.addSegment(pRearFront[0], pRearFront[1], pRearFront[2], pRearBack[0], pRearBack[1], pRearBack[2], 0.32f, 0.28f, 0.28f, 0.26f)
+
+            // 2. 前躯/胸腔 (Chest & Front Torso)
+            val chest = root.child(0f, 0.32f, 0.15f, pitch = spineArch)
+            val pChestBack = chest.pt(0f, 0f, -0.15f)
+            val pChestFront = chest.pt(0f, 0f, 0.20f)
+            b.addSegment(pChestBack[0], pChestBack[1], pChestBack[2], pChestFront[0], pChestFront[1], pChestFront[2], 0.32f, 0.28f, 0.34f, 0.30f)
+
+            // 3. 头部与面部 (Head, Snout & Ears)
+            val headNode = chest.child(0f, 0.16f, 0.22f, pitch = headPitch, yaw = headYaw)
+            val pHeadBack = headNode.pt(0f, 0.05f, 0.0f)
+            val pHeadFront = headNode.pt(0f, 0.05f, 0.22f)
+            b.addSegment(pHeadBack[0], pHeadBack[1], pHeadBack[2], pHeadFront[0], pHeadFront[1], pHeadFront[2], 0.28f, 0.25f, 0.22f, 0.18f)
+
+            // 口吻鼻翼 (Snout)
+            val pSnoutTip = headNode.pt(0f, 0.02f, 0.30f)
+            b.addSegment(pHeadFront[0], pHeadFront[1], pHeadFront[2], pSnoutTip[0], pSnoutTip[1], pSnoutTip[2], 0.14f, 0.10f, 0.05f, 0.04f)
+
+            // 左猫耳 (Triangular Left Ear)
+            val pLEarBase = headNode.pt(-0.09f, 0.16f, 0.08f)
+            val pLEarTip = headNode.pt(-0.13f, 0.32f, 0.06f)
+            b.addSegment(pLEarBase[0], pLEarBase[1], pLEarBase[2], pLEarTip[0], pLEarTip[1], pLEarTip[2], 0.11f, 0.06f, 0.02f, 0.02f)
+
+            // 右猫耳 (Triangular Right Ear)
+            val pREarBase = headNode.pt(0.09f, 0.16f, 0.08f)
+            val pREarTip = headNode.pt(0.13f, 0.32f, 0.06f)
+            b.addSegment(pREarBase[0], pREarBase[1], pREarBase[2], pREarTip[0], pREarTip[1], pREarTip[2], 0.11f, 0.06f, 0.02f, 0.02f)
+
+            // 4. 左前肢与猫爪 (Front Left Paw)
+            val flNode = chest.child(-0.13f, -0.05f, 0.14f, pitch = flLeg)
+            val pFLStart = flNode.pt(0f, 0f, 0f)
+            val pFLElbow = flNode.pt(0f, -0.20f, 0f)
+            b.addSegment(pFLStart[0], pFLStart[1], pFLStart[2], pFLElbow[0], pFLElbow[1], pFLElbow[2], 0.10f, 0.10f, 0.08f, 0.08f)
+            val pFLPaw = flNode.pt(0f, -0.38f, 0.03f)
+            b.addSegment(pFLElbow[0], pFLElbow[1], pFLElbow[2], pFLPaw[0], pFLPaw[1], pFLPaw[2], 0.08f, 0.08f, 0.09f, 0.11f)
+
+            // 5. 右前肢与猫爪 (Front Right Paw)
+            val frNode = chest.child(0.13f, -0.05f, 0.14f, pitch = frLeg)
+            val pFRStart = frNode.pt(0f, 0f, 0f)
+            val pFRElbow = frNode.pt(0f, -0.20f, 0f)
+            b.addSegment(pFRStart[0], pFRStart[1], pFRStart[2], pFRElbow[0], pFRElbow[1], pFRElbow[2], 0.10f, 0.10f, 0.08f, 0.08f)
+            val pFRPaw = frNode.pt(0f, -0.38f, 0.03f)
+            b.addSegment(pFRElbow[0], pFRElbow[1], pFRElbow[2], pFRPaw[0], pFRPaw[1], pFRPaw[2], 0.08f, 0.08f, 0.09f, 0.11f)
+
+            // 6. 左后肢与猫爪 (Hind Left Leg & Paw)
+            val hlNode = rearHip.child(-0.13f, -0.02f, -0.08f, pitch = hlLeg)
+            val pHLStart = hlNode.pt(0f, 0f, 0f)
+            val pHLKnee = hlNode.pt(0f, -0.20f, -0.04f)
+            b.addSegment(pHLStart[0], pHLStart[1], pHLStart[2], pHLKnee[0], pHLKnee[1], pHLKnee[2], 0.14f, 0.15f, 0.10f, 0.10f)
+            val pHLPaw = hlNode.pt(0f, -0.38f, 0.02f)
+            b.addSegment(pHLKnee[0], pHLKnee[1], pHLKnee[2], pHLPaw[0], pHLPaw[1], pHLPaw[2], 0.09f, 0.09f, 0.10f, 0.12f)
+
+            // 7. 右后肢与猫爪 (Hind Right Leg & Paw)
+            val hrNode = rearHip.child(0.13f, -0.02f, -0.08f, pitch = hrLeg)
+            val pHRStart = hrNode.pt(0f, 0f, 0f)
+            val pHRKnee = hrNode.pt(0f, -0.20f, -0.04f)
+            b.addSegment(pHRStart[0], pHRStart[1], pHRStart[2], pHRKnee[0], pHRKnee[1], pHRKnee[2], 0.14f, 0.15f, 0.10f, 0.10f)
+            val pHRPaw = hrNode.pt(0f, -0.38f, 0.02f)
+            b.addSegment(pHRKnee[0], pHRKnee[1], pHRKnee[2], pHRPaw[0], pHRPaw[1], pHRPaw[2], 0.09f, 0.09f, 0.10f, 0.12f)
+
+            // 8. 灵动三节猫尾 (3-Segment Articulated Tail)
+            val tail0 = rearHip.child(0f, 0.08f, -0.16f, pitch = tailPitch, yaw = tailYaw)
+            val pTail0Start = tail0.pt(0f, 0f, 0f)
+            val pTail0End = tail0.pt(0f, 0.15f, -0.14f)
+            b.addSegment(pTail0Start[0], pTail0Start[1], pTail0Start[2], pTail0End[0], pTail0End[1], pTail0End[2], 0.07f, 0.07f, 0.06f, 0.06f)
+
+            val tail1 = tail0.child(0f, 0.15f, -0.14f, pitch = 22f, yaw = 12f)
+            val pTail1End = tail1.pt(0f, 0.16f, -0.10f)
+            b.addSegment(pTail0End[0], pTail0End[1], pTail0End[2], pTail1End[0], pTail1End[1], pTail1End[2], 0.06f, 0.06f, 0.05f, 0.05f)
+
+            val tail2 = tail1.child(0f, 0.16f, -0.10f, pitch = 22f, yaw = 8f)
+            val pTail2End = tail2.pt(0f, 0.14f, 0.02f)
+            b.addSegment(pTail1End[0], pTail1End[1], pTail1End[2], pTail2End[0], pTail2End[1], pTail2End[2], 0.05f, 0.05f, 0.03f, 0.03f)
+
+            return b.build()
+        }
+
+        /**
          * 全身人体经典站姿体块素模 (八头身严谨比例，适用于全身透视与起稿打形)
          */
         fun createBodyMannequin(): Mesh3D {
-            val b = LimbBuilder()
-            // 头部与颅骨体块
-            b.addSegment(0f, 1.40f, 0.04f, 0f, 1.15f, 0.02f, 0.28f, 0.32f, 0.26f, 0.30f)
-            b.addSegment(0f, 1.15f, 0.04f, 0f, 0.98f, 0.06f, 0.26f, 0.28f, 0.16f, 0.20f)
-            // 颈部
-            b.addSegment(0f, 1.00f, 0.01f, 0f, 0.88f, 0.01f, 0.14f, 0.15f, 0.16f, 0.16f)
-            // 胸腔体块 (上宽下窄，带清晰正面与侧面折面)
-            b.addSegment(0f, 0.88f, 0.01f, 0f, 0.44f, 0.0f, 0.62f, 0.34f, 0.42f, 0.26f)
-            // 腹部/腰节
-            b.addSegment(0f, 0.44f, 0.0f, 0f, 0.30f, 0.0f, 0.40f, 0.25f, 0.44f, 0.26f)
-            // 骨盆体块 (上窄下收，支撑大腿关节)
-            b.addSegment(0f, 0.30f, 0.0f, 0f, 0.04f, -0.01f, 0.48f, 0.30f, 0.36f, 0.24f)
-
-            // 双臂 (A-pose 微向外展)
-            // 左上臂与右上臂
-            b.addSegment(-0.35f, 0.82f, 0f, -0.46f, 0.40f, -0.02f, 0.14f, 0.14f, 0.11f, 0.11f)
-            b.addSegment(0.35f, 0.82f, 0f, 0.46f, 0.40f, -0.02f, 0.14f, 0.14f, 0.11f, 0.11f)
-            // 左前臂与右前臂
-            b.addSegment(-0.46f, 0.40f, -0.02f, -0.52f, 0.02f, 0.01f, 0.11f, 0.11f, 0.09f, 0.09f)
-            b.addSegment(0.46f, 0.40f, -0.02f, 0.52f, 0.02f, 0.01f, 0.11f, 0.11f, 0.09f, 0.09f)
-            // 左手与右手
-            b.addSegment(-0.52f, 0.02f, 0.01f, -0.55f, -0.16f, 0.02f, 0.10f, 0.06f, 0.07f, 0.04f)
-            b.addSegment(0.52f, 0.02f, 0.01f, 0.55f, -0.16f, 0.02f, 0.10f, 0.06f, 0.07f, 0.04f)
-
-            // 双腿 (稳健直立站姿)
-            // 大腿
-            b.addSegment(-0.16f, 0.04f, 0f, -0.18f, -0.58f, 0.02f, 0.20f, 0.20f, 0.15f, 0.15f)
-            b.addSegment(0.16f, 0.04f, 0f, 0.18f, -0.58f, 0.02f, 0.20f, 0.20f, 0.15f, 0.15f)
-            // 小腿
-            b.addSegment(-0.18f, -0.58f, 0.02f, -0.17f, -1.18f, -0.01f, 0.15f, 0.15f, 0.10f, 0.10f)
-            b.addSegment(0.18f, -0.58f, 0.02f, 0.17f, -1.18f, -0.01f, 0.15f, 0.15f, 0.10f, 0.10f)
-            // 脚掌 (前伸楔形)
-            b.addSegment(-0.17f, -1.18f, -0.04f, -0.17f, -1.30f, 0.20f, 0.11f, 0.10f, 0.11f, 0.06f)
-            b.addSegment(0.17f, -1.18f, -0.04f, 0.17f, -1.30f, 0.20f, 0.11f, 0.10f, 0.11f, 0.06f)
-
-            return b.build()
+            return createAnimeMannequin(isFemale = false, posePreset = "stand")
         }
 
         /**
          * 全身人体经典坐姿体块素模 (躯干与大腿呈直角折屈，便于推敲坐姿纵深透视)
          */
         fun createSittingMannequin(): Mesh3D {
-            val b = LimbBuilder()
-            // 头部与颅骨
-            b.addSegment(0f, 1.40f, 0.04f, 0f, 1.15f, 0.02f, 0.28f, 0.32f, 0.26f, 0.30f)
-            b.addSegment(0f, 1.15f, 0.04f, 0f, 0.98f, 0.06f, 0.26f, 0.28f, 0.16f, 0.20f)
-            // 颈部
-            b.addSegment(0f, 1.00f, 0.01f, 0f, 0.88f, 0.01f, 0.14f, 0.15f, 0.16f, 0.16f)
-            // 胸腔体块
-            b.addSegment(0f, 0.88f, 0.01f, 0f, 0.44f, 0.0f, 0.62f, 0.34f, 0.42f, 0.26f)
-            // 腹部/腰节
-            b.addSegment(0f, 0.44f, 0.0f, 0f, 0.30f, 0.0f, 0.40f, 0.25f, 0.44f, 0.26f)
-            // 骨盆体块 (坐底支承面)
-            b.addSegment(0f, 0.30f, 0.0f, 0f, 0.10f, -0.06f, 0.48f, 0.32f, 0.42f, 0.32f)
-
-            // 双腿 (前伸大腿 + 垂直下垂小腿)
-            // 大腿水平前伸
-            b.addSegment(-0.16f, 0.18f, -0.04f, -0.16f, 0.18f, 0.52f, 0.20f, 0.18f, 0.15f, 0.15f)
-            b.addSegment(0.16f, 0.18f, -0.04f, 0.16f, 0.18f, 0.52f, 0.20f, 0.18f, 0.15f, 0.15f)
-            // 小腿垂直向下
-            b.addSegment(-0.16f, 0.16f, 0.52f, -0.16f, -0.46f, 0.52f, 0.15f, 0.15f, 0.10f, 0.10f)
-            b.addSegment(0.16f, 0.16f, 0.52f, 0.16f, -0.46f, 0.52f, 0.15f, 0.15f, 0.10f, 0.10f)
-            // 脚掌着地
-            b.addSegment(-0.16f, -0.46f, 0.48f, -0.16f, -0.56f, 0.72f, 0.11f, 0.08f, 0.11f, 0.05f)
-            b.addSegment(0.16f, -0.46f, 0.48f, 0.16f, -0.56f, 0.72f, 0.11f, 0.08f, 0.11f, 0.05f)
-
-            // 双臂 (自然屈肘搭于腿上)
-            b.addSegment(-0.35f, 0.82f, 0f, -0.38f, 0.46f, 0.08f, 0.14f, 0.14f, 0.11f, 0.11f)
-            b.addSegment(0.35f, 0.82f, 0f, 0.38f, 0.46f, 0.08f, 0.14f, 0.14f, 0.11f, 0.11f)
-            b.addSegment(-0.38f, 0.46f, 0.08f, -0.25f, 0.26f, 0.30f, 0.11f, 0.11f, 0.09f, 0.09f)
-            b.addSegment(0.38f, 0.46f, 0.08f, 0.25f, 0.26f, 0.30f, 0.11f, 0.11f, 0.09f, 0.09f)
-            b.addSegment(-0.25f, 0.26f, 0.30f, -0.22f, 0.24f, 0.42f, 0.09f, 0.05f, 0.07f, 0.04f)
-            b.addSegment(0.25f, 0.26f, 0.30f, 0.22f, 0.24f, 0.42f, 0.09f, 0.05f, 0.07f, 0.04f)
-
-            return b.build()
+            return createAnimeMannequin(isFemale = false, posePreset = "sit")
         }
 
         /**

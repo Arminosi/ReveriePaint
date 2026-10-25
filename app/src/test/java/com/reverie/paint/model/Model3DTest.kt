@@ -18,7 +18,7 @@ class Model3DTest {
             layerId = 42L,
             layerIndex = 2,
             layerName = "3D Reference",
-            modelType = "cube",
+            modelType = "boy",
             rotX = 25.5f,
             rotY = -40f,
             rotZ = 12f,
@@ -30,6 +30,8 @@ class Model3DTest {
             renderMode = RenderMode3D.WIREFRAME,
             baseColor = 0xFFABCDEFL,
             wireframeColor = 0xFF123456L,
+            posePreset = "action",
+            jointAngles = mapOf("head_yaw" to 15.5f, "l_elbow" to 45.0f),
         )
 
         val json = state.toJsonString()
@@ -51,6 +53,10 @@ class Model3DTest {
         assertEquals(RenderMode3D.WIREFRAME, restored.renderMode)
         assertEquals(state.baseColor, restored.baseColor)
         assertEquals(state.wireframeColor, restored.wireframeColor)
+        assertEquals("action", restored.posePreset)
+        assertEquals(15.5f, restored.jointAngles["head_yaw"] ?: 0f, 0.01f)
+        assertEquals(45.0f, restored.jointAngles["l_elbow"] ?: 0f, 0.01f)
+        assertTrue(restored.isRigged())
     }
 
     @Test
@@ -187,5 +193,53 @@ class Model3DTest {
         // Verify BuiltinModel3D mapping
         assertEquals(BuiltinModel3D.BODY_MANNEQUIN, BuiltinModel3D.fromId("body"))
         assertEquals(BuiltinModel3D.BODY_SIT, BuiltinModel3D.fromId("body_sit"))
+        assertEquals(BuiltinModel3D.ANIME_BOY, BuiltinModel3D.fromId("boy"))
+        assertEquals(BuiltinModel3D.ANIME_GIRL, BuiltinModel3D.fromId("girl"))
+        assertEquals(BuiltinModel3D.CAT, BuiltinModel3D.fromId("cat"))
+    }
+
+    @Test
+    fun `Mesh3D createAnimeMannequin generates valid male and female meshes across poses`() {
+        val poses = listOf("stand", "sit", "action", "crossed", "hips", "kneel")
+        for (pose in poses) {
+            val male = Mesh3D.createAnimeMannequin(isFemale = false, posePreset = pose)
+            assertTrue("Male $pose vertex count should be >= 100", male.vertexCount >= 100)
+            assertTrue("Male $pose triangle count should be >= 100", male.triangleCount >= 100)
+            assertEquals(male.triangleCount * 9, male.flatPositions.size)
+
+            val female = Mesh3D.createAnimeMannequin(isFemale = true, posePreset = pose)
+            assertTrue("Female $pose vertex count should be >= 100", female.vertexCount >= 100)
+            assertTrue("Female $pose triangle count should be >= 100", female.triangleCount >= 100)
+            assertEquals(female.triangleCount * 9, female.flatPositions.size)
+        }
+
+        // With joint adjustments
+        val tuned = Mesh3D.createAnimeMannequin(
+            isFemale = true,
+            posePreset = "stand",
+            angles = mapOf("head_yaw" to 30f, "l_arm_pitch" to 45f, "r_knee" to 60f)
+        )
+        assertTrue(tuned.vertexCount >= 100)
+        assertEquals(tuned.triangleCount * 9, tuned.flatPositions.size)
+    }
+
+    @Test
+    fun `Mesh3D createCatModel generates valid feline geometry across poses`() {
+        val catPoses = listOf("stand", "sit", "loaf", "stretch")
+        for (pose in catPoses) {
+            val cat = Mesh3D.createCatModel(posePreset = pose)
+            assertTrue("Cat $pose vertex count should be >= 80", cat.vertexCount >= 80)
+            assertTrue("Cat $pose triangle count should be >= 80", cat.triangleCount >= 80)
+            assertTrue("Cat $pose wireframe line count should be >= 80", cat.wireframeLineCount >= 80)
+            assertEquals(cat.triangleCount * 9, cat.flatPositions.size)
+        }
+
+        // Cat with joint overrides
+        val tunedCat = Mesh3D.createCatModel(
+            posePreset = "stand",
+            angles = mapOf("cat_head_yaw" to 20f, "cat_tail_pitch" to 40f)
+        )
+        assertTrue(tunedCat.vertexCount >= 80)
+        assertEquals(tunedCat.triangleCount * 9, tunedCat.flatPositions.size)
     }
 }

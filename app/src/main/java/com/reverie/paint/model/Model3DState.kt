@@ -23,6 +23,9 @@ enum class RenderMode3D(val id: String) {
  * 内置基础 3D 参考几何与人体素模
  */
 enum class BuiltinModel3D(val id: String, val displayNameRes: String) {
+    ANIME_BOY("boy", "二次元男主"),
+    ANIME_GIRL("girl", "二次元女主"),
+    CAT("cat", "3D 猫猫"),
     BODY_MANNEQUIN("body", "全身人偶 (站姿)"),
     BODY_SIT("body_sit", "全身人偶 (坐姿)"),
     HEAD_MANNEQUIN("head", "头部比例素模"),
@@ -53,7 +56,7 @@ data class Model3DState(
     val layerId: Long = 0L,
     val layerIndex: Int = -1,
     val layerName: String = "",
-    val modelType: String = BuiltinModel3D.CUBE.id, // "cube", "sphere", "file:/path/to/mesh.obj"
+    val modelType: String = BuiltinModel3D.ANIME_BOY.id, // "boy", "girl", "cat", "cube", "file:/path/to/mesh.obj"
     val rotX: Float = 15f,     // 俯仰角 (Pitch)
     val rotY: Float = -30f,    // 偏航角 (Yaw)
     val rotZ: Float = 0f,      // 翻滚角 (Roll)
@@ -65,14 +68,24 @@ data class Model3DState(
     val renderMode: RenderMode3D = RenderMode3D.CLAY,
     val baseColor: Long = 0xFFD8D4CE, // 默认灰模/素模底色 (莫兰迪暖灰)
     val wireframeColor: Long = 0xFF36383B, // 默认线框颜色 (深灰炭笔色)
+    val posePreset: String = "stand",  // 姿态预设: stand, sit, action, crossed, hips, kneel 等
+    val jointAngles: Map<String, Float> = emptyMap(), // 骨骼关节细调角度增量 [jointKey -> degrees]
 ) {
     fun isBuiltin(): Boolean = BuiltinModel3D.fromId(modelType) != null
+
+    /**
+     * 判断当前模型是否具备骨骼与姿态调节能力
+     */
+    fun isRigged(): Boolean {
+        return modelType in setOf("boy", "girl", "cat", "body", "body_sit")
+    }
 
     /**
      * 编码为用于工程 JSON 存储的紧凑键值对字符串
      */
     fun toJsonString(): String {
-        return """{"layerId":$layerId,"layerIndex":$layerIndex,"layerName":"${layerName.replace("\"", "\\\"")}","modelType":"${modelType.replace("\"", "\\\"")}","rotX":$rotX,"rotY":$rotY,"rotZ":$rotZ,"panX":$panX,"panY":$panY,"zoom":$zoom,"lightYaw":$lightYaw,"lightPitch":$lightPitch,"renderMode":"${renderMode.id}","baseColor":$baseColor,"wireframeColor":$wireframeColor}"""
+        val anglesEncoded = jointAngles.entries.joinToString(";") { "${it.key}=${it.value}" }
+        return """{"layerId":$layerId,"layerIndex":$layerIndex,"layerName":"${layerName.replace("\"", "\\\"")}","modelType":"${modelType.replace("\"", "\\\"")}","rotX":$rotX,"rotY":$rotY,"rotZ":$rotZ,"panX":$panX,"panY":$panY,"zoom":$zoom,"lightYaw":$lightYaw,"lightPitch":$lightPitch,"renderMode":"${renderMode.id}","baseColor":$baseColor,"wireframeColor":$wireframeColor,"posePreset":"$posePreset","jointAngles":"$anglesEncoded"}"""
     }
 
     companion object {
@@ -83,7 +96,7 @@ data class Model3DState(
                 var layerId = 0L
                 var layerIndex = -1
                 var layerName = ""
-                var modelType = BuiltinModel3D.CUBE.id
+                var modelType = BuiltinModel3D.ANIME_BOY.id
                 var rotX = 15f
                 var rotY = -30f
                 var rotZ = 0f
@@ -95,6 +108,8 @@ data class Model3DState(
                 var renderMode = RenderMode3D.CLAY
                 var baseColor = 0xFFD8D4CE
                 var wireframeColor = 0xFF36383B
+                var posePreset = "stand"
+                var jointAngles = emptyMap<String, Float>()
 
                 for (p in pairs) {
                     val kv = p.split(":", limit = 2)
@@ -117,6 +132,18 @@ data class Model3DState(
                         "renderMode" -> renderMode = RenderMode3D.fromId(value)
                         "baseColor" -> baseColor = value.toLongOrNull() ?: 0xFFD8D4CE
                         "wireframeColor" -> wireframeColor = value.toLongOrNull() ?: 0xFF36383B
+                        "posePreset" -> posePreset = value
+                        "jointAngles" -> {
+                            if (value.isNotEmpty()) {
+                                jointAngles = value.split(";").mapNotNull { entry ->
+                                    val parts = entry.split("=")
+                                    if (parts.size == 2) {
+                                        val angleVal = parts[1].toFloatOrNull()
+                                        if (angleVal != null) parts[0] to angleVal else null
+                                    } else null
+                                }.toMap()
+                            }
+                        }
                     }
                 }
                 Model3DState(
@@ -135,6 +162,8 @@ data class Model3DState(
                     renderMode = renderMode,
                     baseColor = baseColor,
                     wireframeColor = wireframeColor,
+                    posePreset = posePreset,
+                    jointAngles = jointAngles,
                 )
             } catch (_: Exception) {
                 null

@@ -120,41 +120,41 @@ private fun buildEulerMap(
         //   尾骨 pitch > 0 = 上翘, 左右摆走 roll (绕局部 Z, 绕局部 Y 只是沿骨轴扭转)
         // 数值由离线 IK 拟合得出: 目标是把四只爪子和骨盆压到同一水平面 (见 fit 脚本),
         // 拟合后 侧视图上四爪贴地、躯干角度正确, 不再是"腿在空中划水"。
-        var hipP = 0f; var headP = 0f; var spineArch = 0f
-        var flLeg = 0f; var frLeg = 0f; var hlLeg = 0f; var hrLeg = 0f
-        var flSh = 0f; var frSh = 0f
+        var hipP = 0f; var headP = 0f; var spineArch = 0f; var chestP = 0f; var neckP = 0f
+        var flSh = 0f; var frSh = 0f; var flLeg = 0f; var frLeg = 0f
         var flPaw = 0f; var frPaw = 0f
+        var hlLeg = 0f; var hrLeg = 0f
         var hlShank = 0f; var hrShank = 0f
         var hlFoot = 0f; var hrFoot = 0f
         var tailP = 35f; var tailSide = 8f
 
         when (posePreset.lowercase()) {
-            // 端坐: 骨盆落地, 躯干立起到 55°, 后肢折在体侧, 前肢竖直撑地
+            // 端坐: 骨盆后倾下落, 躯干立起, 前肢竖直支撑, 后肢折叠于体侧, 尾巴环绕贴地
             "sit" -> {
-                hipP = 14f; spineArch = -17f; headP = 16f
-                flSh = 38f; frSh = 38f; flLeg = -35f; frLeg = -35f
-                hlLeg = -111f; hrLeg = -111f
-                hlShank = 130f; hrShank = 130f
-                hlFoot = -52f; hrFoot = -52f
-                tailP = -40f; tailSide = 25f
+                hipP = -15f; spineArch = 10f; chestP = 15f; neckP = 5f; headP = -10f
+                flSh = 12f; frSh = 12f; flLeg = -12f; frLeg = -12f
+                hlLeg = -42f; hrLeg = -42f
+                hlShank = 55f; hrShank = 55f
+                hlFoot = -25f; hrFoot = -25f
+                tailP = -30f; tailSide = 20f
             }
-            // 农民揣 (狮身人面式): 躯干压到贴近地面, 前爪收到胸下, 后肢折进腹下
+            // 农民揣 (卧姿): 躯干沉伏, 前肢收拢于胸下, 后肢折进腹下, 尾巴贴体
             "loaf" -> {
-                hipP = 0f; spineArch = -14.4f; headP = 6f
-                flSh = 69f; frSh = 69f; flLeg = -86f; frLeg = -86f
-                hlLeg = -107f; hrLeg = -107f
-                hlShank = 128f; hrShank = 128f
-                hlFoot = -90f; hrFoot = -90f
-                tailP = -25f; tailSide = 35f
+                hipP = -12f; spineArch = -4f; chestP = 8f; headP = -6f
+                flSh = 42f; frSh = 42f; flLeg = -68f; frLeg = -68f; flPaw = 26f; frPaw = 26f
+                hlLeg = -52f; hrLeg = -52f
+                hlShank = 70f; hrShank = 70f
+                hlFoot = -22f; hrFoot = -22f
+                tailP = -25f; tailSide = 30f
             }
-            // 伸懒腰: 前肢前伸贴地, 胸口压低, 后躯抬高, 头抬起, 尾巴上翘
+            // 伸懒腰: 前肢伸展, 胸口低伏压低, 后躯高翘, 头抬起, 尾巴翘卷
             "stretch" -> {
-                hipP = -5f; spineArch = -10.6f; headP = -15f
-                flSh = -36f; frSh = -36f; flLeg = -9f; frLeg = -9f
-                hlLeg = 22f; hrLeg = 22f
-                hlShank = 8f; hrShank = 8f
-                hlFoot = -20f; hrFoot = -20f
-                tailP = 35f; tailSide = 0f
+                hipP = 10f; spineArch = -8f; chestP = -18f; neckP = -5f; headP = 18f
+                flSh = -25f; frSh = -25f; flLeg = -10f; frLeg = -10f; flPaw = 15f; frPaw = 15f
+                hlLeg = 15f; hrLeg = 15f
+                hlShank = -10f; hrShank = -10f
+                hlFoot = 5f; hrFoot = 5f
+                tailP = 40f; tailSide = 0f
             }
         }
 
@@ -169,25 +169,28 @@ private fun buildEulerMap(
         tailSide += (jointAngles["cat_tail_yaw"] ?: 0f)
 
         addJoint(listOf("Hips", "hips"), hipP, 0f, 0f)
-        addJoint(listOf("l_front_shoulder"), flSh, 0f, 0f)
-        addJoint(listOf("r_front_shoulder"), frSh, 0f, 0f)
-        addJoint(listOf("Head", "head"), headP, headY, 0f)
         addJoint(listOf("Spine", "spine"), spineArch, 0f, 0f)
-        addJoint(listOf("leftFrontLeg", "LeftFrontLeg", "l_front_leg"), flLeg, 0f, 0f)
-        addJoint(listOf("rightFrontLeg", "RightFrontLeg", "r_front_leg"), frLeg, 0f, 0f)
-        addJoint(listOf("l_front_paw"), flPaw, 0f, 0f)
-        addJoint(listOf("r_front_paw"), frPaw, 0f, 0f)
-        addJoint(listOf("leftHindLeg", "LeftHindLeg", "l_hind_thigh"), hlLeg, 0f, 0f)
-        addJoint(listOf("rightHindLeg", "RightHindLeg", "r_hind_thigh"), hrLeg, 0f, 0f)
-        addJoint(listOf("l_hind_shank"), hlShank, 0f, 0f)
-        addJoint(listOf("r_hind_shank"), hrShank, 0f, 0f)
-        addJoint(listOf("l_hind_foot"), hlFoot, 0f, 0f)
-        addJoint(listOf("r_hind_foot"), hrFoot, 0f, 0f)
+        addJoint(listOf("Chest", "chest"), chestP, 0f, 0f)
+        addJoint(listOf("Neck", "neck"), neckP, 0f, 0f)
+        addJoint(listOf("Head", "head"), headP, headY, 0f)
+        addJoint(listOf("l_front_shoulder", "frontleg"), flSh, 0f, 0f)
+        addJoint(listOf("r_front_shoulder", "R_frontleg"), frSh, 0f, 0f)
+        addJoint(listOf("leftFrontLeg", "LeftFrontLeg", "l_front_leg", "frontleg0"), flLeg, 0f, 0f)
+        addJoint(listOf("rightFrontLeg", "RightFrontLeg", "r_front_leg", "R_frontleg0"), frLeg, 0f, 0f)
+        addJoint(listOf("l_front_paw", "frontleg1", "frontleg2"), flPaw, 0f, 0f)
+        addJoint(listOf("r_front_paw", "R_frontleg1", "R_frontleg2"), frPaw, 0f, 0f)
+        addJoint(listOf("leftHindLeg", "LeftHindLeg", "l_hind_thigh", "backleg"), hlLeg, 0f, 0f)
+        addJoint(listOf("rightHindLeg", "RightHindLeg", "r_hind_thigh", "R_backleg"), hrLeg, 0f, 0f)
+        addJoint(listOf("l_hind_shank", "backleg0"), hlShank, 0f, 0f)
+        addJoint(listOf("r_hind_shank", "R_backleg0"), hrShank, 0f, 0f)
+        addJoint(listOf("l_hind_foot", "backleg1", "backleg2"), hlFoot, 0f, 0f)
+        addJoint(listOf("r_hind_foot", "R_backleg1", "R_backleg2"), hrFoot, 0f, 0f)
         // 尾骨链: 第一根跟随滑杆, 后面几节按固定比例递进, 形成自然的卷曲
-        addJoint(listOf("Tail1", "tail1"), tailP, 0f, tailSide)
-        addJoint(listOf("Tail2", "tail2"), 26f + tailP * 0.25f, 0f, tailSide * 0.8f)
+        addJoint(listOf("Tail1", "tail1", "tail"), tailP, 0f, tailSide)
+        addJoint(listOf("Tail2", "tail2", "tailstart"), 26f + tailP * 0.25f, 0f, tailSide * 0.8f)
         addJoint(listOf("Tail3", "tail3"), 20f + tailP * 0.2f, 0f, tailSide * 0.6f)
         addJoint(listOf("Tail4", "tail4"), 14f + tailP * 0.15f, 0f, tailSide * 0.4f)
+        addJoint(listOf("tail5"), 10f + tailP * 0.1f, 0f, tailSide * 0.2f)
     } else {
         var spineP = 0f; var spineY = 0f
         var headP = 0f; var headY = 0f

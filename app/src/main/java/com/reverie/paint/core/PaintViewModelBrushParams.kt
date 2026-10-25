@@ -37,7 +37,9 @@ import kotlinx.coroutines.launch
 
     internal fun PaintViewModel.updateBrushScatter(v: Double) {
         brushScatter = v
-        saveBrushParam(dynamicsChanged = true)
+        // 散布是 REBUILD 类参数: paintop 在预设加载时创建并缓存, 即时 setBrushScatter 只写
+        // settings 属性, 不进缓存的 paintop; 必须走防抖重载让引擎重建 (与散布传感器入口一致)
+        saveBrushParam(dynamicsChanged = true, reloadEngine = true)
         runCore(render = false) { ReverieCoreBridge.setBrushScatter(v) }
     }
 

@@ -8159,4 +8159,65 @@
             column="63"/>
     </issue>
 
+    <issue
+        id="NewApi"
+        message="Call requires API level 29 (current min is 23): `erasePrevOverlay`"
+        errorLine1="        if (layer != null &amp;&amp; prevOverlayValid) erasePrevOverlay(canvas, layer, param)"
+        errorLine2="                                               ~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/reverie/paint/ui/painting/canvas/FrontBufferPreviewOverlay.kt"
+            line="1080"
+            column="48"/>
+    </issue>
+    <issue
+        id="NewApi"
+        message="Call requires API level 29 (current min is 23): `erasePrevGuide`"
+        errorLine1="        if (layer != null &amp;&amp; prevGuideKind != DynamicGuidePainter.KIND_NONE) erasePrevGuide(canvas, layer, param)"
+        errorLine2="                                                                             ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/reverie/paint/ui/painting/canvas/FrontBufferPreviewOverlay.kt"
+            line="1081"
+            column="78"/>
+    </issue>
+    <issue
+        id="NewApi"
+        message="Call requires API level 29 (current min is 23): `clipOutUi`"
+        errorLine1="            if (inkL &lt;= inkR) clipOutUi(canvas, param, inkL, inkT, inkR, inkB)"
+        errorLine2="                              ~~~~~~~~~">
+        <location
+            file="src/main/java/com/reverie/paint/ui/painting/canvas/FrontBufferPreviewOverlay.kt"
+            line="1114"
+            column="31"/>
+    </issue>
+    <issue
+        id="NewApi"
+        message="Call requires API level 29 (current min is 23): `drawGuide`"
+        errorLine1="            drawGuide(canvas, param, bufferWidth, bufferHeight)"
+        errorLine2="            ~~~~~~~~~">
+        <location
+            file="src/main/java/com/reverie/paint/ui/painting/canvas/FrontBufferPreviewOverlay.kt"
+            line="1123"
+            column="13"/>
+    </issue>
+    <issue
+        id="NewApi"
+        message="Call requires API level 29 (current min is 23): `clipOutUi`"
+        errorLine1="            clipOutUi(canvas, param, overlayL, overlayT, overlayR, overlayB)"
+        errorLine2="            ~~~~~~~~~">
+        <location
+            file="src/main/java/com/reverie/paint/ui/painting/canvas/FrontBufferPreviewOverlay.kt"
+            line="1160"
+            column="13"/>
+    </issue>
+    <issue
+        id="NewApi"
+        message="Call requires API level 29 (current min is 23): `clipOutUi`"
+        errorLine1="        clipOutUi(canvas, param, l.toFloat(), t.toFloat(), r.toFloat(), b.toFloat())"
+        errorLine2="        ~~~~~~~~~">
+        <location
+            file="src/main/java/com/reverie/paint/ui/painting/canvas/FrontBufferPreviewOverlay.kt"
+            line="1210"
+            column="9"/>
+    </issue>
+
 </issues>

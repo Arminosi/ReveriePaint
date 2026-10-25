@@ -10,6 +10,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
 import java.io.File
@@ -27,6 +28,9 @@ class UpstreamChainOracleTest {
 
     @Before
     fun setUp() {
+        // 样本用例各自 assumeTrue 门控；无外部 ABR53 样本时不初始化夹具，
+        // 不依赖样本的用例（合成记录/oracle 直调）照常执行
+        if (!Abr53Fixture.available()) return
         Abr53Fixture.setUp().let {
             store = it.first
             samples = it.second
@@ -35,7 +39,8 @@ class UpstreamChainOracleTest {
 
     @After
     fun tearDown() {
-        store.tearDown()
+        // 缺少外部 ABR53 样本时 @Before 跳过初始化，store 未初始化
+        if (::store.isInitialized) store.tearDown()
     }
 
     /** VM 状态入参：brushDynamicOptions = applySensorXmlToDynamicOptions(saved.dynamicOptions) 的布尔视图 */
@@ -77,6 +82,7 @@ class UpstreamChainOracleTest {
 
     @Test
     fun `53 支 ABR 选笔链关键 setter 与审计文档一致`() {
+        assumeTrue("缺少外部 ABR53 样本（设置 ABR53_DIR）", Abr53Fixture.available())
         for (s in samples) {
             val what = s.name
             val saved = OBp.of(s.bp)
@@ -173,6 +179,7 @@ class UpstreamChainOracleTest {
 
     @Test
     fun `选笔怪癖 brushRotationSensor 传上一支笔 drawingangle 与空串产生不同的链`() {
+        assumeTrue("缺少外部 ABR53 样本（设置 ABR53_DIR）", Abr53Fixture.available())
         // Hard Charcoal 01：dc=true、followDirection=false、rotationSensor=fuzzy
         val s = byName.getValue("Hard Charcoal 01")
         val withSensor = selectCalls(s, rotationSensor = "drawingangle")
@@ -290,6 +297,7 @@ class UpstreamChainOracleTest {
 
     @Test
     fun `复制预设与源 ABR 走同一条选笔链`() {
+        assumeTrue("缺少外部 ABR53 样本（设置 ABR53_DIR）", Abr53Fixture.available())
         // BrushImportPipeline.duplicate 拷贝 officialBp → 复制记录的回填 bp 与源相同 → 链相同
         val s = byName.getValue("Hard Charcoal 01")
         assertEquals(selectCalls(s), selectCalls(s))
@@ -334,6 +342,7 @@ class UpstreamChainOracleTest {
 
     @Test
     fun `恢复链 reloadPreset=true 定制长链以 setToolMode 收尾`() {
+        assumeTrue("缺少外部 ABR53 样本（设置 ABR53_DIR）", Abr53Fixture.available())
         val s = byName.getValue("Hard Charcoal 01")
         val saved = OBp.of(s.bp)
         val calls = mutableListOf<Call>()
@@ -381,6 +390,7 @@ class UpstreamChainOracleTest {
 
     @Test
     fun `重载链无条件 smudge airbrush 且 texture 在 mirror 之前`() {
+        assumeTrue("缺少外部 ABR53 样本（设置 ABR53_DIR）", Abr53Fixture.available())
         val s = byName.getValue("Hard Charcoal 01")
         val p = OBp.of(s.bp)
         val calls = mutableListOf<Call>()
@@ -406,6 +416,7 @@ class UpstreamChainOracleTest {
 
     @Test
     fun `重载链采样笔非空 tip 下发且在 load 之后`() {
+        assumeTrue("缺少外部 ABR53 样本（设置 ABR53_DIR）", Abr53Fixture.available())
         val s = byName.getValue("HB Pencil")
         val p = OBp.of(s.bp)
         val calls = mutableListOf<Call>()
@@ -423,6 +434,7 @@ class UpstreamChainOracleTest {
 
     @Test
     fun `回放 setup 链 jitter 条件动力学与 fade 顺序`() {
+        assumeTrue("缺少外部 ABR53 样本（设置 ABR53_DIR）", Abr53Fixture.available())
         val s = byName.getValue("Hard Charcoal 01")
         val p = OBp.of(s.bp)
         val calls = mutableListOf<Call>()

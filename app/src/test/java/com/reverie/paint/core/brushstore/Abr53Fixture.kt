@@ -8,24 +8,44 @@ import com.reverie.paint.core.AbrParser
 import com.reverie.paint.core.BrushParams
 import com.reverie.paint.core.KppHelper
 import org.json.JSONObject
+import org.junit.Assume.assumeTrue
 import java.io.File
 import java.nio.file.Files
 
 /**
- * T2/T3 共用夹具：把 53 支真实 ABR 设备快照（`app/src/test/resources/abr53/`，T-batch1 拷入）
- * 装进 JVM 临时 `brush_store`，并按既有 [AbrImportResetTest] 的模式初始化 [BrushStoreBootstrap]。
+ * T2/T3 共用夹具：把 53 支真实 ABR 设备快照装进 JVM 临时 `brush_store`，
+ * 并按既有 [AbrImportResetTest] 的模式初始化 [BrushStoreBootstrap]。
+ *
+ * 样本目录来源：平板上真实 ABR 导入快照（含第三方笔刷位图），出于 GPL 再分发考虑**不入库**，
+ * 通过系统属性/环境变量 `ABR53_DIR`（系统属性优先，与 [AbrImportResetTest] 的 `ABR_SAMPLE` 取法一致）
+ * 指向外部样本目录（每个 `imp_*` 目录含 `source.json` + `preset.kpp`，外加 [TSV_NAME]）。
+ * 未设置或目录不存在时 [available] 为 false，各用例先 [assumeTrue] 门控（显示为 skipped），
+ * [setUp] 内部也做了同样门控兜底。
  *
  * 装载步骤：临时目录 → Bootstrap.run（真实出厂 kpp 造出厂版本）→ 逐目录拷贝
  * `source.json`/`preset.kpp` 到 `snapshots/imported/<目录名>/` → [BrushIdentity.registerAll]
  * 注册 `imp:<uuid>` 身份。此后 [OfficialBp.forId] 第三级 fallback 会把 sidecar
- * `official_bp.json` 写进**临时**目录（预期副作用）；资源目录本身只读不写回。
+ * `official_bp.json` 写进**临时**目录（预期副作用）；外部样本目录本身只读不写回。
  *
  * tsv 行按名字原样（保留尾随空格）与 `abrParams.name` 精确对齐。
  */
 internal object Abr53Fixture {
 
+    const val DIR_VAR = "ABR53_DIR"
     const val TSV_NAME = "abr_preset_table.tsv"
     const val TSV_COLUMNS = 18
+
+    /** 外部样本目录：系统属性优先、环境变量兜底；未设置或目录不存在返回 null */
+    fun externalDirOrNull(): File? {
+        val p = System.getProperty(DIR_VAR) ?: System.getenv(DIR_VAR) ?: return null
+        return File(p).takeIf { it.isDirectory }
+    }
+
+    /** 外部样本目录是否可用（各用例用它做 [assumeTrue] 门控） */
+    fun available(): Boolean = externalDirOrNull() != null
+
+    /** 外部样本目录（调用方须先用 [available] 门控，或仅在门控通过后的路径上调用） */
+    fun dir(): File = requireNotNull(externalDirOrNull()) { "缺少外部 ABR53 样本（设置 $DIR_VAR）" }
 
     class Store(val root: File, val presetDir: File) {
         fun importedSidecar(dirName: String): File =
@@ -58,9 +78,9 @@ internal object Abr53Fixture {
     }
 
     fun setUp(): Pair<Store, List<Sample>> {
-        val resDir = File("src/test/resources/abr53")
-        check(resDir.isDirectory) { "缺少 abr53 资源目录: ${resDir.absolutePath}" }
-        val dirs = resDir.listFiles { f -> f.isDirectory && f.name.startsWith("imp_") }!!
+        val resDir = externalDirOrNull()
+        assumeTrue("缺少外部 ABR53 样本（设置 $DIR_VAR）", resDir != null)
+        val dirs = resDir!!.listFiles { f -> f.isDirectory && f.name.startsWith("imp_") }!!
             .sortedBy { it.name }
         check(dirs.size == 53) { "abr53 目录数应为 53，实际 ${dirs.size}" }
 

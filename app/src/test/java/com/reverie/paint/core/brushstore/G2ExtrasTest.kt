@@ -13,6 +13,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
 import java.io.File
@@ -28,8 +29,8 @@ import java.nio.file.Files
  * 3. .myb：[BrushStoreBootstrap.managedEntry] 要求 ext==kpp，.myb 条目即便有快照也返回 null，
  *    即不归 v2 管（FORMAT_MATRIX #7）。
  *
- * 夹具沿用 [AbrImportResetTest] 的临时 store 模式；ABR 样本取
- * `src/test/resources/abr53/` 的真实快照（T-batch1 拷入，只读不写回）。
+ * 夹具沿用 [AbrImportResetTest] 的临时 store 模式；ABR 样本取外部目录
+ * `ABR53_DIR` 的真实快照（平板导入产物，含第三方笔刷位图，不入库，见 [Abr53Fixture]）。
  */
 class G2ExtrasTest {
 
@@ -67,7 +68,7 @@ class G2ExtrasTest {
     )
 
     private fun copyAbr53Sample(): SampleCopy {
-        val resDir = File("src/test/resources/abr53")
+        val resDir = Abr53Fixture.dir()
         val src = resDir.listFiles { f -> f.isDirectory && f.name.startsWith("imp_") }!!
             .sortedBy { it.name }.first()
         val id = "imp:" + src.name.removePrefix("imp_")
@@ -87,6 +88,7 @@ class G2ExtrasTest {
 
     @Test
     fun `W09 之前导入无 abrParams 的 ABR forId 四级 fallback 全落空`() {
+        assumeTrue("缺少外部 ABR53 样本（设置 ABR53_DIR）", Abr53Fixture.available())
         val s = copyAbr53Sample()
 
         // 前置 sanity：真实样本 provenance == "abr"，abrParams 存在且此刻能靠第 3 级重算命中
@@ -118,6 +120,7 @@ class G2ExtrasTest {
 
     @Test
     fun `duplicate 链 officialBp 落盘且 forId 与源一致 老数据走 L4 递归兜底`() {
+        assumeTrue("缺少外部 ABR53 样本（设置 ABR53_DIR）", Abr53Fixture.available())
         val s = copyAbr53Sample()
 
         // 先建一支只带 abrParams 的导入，用第 3 级重算得到一份真实官方 bp（作为后续 officialBp 的值）

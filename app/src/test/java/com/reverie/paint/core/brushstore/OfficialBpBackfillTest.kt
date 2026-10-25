@@ -41,7 +41,8 @@ class OfficialBpBackfillTest {
 
     @After
     fun tearDown() {
-        store.tearDown()
+        // 缺少外部 ABR53 样本时 @Before 假设失败（用例 skipped），store 未初始化
+        if (::store.isInitialized) store.tearDown()
     }
 
     // ---- 用例 1：abrParams 解码回环逐键相等 ----

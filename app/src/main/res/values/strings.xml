@@ -859,6 +859,8 @@
     <string name="settings_back_key_exit">返回</string>
     <string name="settings_allow_edge_back_title">允许边缘侧滑返回</string>
     <string name="settings_allow_edge_back_desc">开启后支持屏幕左右边缘侧滑返回；关闭或返回键无行为时全屏排除手势以防误触</string>
+    <string name="settings_gesture_continuous_undo_title">长按连续撤销与重做</string>
+    <string name="settings_gesture_continuous_undo_desc">长按双指或三指时持续撤销或重做。关闭后仅响应单击手势，防止手掌误触破坏画面</string>
     <string name="settings_anim_speed_title">界面动效速度</string>
     <string name="settings_anim_speed_desc">控制面板展开收起与弹窗动画时长，极速档位压缩在 0.1s 内以保障绘画心流</string>
     <string name="settings_anim_speed_normal">标准</string>

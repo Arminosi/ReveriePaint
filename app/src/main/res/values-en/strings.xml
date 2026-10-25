@@ -859,6 +859,8 @@
     <string name="settings_back_key_exit">Back</string>
     <string name="settings_allow_edge_back_title">Allow Edge Swipe Back</string>
     <string name="settings_allow_edge_back_desc">Enable screen edge swipe to trigger back gesture; disable or set back key to None to exclude edge gestures</string>
+    <string name="settings_gesture_continuous_undo_title">Continuous Undo / Redo on Hold</string>
+    <string name="settings_gesture_continuous_undo_desc">Continuously undo or redo while holding two or three fingers. When disabled, only single taps trigger undo/redo to prevent palm touches from wiping out artwork</string>
     <string name="settings_anim_speed_title">Interface Animation Speed</string>
     <string name="settings_anim_speed_desc">Control panel transitions and popup animations; Fast mode is compressed under 0.1s to maintain painting flow</string>
     <string name="settings_anim_speed_normal">Normal</string>

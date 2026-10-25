@@ -2520,6 +2520,7 @@ class PaintViewModel : ViewModel() {
         gestureThreeFingerRedo = true
         gestureThreeFingerEditMenu = true
         gestureQuickPinchFit = true
+        gestureContinuousUndo = true
         persistGestureConfig()
         if (::appContext.isInitialized) {
             showActionToast(appContext.getString(R.string.gesture_reset_defaults_done))
@@ -2535,6 +2536,7 @@ class PaintViewModel : ViewModel() {
                 .putBoolean("gestureThreeFingerRedo", gestureThreeFingerRedo)
                 .putBoolean("gestureThreeFingerEditMenu", gestureThreeFingerEditMenu)
                 .putBoolean("gestureQuickPinchFit", gestureQuickPinchFit)
+                .putBoolean("gestureContinuousUndo", gestureContinuousUndo)
                 .apply()
         }
     }
@@ -2630,6 +2632,19 @@ class PaintViewModel : ViewModel() {
                 .getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
                 .edit()
                 .putBoolean("gestureQuickPinchFit", enable)
+                .apply()
+        }
+    }
+
+    var gestureContinuousUndo by mutableStateOf(true)
+
+    fun updateGestureContinuousUndo(enable: Boolean) {
+        gestureContinuousUndo = enable
+        if (::appContext.isInitialized) {
+            appContext
+                .getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean("gestureContinuousUndo", enable)
                 .apply()
         }
     }
@@ -4060,6 +4075,7 @@ class PaintViewModel : ViewModel() {
             )
             gesturePinchTransform = prefs.getBoolean("gesturePinchTransform", true)
             gestureQuickPinchFit = prefs.getBoolean("gestureQuickPinchFit", true)
+            gestureContinuousUndo = prefs.getBoolean("gestureContinuousUndo", true)
             backKeyAction = BackKeyAction.fromId(prefs.getString("backKeyAction", BackKeyAction.NONE.id))
             allowEdgeBackGesture = prefs.getBoolean("allowEdgeBackGesture", true)
             uiAnimationSpeed = com.reverie.paint.model.UiAnimationSpeed.fromId(prefs.getString("uiAnimationSpeed", com.reverie.paint.model.UiAnimationSpeed.NORMAL.id))

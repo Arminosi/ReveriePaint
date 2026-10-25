@@ -763,6 +763,7 @@ class CanvasTouchView(context: Context) : View(context) {
     private val continuousUndoRunnable = object : Runnable {
         override fun run() {
             val v = vm ?: return
+            if (!v.gestureContinuousUndo) return
             // 多指误触保护: 液化手势进行中(含场通路的"零解算"阶段)第二指落下不得触发
             // 连续撤销，避免误吃形变
             if (maxTouchPointers == 2 && !isPinchMotion && !isTwoFingerRotation && isInteracting && !isLiquifyGestureActive) {
@@ -779,6 +780,7 @@ class CanvasTouchView(context: Context) : View(context) {
     private val continuousRedoRunnable = object : Runnable {
         override fun run() {
             val v = vm ?: return
+            if (!v.gestureContinuousUndo) return
             if (maxTouchPointers >= 3 && !isPinchMotion && isInteracting && !isLiquifyGestureActive) {
                 isContinuousUndoing = true
                 v.redo()
@@ -5290,7 +5292,7 @@ class CanvasTouchView(context: Context) : View(context) {
                 clearPredictionState(triggerInvalidate = true)
             }
             cancelPendingShapeGesture()
-            if (v.gestureThreeFingerRedo) postDelayed(continuousRedoRunnable, 420L)
+            if (v.gestureThreeFingerRedo && v.gestureContinuousUndo) postDelayed(continuousRedoRunnable, 420L)
         }
         if (editMenuGestureActive) {
             if (numFingers > 3 || stylusPointerIndex >= 0 ||
@@ -5447,7 +5449,7 @@ class CanvasTouchView(context: Context) : View(context) {
                     removeCallbacks(continuousUndoRunnable)
                     removeCallbacks(continuousRedoRunnable)
                     continuousStepCount = 0
-                    if (!isShiftTraceAlign && isNewGesture) {
+                    if (!isShiftTraceAlign && isNewGesture && v.gestureContinuousUndo) {
                         if (numFingers == 2 && v.gestureTwoFingerUndo) {
                             postDelayed(continuousUndoRunnable, 560L)
                         } else if (numFingers >= 3 && v.gestureThreeFingerRedo) {

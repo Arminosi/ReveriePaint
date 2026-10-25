@@ -763,6 +763,25 @@ internal fun SettingsTabPage(
                                 onChecked = { vm.updateAllowEdgeBackGesture(it) },
                             )
                         }
+
+                        SettingsInnerDivider()
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                Text(stringResource(R.string.settings_gesture_continuous_undo_title), color = Morandi.text, fontSize = 13.sp)
+                                Text(stringResource(R.string.settings_gesture_continuous_undo_desc), color = Morandi.subText, fontSize = 11.sp)
+                            }
+                            ReSwitch(
+                                checked = vm.gestureContinuousUndo,
+                                onChecked = { vm.updateGestureContinuousUndo(it) },
+                            )
+                        }
                     }
 
                     Box(

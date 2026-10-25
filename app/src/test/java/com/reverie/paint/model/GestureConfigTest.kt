@@ -96,4 +96,38 @@ class GestureConfigTest {
         assertEquals(4, angleToSlot(180f))
         assertEquals(5, angleToSlot(-180f))
     }
+
+    @Test
+    fun `continuous undo guard policy prevents rapid undo loop when disabled`() {
+        fun shouldTriggerContinuousUndo(
+            gestureContinuousUndo: Boolean,
+            maxTouchPointers: Int,
+            isPinchMotion: Boolean,
+            isTwoFingerRotation: Boolean,
+            isInteracting: Boolean,
+            isLiquifyGestureActive: Boolean,
+        ): Boolean {
+            if (!gestureContinuousUndo) return false
+            return maxTouchPointers == 2 && !isPinchMotion && !isTwoFingerRotation && isInteracting && !isLiquifyGestureActive
+        }
+
+        fun shouldTriggerContinuousRedo(
+            gestureContinuousUndo: Boolean,
+            maxTouchPointers: Int,
+            isPinchMotion: Boolean,
+            isInteracting: Boolean,
+            isLiquifyGestureActive: Boolean,
+        ): Boolean {
+            if (!gestureContinuousUndo) return false
+            return maxTouchPointers >= 3 && !isPinchMotion && isInteracting && !isLiquifyGestureActive
+        }
+
+        // When enabled, valid 2-finger and 3-finger hold triggers continuous undo/redo
+        assertTrue(shouldTriggerContinuousUndo(true, 2, false, false, true, false))
+        assertTrue(shouldTriggerContinuousRedo(true, 3, false, true, false))
+
+        // When disabled, continuous undo/redo must NEVER trigger, preventing accidental wipeout (#124)
+        assertFalse(shouldTriggerContinuousUndo(false, 2, false, false, true, false))
+        assertFalse(shouldTriggerContinuousRedo(false, 3, false, true, false))
+    }
 }

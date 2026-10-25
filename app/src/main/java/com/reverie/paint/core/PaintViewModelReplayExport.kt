@@ -97,7 +97,7 @@ private fun countVisualCheckpointsInRange(
         }
         val type = r.u8()
         val dt = r.varint()
-        simMs += dt
+        simMs += ReplayTimeline.effectiveDt(dt, s.idleCapMs)
         if (s.totalMs > 0 && simMs > endMs && endMs < s.totalMs) {
             break
         }
@@ -406,7 +406,7 @@ internal fun PaintViewModel.exportReplay(
                 }
                 val type = r.u8()
                 val dt = r.varint()
-                s.currentMs += dt
+                s.currentMs += ReplayTimeline.effectiveDt(dt, s.idleCapMs)
                 if (s.totalMs > 0 && s.currentMs > endMs && endMs < s.totalMs) {
                     break
                 }

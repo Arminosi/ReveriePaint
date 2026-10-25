@@ -127,10 +127,31 @@ class ReplaySession(
     val docW: Int,
     val docH: Int,
     val snapshotFile: File?,
-    val totalMs: Long,
+    /** 录制头里的原始墙钟总时长 (含停笔/切走等空闲停顿) */
+    val rawTotalMs: Long,
     val eventCount: Int,
     val version: Int = 1,
 ) {
+    /** 每个事件 dt 的压缩上限 (ms)。整段事件流扫描失败时退回 Long.MAX_VALUE,
+     *  即不压缩, 与旧行为完全一致。 */
+    internal val idleCapMs: Long
+
+    /** 有效总时长 (每事件 dt 封顶 [REPLAY_IDLE_CAP_MS] 后的总和)。step / seek /
+     *  导出 / 进度条 / 时间标签统一使用这条有效时间线, currentMs 也是有效时间。
+     *  不改录制格式: 原始 dt 仍原样存盘, 只在回放时压缩。 */
+    val totalMs: Long
+
+    init {
+        val eff = ReplayTimeline.effectiveTotalMs(events, version, REPLAY_IDLE_CAP_MS, eventCount)
+        if (eff >= 0L) {
+            idleCapMs = REPLAY_IDLE_CAP_MS
+            totalMs = eff
+        } else {
+            idleCapMs = Long.MAX_VALUE
+            totalMs = rawTotalMs
+        }
+    }
+
     var isPlaying by mutableStateOf(false)
         internal set
     var progress by mutableFloatStateOf(0f)
@@ -163,10 +184,18 @@ class ReplaySession(
      *  pause - removeCallbacks alone cannot stop the in-flight step. */
     internal var stepGen = 0
 
+    /** seek 合并令牌: 每次 seekReplay 递增; 渲染线程只执行最新一次 seek,
+     *  被取代的排队 seek 直接丢弃 (连续拖动不再排队多次整段重放)。 */
+    @Volatile internal var seekGen = 0
+
+    /** 渲染线程最近一次执行完成的 seekGen; 与 [seekGen] 不等即有 seek 在途。 */
+    @Volatile internal var appliedSeekGen = 0
+
     /** Stop playback and free the session's temp snapshot file. The vm
      *  removes any pending step callback first (see [PaintViewModel.pauseReplay]). */
     fun stop() {
         stepGen++
+        seekGen++ // 作废已排队的 seek: 快照即将删除, 不能再对已退出的会话重放
         pendingStep = null
         isPlaying = false
         snapshotFile?.delete()
@@ -204,7 +233,7 @@ class ReplaySession(
                 docW = parsed.docW,
                 docH = parsed.docH,
                 snapshotFile = temp,
-                totalMs = parsed.totalMs,
+                rawTotalMs = parsed.totalMs,
                 eventCount = parsed.eventCount,
                 version = parsed.version,
             )
@@ -218,7 +247,9 @@ class ReplaySession(
 internal fun PaintViewModel.playReplay() {
     val s = replaySession ?: return
     s.lastStepWallMs = android.os.SystemClock.elapsedRealtime()
-    if (s.progress >= 1f) {
+    // seek 在途时 progress 仍是旧值 (可能是上次播完的 1f), 不能据此误判为"重播"
+    val seekInFlight = s.appliedSeekGen != s.seekGen
+    if (s.progress >= 1f && !seekInFlight) {
         seekReplay(0f)
         s.isPlaying = true
         scheduleReplayStep(s)
@@ -241,12 +272,39 @@ internal fun PaintViewModel.setReplaySpeed(v: Float) {
     replaySession?.let { it.speed = v.coerceIn(0.1f, 128f) }
 }
 
-/** Scrub to a fraction (0..1) of the playback; resets and fast-forwards. */
-internal fun PaintViewModel.seekReplay(fraction: Float) {
-    val s = replaySession ?: return
+/**
+ * Scrub to a fraction (0..1) of the playback; resets and fast-forwards.
+ *
+ * 连续 seek 用 [ReplaySession.seekGen] 合并: 只有最新一次真正执行; 会话已退出
+ * (replaySession !== s) 时丢弃; seekLocked 异常被捕获, 不再从裸 post 抛出崩溃。
+ * [onDone] 在主线程回调一次: applied=true 表示本次 seek 已执行完且仍是最新;
+ * false 表示被更新的 seek 取代、会话已退出或执行异常。
+ */
+internal fun PaintViewModel.seekReplay(
+    fraction: Float,
+    onDone: ((applied: Boolean) -> Unit)? = null,
+) {
+    val s = replaySession ?: run { onDone?.invoke(false); return }
     pauseReplay()
-    val h = renderHandler ?: return
-    h.post { seekLocked(s, fraction.coerceIn(0f, 1f)) }
+    val h = renderHandler ?: run { onDone?.invoke(false); return }
+    val gen = ++s.seekGen
+    val f = fraction.coerceIn(0f, 1f)
+    h.post {
+        var applied = false
+        if (gen == s.seekGen && replaySession === s) {
+            try {
+                seekLocked(s, f)
+                applied = true
+            } catch (e: Exception) {
+                android.util.Log.e("ReveriePaint", "replay seek failed", e)
+            } finally {
+                s.appliedSeekGen = gen
+            }
+        }
+        if (onDone != null) {
+            mainHandler.post { onDone(applied && gen == s.seekGen) }
+        }
+    }
 }
 
 /** Leave the replay page (cancels playback, frees the session). */
@@ -419,20 +477,26 @@ private fun PaintViewModel.replayStepLocked(
     s.lastStepWallMs = now
 
     val stepSimMs = (wallDt * s.speed).toLong().coerceAtLeast(1L)
-    val targetMs = if (s.totalMs > 0) (s.currentMs + stepSimMs).coerceAtMost(s.totalMs) else Long.MAX_VALUE
+    val targetMs = ReplayTimeline.stepTargetMs(s.currentMs, stepSimMs, s.totalMs)
 
     var hasEvents = false
     // Several samples (especially generated shapes) may share the final millisecond.
     // At the end, drain those zero-delta events too; otherwise currentMs == totalMs
     // prevents all later ticks from consuming the remaining moves / stroke-end.
-    while (r.remaining() > 0 && (targetMs >= s.totalMs || s.currentMs < targetMs)) {
-        val type = r.u8()
-        val dt = r.varint()
-        s.currentMs += dt
-        dispatchReplayLocked(s, type, r, render = false)
-        hasEvents = true
-        if (s.totalMs == 0L) break
-    }
+    // 时间按有效时间线推进 (每事件 dt 封顶 idleCapMs), 与 seek / 导出一致。
+    s.currentMs =
+        ReplayTimeline.advance(
+            r,
+            startMs = s.currentMs,
+            targetMs = targetMs,
+            drainAll = targetMs >= s.totalMs,
+            capMs = s.idleCapMs,
+            singleEvent = s.totalMs == 0L,
+        ) { type, nowMs ->
+            s.currentMs = nowMs
+            dispatchReplayLocked(s, type, r, render = false)
+            hasEvents = true
+        }
 
     if (r.remaining() <= 0) {
         finishReplayLocked(s)
@@ -471,8 +535,7 @@ private fun PaintViewModel.finishReplayLocked(s: ReplaySession) {
 
 private fun PaintViewModel.updateReplayProgress(s: ReplaySession) {
     s.elapsedMs = s.currentMs
-    s.progress =
-        if (s.totalMs > 0) (s.currentMs.toFloat() / s.totalMs).coerceIn(0f, 1f) else 1f
+    s.progress = ReplayTimeline.progressOf(s.currentMs, s.totalMs)
 }
 
 /** Runs inside a runCore op (render thread, before any replay dispatch). */
@@ -536,23 +599,32 @@ internal fun PaintViewModel.seekLocked(
     s: ReplaySession,
     fraction: Float,
 ) {
-    val target = (fraction * s.totalMs).toLong()
+    val f = fraction.coerceIn(0f, 1f)
+    val target = ReplayTimeline.targetMsFor(f, s.totalMs)
     resetReplayDocLocked(s)
     val r = s.reader
     r.pos = 0
     s.currentMs = 0
     // Seeking to 100% must include every event at the final timestamp as well.
-    while (r.remaining() > 0 && (fraction >= 1f || s.currentMs < target)) {
-        val type = r.u8()
-        val dt = r.varint()
-        s.currentMs += dt
-        // Seek fast-forwards the document state only: per-event renders are
-        // suppressed (one immediate render at the end), otherwise dragging
-        // the scrub bar queued hundreds of throttled renders and stalled.
-        dispatchReplayLocked(s, type, r, render = false)
-    }
-    s.elapsedMs = target
-    s.progress = fraction
+    // Seek fast-forwards the document state only: per-event renders are
+    // suppressed (one immediate render at the end), otherwise dragging
+    // the scrub bar queued hundreds of throttled renders and stalled.
+    s.currentMs =
+        ReplayTimeline.advance(
+            r,
+            startMs = 0L,
+            targetMs = target,
+            drainAll = f >= 1f,
+            capMs = s.idleCapMs,
+        ) { type, nowMs ->
+            s.currentMs = nowMs
+            dispatchReplayLocked(s, type, r, render = false)
+        }
+    // 进度/时间取实际 (有效) currentMs, 不再直接写 fraction: 否则 UI 停在拖到的
+    // 位置, 画面却已越过空闲间隔, 一点继续进度就跳变
+    val atEnd = ReplayTimeline.isAtEnd(f, r.remaining())
+    s.elapsedMs = if (atEnd) s.totalMs else s.currentMs.coerceAtMost(s.totalMs)
+    s.progress = if (atEnd) 1f else ReplayTimeline.progressOf(s.currentMs, s.totalMs)
     s.lastProgressWallMs = android.os.SystemClock.elapsedRealtime()
     s.lastStepWallMs = android.os.SystemClock.elapsedRealtime()
     scheduleRender(immediate = true)

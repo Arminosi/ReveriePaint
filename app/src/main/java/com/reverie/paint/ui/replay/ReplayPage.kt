@@ -112,6 +112,10 @@ fun ReplayPage(vm: PaintViewModel) {
     // While the user drags the slider we show the thumb position; -1 means
     // "follow playback"
     var dragProgress by remember { mutableFloatStateOf(-1f) }
+    // 拖动中 (手指未抬起); seek 完成回调在拖动中到达时不清 dragProgress、不恢复播放
+    var isDragging by remember { mutableStateOf(false) }
+    // 拖动开始时是否在播放 (含上一次 seek 完成后待恢复的播放); seek 完成后据此自动继续
+    var resumeAfterSeek by remember { mutableStateOf(false) }
     var showCustomSpeedDialog by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
     val presetSpeeds = remember { listOf(0.5f, 1f, 2f, 4f, 8f, 16f, 32f) }
@@ -268,17 +272,40 @@ fun ReplayPage(vm: PaintViewModel) {
                         ReFab(
                             icon = if (s.isPlaying) R.drawable.ic_pause else R.drawable.ic_play,
                             desc = if (s.isPlaying) stringResource(R.string.pause) else stringResource(R.string.play),
-                            onTap = { if (s.isPlaying) vm.pauseReplay() else vm.playReplay() },
+                            onTap = {
+                                resumeAfterSeek = false
+                                if (s.isPlaying) vm.pauseReplay() else vm.playReplay()
+                            },
                             sizeDp = 54.dp,
                         )
                         Spacer(Modifier.width(14.dp))
                         Column(Modifier.weight(1f)) {
                             Slider(
                                 value = if (dragProgress >= 0f) dragProgress else s.progress,
-                                onValueChange = { dragProgress = it },
+                                onValueChange = { v ->
+                                    if (!isDragging) {
+                                        // 拖动开始: 记住是否在播放并立即暂停, 拖动期间渲染线程不再步进
+                                        isDragging = true
+                                        resumeAfterSeek = s.isPlaying || resumeAfterSeek
+                                        if (s.isPlaying) vm.pauseReplay()
+                                    }
+                                    dragProgress = v
+                                },
                                 onValueChangeFinished = {
-                                    vm.seekReplay(dragProgress)
-                                    dragProgress = -1f
+                                    isDragging = false
+                                    val target = dragProgress
+                                    if (target >= 0f) {
+                                        // seek 完成前保持显示拖到的位置, 避免滑块弹回旧进度
+                                        vm.seekReplay(target) { applied ->
+                                            if (!isDragging) {
+                                                dragProgress = -1f
+                                                if (applied && resumeAfterSeek) {
+                                                    resumeAfterSeek = false
+                                                    if ((vm.replaySession?.progress ?: 1f) < 1f) vm.playReplay()
+                                                }
+                                            }
+                                        }
+                                    }
                                 },
                                 valueRange = 0f..1f,
                                 colors =
@@ -292,12 +319,19 @@ fun ReplayPage(vm: PaintViewModel) {
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                             ) {
-                                Text(formatTime(s.elapsedMs), color = colors.subText, fontSize = 12.sp)
+                                Text(
+                                    formatTime(if (dragProgress >= 0f) (s.totalMs * dragProgress).toLong() else s.elapsedMs),
+                                    color = colors.subText,
+                                    fontSize = 12.sp,
+                                )
                                 Text(formatTime(s.totalMs), color = colors.subText, fontSize = 12.sp)
                             }
                         }
                         Spacer(Modifier.width(10.dp))
-                        ReIconButton(R.drawable.ic_refresh, stringResource(R.string.replay_restart), { vm.seekReplay(0f) }, tint = colors.text)
+                        ReIconButton(R.drawable.ic_refresh, stringResource(R.string.replay_restart), {
+                            resumeAfterSeek = false
+                            vm.seekReplay(0f)
+                        }, tint = colors.text)
                     }
                 }
             }

@@ -278,6 +278,8 @@ internal fun PaintViewModel.touchStart(
             ensureKeyframeForPaintOnRenderThread()
         }
         if (isEraserOverride) {
+            // #116: 先保存引擎活状态, 松开后原样换回, 避免从磁盘重载打回未落盘的调整
+            ReverieCoreBridge.beginPresetOverrideSnapshot()
             if (eraserPresetIdx >= 0 && eraserPresetIdx != brushPresetIndex) {
                 ReverieCoreBridge.loadBrushPreset(eraserPresetIdx)
             }
@@ -616,7 +618,13 @@ internal fun PaintViewModel.touchEnd(render: Boolean = true, deferOverrideRestor
             realInkSink?.onStrokeCommitted()
             engineMirrorSeq = 0
             if (hadOverride && !deferOverrideRestore) {
-                restoreCurrentBrushToNative(reloadPreset = presetSwitched)
+                val engineRestored = ReverieCoreBridge.endPresetOverrideSnapshot()
+                if (!engineRestored) {
+                    restoreCurrentBrushToNative(reloadPreset = presetSwitched)
+                } else {
+                    // 引擎快照已原样还原, 只需刷新光标环笔刷轮廓
+                    fetchBrushOutlinePolygons()
+                }
             }
         }
     } else {
@@ -628,7 +636,13 @@ internal fun PaintViewModel.touchEnd(render: Boolean = true, deferOverrideRestor
             realInkSink?.onStrokeCommitted()
             engineMirrorSeq = 0
             if (hadOverride && !deferOverrideRestore) {
-                restoreCurrentBrushToNative(reloadPreset = presetSwitched)
+                val engineRestored = ReverieCoreBridge.endPresetOverrideSnapshot()
+                if (!engineRestored) {
+                    restoreCurrentBrushToNative(reloadPreset = presetSwitched)
+                } else {
+                    // 引擎快照已原样还原, 只需刷新光标环笔刷轮廓
+                    fetchBrushOutlinePolygons()
+                }
             }
         }
     }
@@ -659,7 +673,13 @@ internal fun PaintViewModel.touchCancel() {
         ReverieCoreBridge.touchStrokeCancel()
         engineMirrorSeq = 0
         if (hadOverride) {
-            restoreCurrentBrushToNative(reloadPreset = presetSwitched)
+            val engineRestored = ReverieCoreBridge.endPresetOverrideSnapshot()
+            if (!engineRestored) {
+                restoreCurrentBrushToNative(reloadPreset = presetSwitched)
+            } else {
+                // 引擎快照已原样还原, 只需刷新光标环笔刷轮廓
+                fetchBrushOutlinePolygons()
+            }
         }
     }
 }
@@ -679,7 +699,13 @@ internal fun PaintViewModel.replaySymmetricBranches(
 
     val restoreOverrideNative = {
         if (hadOverride) {
-            restoreCurrentBrushToNative(reloadPreset = presetSwitched)
+            val engineRestored = ReverieCoreBridge.endPresetOverrideSnapshot()
+            if (!engineRestored) {
+                restoreCurrentBrushToNative(reloadPreset = presetSwitched)
+            } else {
+                // 引擎快照已原样还原, 只需刷新光标环笔刷轮廓
+                fetchBrushOutlinePolygons()
+            }
         }
     }
 

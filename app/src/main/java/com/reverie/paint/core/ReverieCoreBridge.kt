@@ -521,6 +521,12 @@ object ReverieCoreBridge {
 
     external fun loadBrushPreset(index: Int): Boolean
 
+    /** #116: 临时橡皮覆盖开始前快照引擎活状态 (当前 preset 对象 + 镜像变量) */
+    external fun beginPresetOverrideSnapshot(): Boolean
+
+    /** #116: 临时橡皮结束后原样还原快照的引擎活状态; 无快照返回 false (调用方退回旧恢复链) */
+    external fun endPresetOverrideSnapshot(): Boolean
+
     external fun brushPresetCount(): Int
 
     external fun brushPresetDefaults(index: Int): DoubleArray

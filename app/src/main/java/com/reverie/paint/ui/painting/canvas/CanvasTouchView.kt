@@ -2908,11 +2908,19 @@ class CanvasTouchView(context: Context) : View(context) {
                 }
                 v.onLiquifyBitmapDrawn(bmp)
             }
-            if (v.isCurrentLayer3D) {
+            val cur3DLayer = v.layers.getOrNull(v.currentLayerIndex)
+            if (v.isCurrentLayer3D && cur3DLayer?.visible == true) {
                 val state = v.currentLayer3DState
                 if (state != null) {
                     val mesh = v.getMeshForState(state)
-                    canvas3DDrawer.draw(canvas, mesh, state, imgW.toFloat(), imgH.toFloat())
+                    canvas3DDrawer.draw(
+                        canvas,
+                        mesh,
+                        state,
+                        imgW.toFloat(),
+                        imgH.toFloat(),
+                        cur3DLayer.opacity.toFloat(),
+                    )
                 }
             }
 

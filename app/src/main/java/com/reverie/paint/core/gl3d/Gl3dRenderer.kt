@@ -118,6 +118,8 @@ class Gl3dRenderer {
     private var fboW = 0
     private var fboH = 0
 
+    private var cachedPixelBuffer: ByteBuffer? = null
+
     private var isInitialized = false
 
     @Synchronized
@@ -283,41 +285,21 @@ class Gl3dRenderer {
 
         // 构造扁平着色数据以消除插值平滑模糊，呈现清晰的面部与体块切面
         val triCount = mesh.indices.size / 3
-        val flatPositions = FloatArray(triCount * 9)
-        val flatNormals = FloatArray(triCount * 9)
         val isSphere = (state.modelType == "sphere" && mesh.normals.size == mesh.positions.size)
 
-        for (t in 0 until triCount) {
-            val i0 = mesh.indices[t * 3]
-            val i1 = mesh.indices[t * 3 + 1]
-            val i2 = mesh.indices[t * 3 + 2]
-
-            val p0x = mesh.positions[i0 * 3]; val p0y = mesh.positions[i0 * 3 + 1]; val p0z = mesh.positions[i0 * 3 + 2]
-            val p1x = mesh.positions[i1 * 3]; val p1y = mesh.positions[i1 * 3 + 1]; val p1z = mesh.positions[i1 * 3 + 2]
-            val p2x = mesh.positions[i2 * 3]; val p2y = mesh.positions[i2 * 3 + 1]; val p2z = mesh.positions[i2 * 3 + 2]
-
-            val bIdx = t * 9
-            flatPositions[bIdx] = p0x; flatPositions[bIdx + 1] = p0y; flatPositions[bIdx + 2] = p0z
-            flatPositions[bIdx + 3] = p1x; flatPositions[bIdx + 4] = p1y; flatPositions[bIdx + 5] = p1z
-            flatPositions[bIdx + 6] = p2x; flatPositions[bIdx + 7] = p2y; flatPositions[bIdx + 8] = p2z
-
-            if (isSphere) {
-                flatNormals[bIdx] = mesh.normals[i0 * 3]; flatNormals[bIdx + 1] = mesh.normals[i0 * 3 + 1]; flatNormals[bIdx + 2] = mesh.normals[i0 * 3 + 2]
-                flatNormals[bIdx + 3] = mesh.normals[i1 * 3]; flatNormals[bIdx + 4] = mesh.normals[i1 * 3 + 1]; flatNormals[bIdx + 5] = mesh.normals[i1 * 3 + 2]
-                flatNormals[bIdx + 6] = mesh.normals[i2 * 3]; flatNormals[bIdx + 7] = mesh.normals[i2 * 3 + 1]; flatNormals[bIdx + 8] = mesh.normals[i2 * 3 + 2]
-            } else {
-                val e1x = p1x - p0x; val e1y = p1y - p0y; val e1z = p1z - p0z
-                val e2x = p2x - p0x; val e2y = p2y - p0y; val e2z = p2z - p0z
-                var fnx = e1y * e2z - e1z * e2y
-                var fny = e1z * e2x - e1x * e2z
-                var fnz = e1x * e2y - e1y * e2x
-                val len = kotlin.math.hypot(kotlin.math.hypot(fnx, fny), fnz).coerceAtLeast(1e-6f)
-                fnx /= len; fny /= len; fnz /= len
-
-                flatNormals[bIdx] = fnx; flatNormals[bIdx + 1] = fny; flatNormals[bIdx + 2] = fnz
-                flatNormals[bIdx + 3] = fnx; flatNormals[bIdx + 4] = fny; flatNormals[bIdx + 5] = fnz
-                flatNormals[bIdx + 6] = fnx; flatNormals[bIdx + 7] = fny; flatNormals[bIdx + 8] = fnz
+        val flatPositions = mesh.flatPositions
+        val flatNormals = if (isSphere) {
+            val arr = FloatArray(triCount * 9)
+            for (t in 0 until triCount) {
+                val i0 = mesh.indices[t * 3]; val i1 = mesh.indices[t * 3 + 1]; val i2 = mesh.indices[t * 3 + 2]
+                val bIdx = t * 9
+                arr[bIdx] = mesh.normals[i0 * 3]; arr[bIdx + 1] = mesh.normals[i0 * 3 + 1]; arr[bIdx + 2] = mesh.normals[i0 * 3 + 2]
+                arr[bIdx + 3] = mesh.normals[i1 * 3]; arr[bIdx + 4] = mesh.normals[i1 * 3 + 1]; arr[bIdx + 5] = mesh.normals[i1 * 3 + 2]
+                arr[bIdx + 6] = mesh.normals[i2 * 3]; arr[bIdx + 7] = mesh.normals[i2 * 3 + 1]; arr[bIdx + 8] = mesh.normals[i2 * 3 + 2]
             }
+            arr
+        } else {
+            mesh.flatNormals
         }
 
         val posBuf = ByteBuffer.allocateDirect(flatPositions.size * 4)
@@ -451,7 +433,15 @@ class Gl3dRenderer {
         }
 
         // 读取像素并写入目标 Bitmap
-        val pixelBuffer = ByteBuffer.allocateDirect(width * height * 4).order(ByteOrder.nativeOrder())
+        val neededBytes = width * height * 4
+        var pixelBuffer = cachedPixelBuffer
+        if (pixelBuffer == null || pixelBuffer.capacity() < neededBytes) {
+            pixelBuffer = ByteBuffer.allocateDirect(neededBytes).order(ByteOrder.nativeOrder())
+            cachedPixelBuffer = pixelBuffer
+        }
+        pixelBuffer.position(0)
+        pixelBuffer.limit(neededBytes)
+
         GLES20.glReadPixels(0, 0, width, height, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, pixelBuffer)
 
         val bmp = if (reusedBitmap != null && reusedBitmap.width == width && reusedBitmap.height == height && !reusedBitmap.isRecycled) {
@@ -460,17 +450,25 @@ class Gl3dRenderer {
             Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         }
 
-        // OpenGL 读取的像素是上下倒置的，进行垂直行反转写回 Bitmap
+        // OpenGL 读取的像素是上下倒置的，进行原地垂直行反转写回 Bitmap (消除全尺寸第二缓冲分配与拷贝)
         val rowBytes = width * 4
-        val tempRow = ByteArray(rowBytes)
-        val flippedBuffer = ByteBuffer.allocateDirect(width * height * 4).order(ByteOrder.nativeOrder())
-        for (y in 0 until height) {
-            pixelBuffer.position((height - 1 - y) * rowBytes)
-            pixelBuffer.get(tempRow)
-            flippedBuffer.put(tempRow)
+        val topRow = ByteArray(rowBytes)
+        val bottomRow = ByteArray(rowBytes)
+        val halfH = height / 2
+        for (y in 0 until halfH) {
+            val topPos = y * rowBytes
+            val bottomPos = (height - 1 - y) * rowBytes
+            pixelBuffer.position(topPos)
+            pixelBuffer.get(topRow)
+            pixelBuffer.position(bottomPos)
+            pixelBuffer.get(bottomRow)
+            pixelBuffer.position(topPos)
+            pixelBuffer.put(bottomRow)
+            pixelBuffer.position(bottomPos)
+            pixelBuffer.put(topRow)
         }
-        flippedBuffer.position(0)
-        bmp.copyPixelsFromBuffer(flippedBuffer)
+        pixelBuffer.position(0)
+        bmp.copyPixelsFromBuffer(pixelBuffer)
 
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
         return bmp
@@ -530,6 +528,7 @@ class Gl3dRenderer {
         clayProgram = 0
         shadingProgram = 0
         wireframeProgram = 0
+        cachedPixelBuffer = null
         eglSurface = EGL14.EGL_NO_SURFACE
         eglContext = EGL14.EGL_NO_CONTEXT
         eglDisplay = EGL14.EGL_NO_DISPLAY

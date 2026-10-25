@@ -67,6 +67,7 @@ class Canvas3DDrawer {
         state: Model3DState,
         docW: Float,
         docH: Float,
+        layerAlpha: Float = 1.0f,
     ) {
         val vertCount = mesh.vertexCount
         val triCount = mesh.triangleCount
@@ -92,10 +93,10 @@ class Canvas3DDrawer {
         val nm4 = mv[4]; val nm5 = mv[5]; val nm6 = mv[6]
         val nm8 = mv[8]; val nm9 = mv[9]; val nm10 = mv[10]
 
-        // 顶点投影变换
+        // 顶点投影变换 (对齐 0.5f 视口半长，与底层离屏光栅渲染尺寸保持 100% 绝对一致)
         val positions = mesh.positions
-        val halfW = docW * 0.45f
-        val halfH = docH * 0.45f
+        val halfW = docW * 0.5f
+        val halfH = docH * 0.5f
 
         for (i in 0 until vertCount) {
             val vx = positions[i * 3]
@@ -148,7 +149,8 @@ class Canvas3DDrawer {
                 sortTriangles(visibleCount)
 
                 // 1. 实心浅色底面遮挡背面杂线 (形成纯净易辨的实体参考)
-                fillPaint.color = 0xFFF5F6F8.toInt()
+                val baseA = (255 * layerAlpha.coerceIn(0f, 1f)).toInt()
+                fillPaint.color = (baseA shl 24) or 0x00F5F6F8
                 for (k in 0 until visibleCount) {
                     val t = triangleOrder[k]
                     val i0 = indices[t * 3]
@@ -164,7 +166,9 @@ class Canvas3DDrawer {
                 }
 
                 // 2. 筛选并绘制正面特征结构线段
-                wirePaint.color = (state.wireframeColor or 0xFF000000L).toInt()
+                val wireBaseA = ((state.wireframeColor shr 24) and 0xFFL).toInt().let { if (it == 0) 255 else it }
+                val wireFinalA = (wireBaseA * layerAlpha.coerceIn(0f, 1f)).toInt()
+                wirePaint.color = (wireFinalA shl 24) or (state.wireframeColor.toInt() and 0x00FFFFFF)
                 var pIdx = 0
                 val wireIndices = mesh.wireframeIndices
                 for (k in 0 until lineCount) {
@@ -272,7 +276,8 @@ class Canvas3DDrawer {
                         val r = (baseRed * (ambR * 0.5f + diff * 0.55f) + rim * 255f).toInt().coerceIn(0, 255)
                         val g = (baseGreen * (ambG * 0.5f + diff * 0.55f) + rim * 255f).toInt().coerceIn(0, 255)
                         val b = (baseBlue * (ambB * 0.5f + diff * 0.55f) + rim * 255f).toInt().coerceIn(0, 255)
-                        Color.rgb(r, g, b)
+                        val a = (255 * layerAlpha.coerceIn(0f, 1f)).toInt()
+                        Color.argb(a, r, g, b)
                     } else {
                         // 光影明暗切面 (明确受光与背光体积)
                         val ndotl = nx * lightDir[0] + ny * lightDir[1] + nz * lightDir[2]
@@ -280,7 +285,8 @@ class Canvas3DDrawer {
                         val r = (baseRed * diff).toInt().coerceIn(0, 255)
                         val g = (baseGreen * diff).toInt().coerceIn(0, 255)
                         val b = (baseBlue * diff).toInt().coerceIn(0, 255)
-                        Color.rgb(r, g, b)
+                        val a = (255 * layerAlpha.coerceIn(0f, 1f)).toInt()
+                        Color.argb(a, r, g, b)
                     }
 
                     fillPaint.color = color

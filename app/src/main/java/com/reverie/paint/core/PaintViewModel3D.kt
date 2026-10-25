@@ -31,7 +31,21 @@ internal fun PaintViewModel.getMeshForState(state: Model3DState): Mesh3D {
         BuiltinModel3D.CYLINDER -> Mesh3D.createCylinder(1.0f, 2.0f, 24)
         BuiltinModel3D.HEAD_MANNEQUIN -> Mesh3D.createHeadMannequin()
         null -> {
-            if (key.startsWith("uri:")) {
+            if (key.startsWith("file:")) {
+                try {
+                    val file = java.io.File(key.substring(5))
+                    if (file.exists()) {
+                        file.inputStream().use { stream ->
+                            Mesh3D.parseObj(BufferedReader(InputStreamReader(stream)))
+                        }
+                    } else {
+                        Mesh3D.createCube(1.8f)
+                    }
+                } catch (e: Exception) {
+                    Log.e("RP_3D", "Failed to parse OBJ from file: $key", e)
+                    Mesh3D.createCube(1.8f)
+                }
+            } else if (key.startsWith("uri:")) {
                 try {
                     val uri = Uri.parse(key.substring(4))
                     appContext.contentResolver.openInputStream(uri)?.use { stream ->
@@ -95,13 +109,38 @@ internal fun PaintViewModel.create3DLayerFromObj(
     uri: Uri,
     fileName: String,
 ) {
-    val displayName = getString(R.string.layer_3d_tag) + " (" + fileName.removeSuffix(".obj") + ")"
-    val uriKey = "uri:$uri"
+    val cleanName = fileName.removeSuffix(".obj")
+    val displayName = getString(R.string.layer_3d_tag) + " (" + cleanName + ")"
+
+    // 本地持久化缓存，防止设备重启或临时授权失效后丢失外部 3D 模型
+    val modelsDir = java.io.File(appContext.filesDir, "3d_models").apply { mkdirs() }
+    val safeFileName = "obj_${System.currentTimeMillis()}_$fileName"
+    val localFile = java.io.File(modelsDir, safeFileName)
+    try {
+        appContext.contentResolver.openInputStream(uri)?.use { input ->
+            localFile.outputStream().use { output ->
+                input.copyTo(output)
+            }
+        }
+    } catch (e: Exception) {
+        Log.e("RP_3D", "Failed to cache OBJ file to app internal storage", e)
+    }
+
+    val modelPathKey = if (localFile.exists() && localFile.length() > 0) {
+        "file:${localFile.absolutePath}"
+    } else {
+        "uri:$uri"
+    }
 
     try {
-        appContext.contentResolver.openInputStream(uri)?.use { stream ->
-            val mesh = Mesh3D.parseObj(BufferedReader(InputStreamReader(stream)))
-            meshCache[uriKey] = mesh
+        val stream = if (localFile.exists() && localFile.length() > 0) {
+            localFile.inputStream()
+        } else {
+            appContext.contentResolver.openInputStream(uri)
+        }
+        stream?.use { s ->
+            val mesh = Mesh3D.parseObj(BufferedReader(InputStreamReader(s)))
+            meshCache[modelPathKey] = mesh
         }
     } catch (e: Exception) {
         Log.e("RP_3D", "Failed to parse imported OBJ file", e)
@@ -116,7 +155,7 @@ internal fun PaintViewModel.create3DLayerFromObj(
         if (layer != null) {
             val initialState = Model3DState(
                 layerId = layer.id,
-                modelType = uriKey,
+                modelType = modelPathKey,
                 rotX = 15f,
                 rotY = -30f,
                 zoom = 1.0f,
@@ -251,6 +290,10 @@ internal fun PaintViewModel.commit3DLayerPixels(layerId: Long) {
                 ReverieCoreBridge.stampBitmap(0, 0, stampBmp)
                 ReverieCoreBridge.setCurrentLayer(cur)
             }
+            stampBmp.recycle()
+            if (rendered !== stampBmp && !rendered.isRecycled) {
+                rendered.recycle()
+            }
         }
     }
 }
@@ -283,6 +326,10 @@ internal fun PaintViewModel.commitAllActive3DLayersSync() {
                 ReverieCoreBridge.setCurrentLayer(layerIdx)
                 ReverieCoreBridge.stampBitmap(0, 0, stampBmp)
                 ReverieCoreBridge.setCurrentLayer(cur)
+                stampBmp.recycle()
+                if (rendered !== stampBmp && !rendered.isRecycled) {
+                    rendered.recycle()
+                }
             }
         }
     }
@@ -308,5 +355,9 @@ internal fun PaintViewModel.extract3DOutlines(layerId: Long) {
     }) {
         ReverieCoreBridge.addLayer(outlineLayerName)
         ReverieCoreBridge.stampBitmap(0, 0, stampBmp)
+        stampBmp.recycle()
+        if (rendered !== stampBmp && !rendered.isRecycled) {
+            rendered.recycle()
+        }
     }
 }

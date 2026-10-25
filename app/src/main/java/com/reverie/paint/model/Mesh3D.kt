@@ -21,6 +21,42 @@ class Mesh3D(
     val triangleCount: Int get() = indices.size / 3
     val wireframeLineCount: Int get() = wireframeIndices.size / 2
 
+    val flatPositions: FloatArray by lazy {
+        val triCount = indices.size / 3
+        val result = FloatArray(triCount * 9)
+        for (t in 0 until triCount) {
+            val i0 = indices[t * 3]; val i1 = indices[t * 3 + 1]; val i2 = indices[t * 3 + 2]
+            val b = t * 9
+            result[b] = positions[i0 * 3]; result[b + 1] = positions[i0 * 3 + 1]; result[b + 2] = positions[i0 * 3 + 2]
+            result[b + 3] = positions[i1 * 3]; result[b + 4] = positions[i1 * 3 + 1]; result[b + 5] = positions[i1 * 3 + 2]
+            result[b + 6] = positions[i2 * 3]; result[b + 7] = positions[i2 * 3 + 1]; result[b + 8] = positions[i2 * 3 + 2]
+        }
+        result
+    }
+
+    val flatNormals: FloatArray by lazy {
+        val triCount = indices.size / 3
+        val result = FloatArray(triCount * 9)
+        for (t in 0 until triCount) {
+            val i0 = indices[t * 3]; val i1 = indices[t * 3 + 1]; val i2 = indices[t * 3 + 2]
+            val b = t * 9
+            val p0x = positions[i0 * 3]; val p0y = positions[i0 * 3 + 1]; val p0z = positions[i0 * 3 + 2]
+            val p1x = positions[i1 * 3]; val p1y = positions[i1 * 3 + 1]; val p1z = positions[i1 * 3 + 2]
+            val p2x = positions[i2 * 3]; val p2y = positions[i2 * 3 + 1]; val p2z = positions[i2 * 3 + 2]
+            val e1x = p1x - p0x; val e1y = p1y - p0y; val e1z = p1z - p0z
+            val e2x = p2x - p0x; val e2y = p2y - p0y; val e2z = p2z - p0z
+            var fnx = e1y * e2z - e1z * e2y
+            var fny = e1z * e2x - e1x * e2z
+            var fnz = e1x * e2y - e1y * e2x
+            val len = kotlin.math.hypot(kotlin.math.hypot(fnx, fny), fnz).coerceAtLeast(1e-6f)
+            fnx /= len; fny /= len; fnz /= len
+            result[b] = fnx; result[b + 1] = fny; result[b + 2] = fnz
+            result[b + 3] = fnx; result[b + 4] = fny; result[b + 5] = fnz
+            result[b + 6] = fnx; result[b + 7] = fny; result[b + 8] = fnz
+        }
+        result
+    }
+
     companion object {
 
         /**

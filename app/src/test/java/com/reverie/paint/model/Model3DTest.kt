@@ -153,4 +153,20 @@ class Model3DTest {
         assertEquals(0, edgeTris[2])
         assertEquals(-1, edgeTris[3])
     }
+
+    @Test
+    fun `Mesh3D flatPositions and flatNormals produce correct triangle layout`() {
+        val cube = Mesh3D.createCube(1.0f)
+        assertEquals(cube.triangleCount * 9, cube.flatPositions.size)
+        assertEquals(cube.triangleCount * 9, cube.flatNormals.size)
+
+        // Verify flat normals are normalized unit vectors
+        for (i in 0 until cube.triangleCount * 3) {
+            val nx = cube.flatNormals[i * 3]
+            val ny = cube.flatNormals[i * 3 + 1]
+            val nz = cube.flatNormals[i * 3 + 2]
+            val len = Math.sqrt((nx * nx + ny * ny + nz * nz).toDouble())
+            assertEquals(1.0, len, 0.001)
+        }
+    }
 }

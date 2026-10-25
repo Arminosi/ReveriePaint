@@ -595,6 +595,10 @@ internal fun PaintViewModel.loadProject(p: com.reverie.paint.model.Project) {
                                             }
                                         }
                                         active3DLayers = map
+                                        val curLayer = layers.getOrNull(currentLayerIndex)
+                                        if (curLayer != null && map.containsKey(curLayer.id)) {
+                                            ensure3DLayerClearedInCore(curLayer.id)
+                                        }
                                     }
                                 } else {
                                     mainHandler.post { active3DLayers = emptyMap() }

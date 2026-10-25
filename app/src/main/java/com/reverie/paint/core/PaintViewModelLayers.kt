@@ -393,6 +393,10 @@ internal fun PaintViewModel.removeLayer(index: Int) {
         discardTransientTransformSelection()
     }
     clearLayerSelection()
+    val removed = layers.getOrNull(index)
+    if (removed != null && active3DLayers.containsKey(removed.id)) {
+        active3DLayers = active3DLayers - removed.id
+    }
     Breadcrumbs.record("Layer", "Remove layer: $index")
     if (recorder.recording) {
         recorder.layerOp(com.reverie.paint.model.RecordingEvents.L_REMOVE, index)
@@ -547,6 +551,10 @@ internal fun PaintViewModel.copyLayer(i: Int) {
     if (isCopyingLayer) return
     isCopyingLayer = true
     clearLayerSelection()
+    val srcLayer = layers.getOrNull(i)
+    if (srcLayer != null && active3DLayers.containsKey(srcLayer.id)) {
+        commit3DLayerPixels(srcLayer.id)
+    }
     if (recorder.recording) {
         recorder.layerOp(com.reverie.paint.model.RecordingEvents.L_COPY, i)
     }
@@ -570,6 +578,10 @@ internal fun PaintViewModel.copyLayer(i: Int) {
 internal fun PaintViewModel.clearLayer(i: Int) {
     if (recorder.recording) {
         recorder.layerOp(com.reverie.paint.model.RecordingEvents.L_CLEAR, i)
+    }
+    val layer = layers.getOrNull(i)
+    if (layer != null && active3DLayers.containsKey(layer.id)) {
+        active3DLayers = active3DLayers - layer.id
     }
     runCore(after = ::notifyLayerChanged) {
         ReverieCoreBridge.clearLayer(i)
@@ -1014,6 +1026,11 @@ internal fun PaintViewModel.applyMask(layerIndex: Int) {
 }
 
 internal fun PaintViewModel.rasterizeLayer(i: Int) {
+    val layer = layers.getOrNull(i)
+    if (layer != null && active3DLayers.containsKey(layer.id)) {
+        rasterize3DLayer(layer.id)
+        return
+    }
     if (recorder.recording) {
         recorder.layerOp(com.reverie.paint.model.RecordingEvents.L_RASTERIZE, i)
     }

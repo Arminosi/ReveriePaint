@@ -3103,5 +3103,40 @@
     <string name="brush_gate_no_brush_def">This brush engine has no tip definition; this setting has no effect</string>
     <string name="brush_gate_auto_tip_only">Not supported by image tips (parametric tips only)</string>
     <string name="brush_possibly_modified_hint">The original file of this brush may have been modified by an older version; reset returns to its state at migration.</string>
+
+    <!-- Replay Export -->
+    <string name="replay_export_btn">Export Replay</string>
+    <string name="replay_export_title">Export Timelapse Replay</string>
+    <string name="replay_export_format_label">Format</string>
+    <string name="replay_export_duration_label">Duration</string>
+    <string name="replay_export_range_label">Time Range</string>
+    <string name="replay_export_scale_label">Resolution</string>
+    <string name="replay_export_show_cursor">Show brush cursor ring</string>
+    <string name="replay_export_show_watermark">Overlay author watermark</string>
+    <string name="replay_export_hold_end">Hold final artwork for 1s</string>
+    <string name="replay_export_save_gallery">Save to Gallery</string>
+    <string name="replay_export_save_zip">Save ZIP</string>
+    <string name="replay_export_share_btn">Share Replay</string>
+    <string name="replay_export_progress_title">Exporting Replay</string>
+    <string name="replay_export_toast_saved">Replay exported successfully</string>
+    <string name="replay_export_err_no_data">No replay data available for this artwork</string>
+    <string name="replay_export_err_empty_frames">No frames to export</string>
+    <string name="replay_export_err_encoder_start">Failed to start %1$s encoder</string>
+    <string name="replay_export_err_encode_frame">Failed to encode frame #%1$d</string>
+    <string name="replay_export_err_finalize">Failed to finalize export file or output is empty</string>
+    <string name="replay_export_err_unsupported_format">Unsupported export format: %1$s</string>
+    <string name="replay_export_err_cancelled">Export cancelled</string>
+    <string name="replay_export_err_failed">Export failed: %1$s</string>
+    <string name="replay_export_err_gallery_format">Only GIF and MP4 formats can be saved directly to Gallery</string>
+    <string name="replay_export_err_gallery_create">Failed to create system gallery media entry</string>
+    <string name="replay_export_err_gallery_save">Failed to save to system gallery: %1$s</string>
+    <string name="replay_export_err_storage_permission">Storage permission is required to save to system gallery</string>
+    <string name="replay_export_stage_analyzing">Analyzing replay range and event stream…</string>
+    <string name="replay_export_stage_rendering_frame">Rendering frame %1$d/%2$d…</string>
+    <string name="replay_export_stage_rendering_frame_eta">Rendering frame %1$d/%2$d (ETA %3$ds)…</string>
+    <string name="replay_export_stage_holding_frame">Writing final hold frame %1$d/%2$d…</string>
+    <string name="replay_export_stage_finalizing">Finalizing export file…</string>
+    <string name="replay_export_stage_saving_gallery">Saving to system gallery…</string>
+    <string name="replay_export_hint_4k">4K export takes longer, 1080p recommended</string>
 </resources>
 

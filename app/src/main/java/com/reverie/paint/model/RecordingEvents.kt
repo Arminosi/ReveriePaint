@@ -286,6 +286,15 @@ class RecordingReader(
         return s
     }
 
+    fun skip(n: Int) {
+        if (n < 0 || n > limit - pos) throw IndexOutOfBoundsException("recording truncated")
+        pos += n
+    }
+
+    fun skipStr() {
+        skip(varint())
+    }
+
     fun readBytes(n: Int): ByteArray {
         if (pos + n > limit) throw IndexOutOfBoundsException("recording truncated")
         val out = data.copyOfRange(pos, pos + n)

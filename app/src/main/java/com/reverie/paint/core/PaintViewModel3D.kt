@@ -102,24 +102,43 @@ private fun buildEulerMap(
     }
 
     if (isCat) {
+        // 猫猫骨骼约定 (生成脚本 scripts/model/build_cat_glb.py):
+        // 骨骼局部 +Y 沿骨长, 局部 X = 世界 -X ⇒ pitch > 0 表示"向前摆 / 向上抬"。
+        // 后肢 = thigh(髋→膝) + shank(膝→跗) + foot(跗→爪); 前肢 = leg + paw。
+        // 预设只驱动大腿, 小腿/跗骨/前掌的角度由预设补齐, 否则单关节旋转会把整条腿甩出去。
         var headP = 0f; var spineArch = 0f
         var flLeg = 0f; var frLeg = 0f; var hlLeg = 0f; var hrLeg = 0f
+        var flPaw = 0f; var frPaw = 0f
+        var hlShank = 0f; var hrShank = 0f
+        var hlFoot = 0f; var hrFoot = 0f
         var tailP = 35f; var tailY = 10f
 
         when (posePreset.lowercase()) {
+            // 端坐: 躯干前倾上抬, 头回补到平视, 后肢折起
             "sit" -> {
-                spineArch = -15f; headP = 12f
-                flLeg = -5f; frLeg = -5f; hlLeg = -70f; hrLeg = -70f
-                tailP = -45f; tailY = 35f
+                spineArch = 38f; headP = -35f
+                flLeg = -38f; frLeg = -38f; flPaw = 8f; frPaw = 8f
+                hlLeg = 78f; hrLeg = 78f
+                hlShank = -95f; hrShank = -95f
+                hlFoot = -25f; hrFoot = -25f
+                tailP = -15f; tailY = 20f
             }
+            // 农民揣: 前爪收进胸下, 后肢缩进腹下
             "loaf" -> {
-                spineArch = 8f; flLeg = -75f; frLeg = -75f; hlLeg = -80f; hrLeg = -80f
-                tailP = -60f; tailY = 50f
+                spineArch = 2f
+                flLeg = -72f; frLeg = -72f; flPaw = 60f; frPaw = 60f
+                hlLeg = 80f; hrLeg = 80f
+                hlShank = -115f; hrShank = -115f
+                hlFoot = -20f; hrFoot = -20f
+                tailP = -25f; tailY = 30f
             }
+            // 伸懒腰: 前肢前伸压胸, 尾巴上翘
             "stretch" -> {
-                spineArch = 28f; headP = -15f
-                flLeg = 45f; frLeg = 45f; hlLeg = 20f; hrLeg = 20f
-                tailP = 65f; tailY = 5f
+                spineArch = -18f; headP = -18f
+                flLeg = 55f; frLeg = 55f; flPaw = 10f; frPaw = 10f
+                hlLeg = 15f; hrLeg = 15f
+                hlShank = -15f; hrShank = -15f
+                tailP = 45f; tailY = 0f
             }
         }
 
@@ -137,8 +156,14 @@ private fun buildEulerMap(
         addJoint(listOf("Spine", "spine"), spineArch, 0f, 0f)
         addJoint(listOf("leftFrontLeg", "LeftFrontLeg", "l_front_leg"), flLeg, 0f, 0f)
         addJoint(listOf("rightFrontLeg", "RightFrontLeg", "r_front_leg"), frLeg, 0f, 0f)
+        addJoint(listOf("l_front_paw"), flPaw, 0f, 0f)
+        addJoint(listOf("r_front_paw"), frPaw, 0f, 0f)
         addJoint(listOf("leftHindLeg", "LeftHindLeg", "l_hind_thigh"), hlLeg, 0f, 0f)
         addJoint(listOf("rightHindLeg", "RightHindLeg", "r_hind_thigh"), hrLeg, 0f, 0f)
+        addJoint(listOf("l_hind_shank"), hlShank, 0f, 0f)
+        addJoint(listOf("r_hind_shank"), hrShank, 0f, 0f)
+        addJoint(listOf("l_hind_foot"), hlFoot, 0f, 0f)
+        addJoint(listOf("r_hind_foot"), hrFoot, 0f, 0f)
         addJoint(listOf("Tail1", "tail1"), tailP, tailY, 0f)
         addJoint(listOf("Tail2", "tail2"), 22f, 12f, 0f)
         addJoint(listOf("Tail3", "tail3"), 22f, 8f, 0f)

@@ -307,6 +307,40 @@ class Model3DTest {
             for (p in deformedCat.positions) {
                 assertFalse("Cat deformed position should be finite", p.isNaN() || p.isInfinite())
             }
+
+            // 猫猫骨骼契约: 姿态面板/预设依赖这些关节名 (缺一个就是资产被换坏了)
+            val catJoints = skinnedCat.skeleton!!.joints.map { it.name }.toSet()
+            for (required in listOf(
+                "Hips", "Spine", "Chest", "Neck", "Head",
+                "tail1", "tail2", "tail3", "tail4",
+                "l_front_shoulder", "l_front_leg", "l_front_paw",
+                "r_front_shoulder", "r_front_leg", "r_front_paw",
+                "l_hind_thigh", "l_hind_shank", "l_hind_foot",
+                "r_hind_thigh", "r_hind_shank", "r_hind_foot",
+            )) {
+                assertTrue("Cat rig is missing joint '$required'", catJoints.contains(required))
+            }
+
+            // 朝向契约: Y 轴向上, +Z 为正面, 左右关于 x=0 对称
+            val pos = skinnedCat.baseMesh.positions
+            var minX = Float.MAX_VALUE; var maxX = -Float.MAX_VALUE
+            var minY = Float.MAX_VALUE; var maxY = -Float.MAX_VALUE
+            var minZ = Float.MAX_VALUE; var maxZ = -Float.MAX_VALUE
+            var noseX = 0f; var noseY = 0f
+            var v = 0
+            while (v * 3 + 2 < pos.size) {
+                val x = pos[v * 3]; val y = pos[v * 3 + 1]; val z = pos[v * 3 + 2]
+                minX = minOf(minX, x); maxX = maxOf(maxX, x)
+                minY = minOf(minY, y); maxY = maxOf(maxY, y)
+                if (z > maxZ) { maxZ = z; noseX = x; noseY = y }
+                minZ = minOf(minZ, z)
+                v++
+            }
+            assertTrue("Cat should stand upright (height > width)", (maxY - minY) > (maxX - minX))
+            assertTrue("Cat should be longer than wide", (maxZ - minZ) > (maxX - minX))
+            assertEquals("Cat should be centered on x=0", 0f, (minX + maxX) * 0.5f, 0.02f)
+            assertTrue("Cat muzzle should be the +Z extreme at head height", noseY > 0.2f)
+            assertTrue("Cat muzzle should be roughly centered (x≈0)", kotlin.math.abs(noseX) < 0.12f)
         }
     }
 }

@@ -1034,8 +1034,6 @@ class CanvasTouchView(context: Context) : View(context) {
     // 小米 官方笔迹预测引擎 (MiuiStrokeEstimate 反射包装)
     private var xiaomiPredictor: com.reverie.paint.core.stylus.XiaomiMotionPredictor? = null
 
-    // Android 原生系统级运动预测器 (androidx.input:input-motionprediction, 适用于华为、三星、小米、各品牌手写笔通用硬件层)
-    private var systemMotionPredictor: androidx.input.motionprediction.MotionEventPredictor? = null
     private val tempOemPoint = FloatArray(3)
 
     private val universalPredictor = com.reverie.paint.core.stylus.UniversalKalmanPredictor(
@@ -2435,15 +2433,6 @@ class CanvasTouchView(context: Context) : View(context) {
                 android.util.Log.w("ReveriePerf", "Failed to init XiaomiMotionPredictor: ${t.message}")
             }
         }
-        if (systemMotionPredictor == null) {
-            try {
-                systemMotionPredictor = androidx.input.motionprediction.MotionEventPredictor.newInstance(this)
-                android.util.Log.i("ReveriePerf", "MotionEventPredictor initialized successfully")
-            } catch (t: Throwable) {
-                android.util.Log.w("ReveriePerf", "Failed to init MotionEventPredictor: ${t.message}")
-                systemMotionPredictor = null
-            }
-        }
         post { updateSystemGestureExclusion() }
     }
 
@@ -2599,7 +2588,6 @@ class CanvasTouchView(context: Context) : View(context) {
         huaweiPredictor = null
         xiaomiPredictor?.destroy()
         xiaomiPredictor = null
-        systemMotionPredictor = null
         clearPredictionState(triggerInvalidate = false)
         safeEndSymmetryUndoMacro()
         resetMirrorBranches()
@@ -6714,31 +6702,6 @@ class CanvasTouchView(context: Context) : View(context) {
                         } catch (_: Throwable) {}
                     }
 
-                    // Android 原生系统级运动预测器 (适用于华为、三星、小米、各品牌手写笔通用硬件层)
-                    val smp = systemMotionPredictor
-                    if (!predictionObtained && smp != null) {
-                        try {
-                            smp.record(event)
-                            val predEvent = smp.predict()
-                            if (predEvent != null) {
-                                try {
-                                    if (pointerIndex in 0 until predEvent.pointerCount) {
-                                        val px = predEvent.getX(pointerIndex)
-                                        val py = predEvent.getY(pointerIndex)
-                                        val pp = predEvent.getPressure(pointerIndex)
-                                        if (px.isFinite() && py.isFinite() && (px != 0f || py != 0f) && (px != event.getX(pointerIndex) || py != event.getY(pointerIndex))) {
-                                            setPredictedScreenPoint(px, py)
-                                            predictedPressure = if (pp.isFinite()) pp.coerceIn(0.01f, 1f) else 1f
-                                            predictionObtained = true
-                                        }
-                                    }
-                                } finally {
-                                    predEvent.recycle()
-                                }
-                            }
-                        } catch (_: Throwable) {}
-                    }
-
                     // 通用 4 阶卡尔曼前向预测（纯 Kotlin 几何外推兜底）
                     if (!predictionObtained) {
                         try {
@@ -6937,36 +6900,26 @@ class CanvasTouchView(context: Context) : View(context) {
                                 clearPredictedScreenPoint()
                             }
                         } else {
-                            val smp = systemMotionPredictor
-                            if (smp != null) {
-                                try {
-                                    smp.record(event)
-                                    val predEvent = smp.predict()
-                                    if (predEvent != null) {
-                                        try {
-                                            if (pointerIndex in 0 until predEvent.pointerCount) {
-                                                val px = predEvent.getX(pointerIndex)
-                                                val py = predEvent.getY(pointerIndex)
-                                                val pp = predEvent.getPressure(pointerIndex)
-                                                if (px.isFinite() && py.isFinite() && (px != 0f || py != 0f) && (px != event.getX(pointerIndex) || py != event.getY(pointerIndex))) {
-                                                    setPredictedScreenPoint(px, py)
-                                                    predictedPressure = if (pp.isFinite()) pp.coerceIn(0.01f, 1f) else 1f
-                                                } else {
-                                                    clearPredictedScreenPoint()
-                                                }
-                                            } else {
-                                                clearPredictedScreenPoint()
+                            var predicted = false
+                            try {
+                                if (pointerIndex in 0 until event.pointerCount) {
+                                    val curX = event.getX(pointerIndex)
+                                    val curY = event.getY(pointerIndex)
+                                    if (curX.isFinite() && curY.isFinite()) {
+                                        if (universalPredictor.predictTouchPointScalar(tempScalarPredPoint)) {
+                                            val px = tempScalarPredPoint[0]
+                                            val py = tempScalarPredPoint[1]
+                                            val pp = tempScalarPredPoint[2]
+                                            if (px.isFinite() && py.isFinite() && (px != 0f || py != 0f) && (px != curX || py != curY)) {
+                                                setPredictedScreenPoint(px, py)
+                                                predictedPressure = if (pp.isFinite()) pp.coerceIn(0.01f, 1f) else 1f
+                                                predicted = true
                                             }
-                                        } finally {
-                                            predEvent.recycle()
                                         }
-                                    } else {
-                                        clearPredictedScreenPoint()
                                     }
-                                } catch (_: Throwable) {
-                                    clearPredictedScreenPoint()
                                 }
-                            } else {
+                            } catch (_: Throwable) {}
+                            if (!predicted) {
                                 clearPredictedScreenPoint()
                             }
                         }

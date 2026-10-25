@@ -85,6 +85,16 @@ internal fun PaintViewModel.getSkinnedModelForState(state: Model3DState): Skinne
 }
 
 /**
+ * 猫的姿态预设需要整体升降才有说服力 (端坐/农民揣胯部要落地), 但骨骼层只做旋转。
+ * 这里返回整个模型在自身坐标系里的 Y 偏移 (glTF: +Y 向上), 由 [getMeshForState] 施加到形变后的网格上。
+ */
+private fun catPoseOffsetY(posePreset: String): Float = when (posePreset.lowercase()) {
+    "sit" -> -0.34f
+    "loaf" -> -0.46f
+    else -> 0f
+}
+
+/**
  * 将姿态预设与关节点微调角度组合为骨骼局部欧拉旋转映射表 [BoneName -> [Pitch, Yaw, Roll]]
  */
 private fun buildEulerMap(
@@ -102,43 +112,48 @@ private fun buildEulerMap(
     }
 
     if (isCat) {
-        // 猫猫骨骼约定 (生成脚本 scripts/model/build_cat_glb.py):
-        // 骨骼局部 +Y 沿骨长, 局部 X = 世界 -X ⇒ pitch > 0 表示"向前摆 / 向上抬"。
-        // 后肢 = thigh(髋→膝) + shank(膝→跗) + foot(跗→爪); 前肢 = leg + paw。
-        // 预设只驱动大腿, 小腿/跗骨/前掌的角度由预设补齐, 否则单关节旋转会把整条腿甩出去。
+        // 猫猫骨骼约定 (重绑管线 scripts/model/build_cat_glb.py):
+        // 骨骼局部 +Y 沿骨长, 局部 X = 世界 +X (每一根骨都是), 局部 Z 与该骨垂直。
+        // 由 sign_probe 实测的符号 (glTF: +Y 上, +Z 脸朝前, +X 猫的右侧):
+        //   Head   pitch > 0 = 低头         Head   yaw > 0 = 头转向猫的右侧
+        //   Spine  pitch > 0 = 前半身下沉   l/r_front_leg pitch > 0 = 爪子向后摆
+        //   hind_thigh pitch > 0 = 膝盖后移 hind_shank pitch > 0 = 跗骨上抬折起
+        //   hind_foot  pitch > 0 = 爪子后移 tail pitch > 0 = 尾巴上翘
+        // 尾巴的"左右摆"必须走 roll (绕局部 Z): 绕局部 Y 只是沿骨轴的扭转, 看不出摆动。
         var headP = 0f; var spineArch = 0f
         var flLeg = 0f; var frLeg = 0f; var hlLeg = 0f; var hrLeg = 0f
         var flPaw = 0f; var frPaw = 0f
         var hlShank = 0f; var hrShank = 0f
         var hlFoot = 0f; var hrFoot = 0f
-        var tailP = 35f; var tailY = 10f
+        var tailP = 35f; var tailSide = 8f
 
         when (posePreset.lowercase()) {
-            // 端坐: 躯干前倾上抬, 头回补到平视, 后肢折起
+            // 端坐: 后肢折到体侧, 胯部落地 (整体下沉), 脊椎把胸腔抬回平视高度, 前肢伸直
             "sit" -> {
-                spineArch = 6f; headP = -6f
-                flLeg = -6f; frLeg = -6f
-                hlLeg = 40f; hrLeg = 40f
-                hlShank = -55f; hrShank = -55f
-                hlFoot = -15f; hrFoot = -15f
-                tailP = -20f; tailY = 20f
+                spineArch = -16f; headP = 14f
+                flLeg = 2f; frLeg = 2f
+                hlLeg = -38f; hrLeg = -38f
+                hlShank = 58f; hrShank = 58f
+                hlFoot = -62f; hrFoot = -62f
+                tailP = -30f; tailSide = 20f
             }
-            // 农民揣: 前爪收进胸下, 后肢缩进腹下
+            // 农民揣 (狮身人面式): 整体压低, 前肢前伸, 后肢折在腹下
             "loaf" -> {
-                spineArch = 0f
-                flLeg = -40f; frLeg = -40f; flPaw = 25f; frPaw = 25f
-                hlLeg = 45f; hrLeg = 45f
-                hlShank = -60f; hrShank = -60f
-                hlFoot = -15f; hrFoot = -15f
-                tailP = -30f; tailY = 25f
+                spineArch = -4f; headP = 4f
+                flLeg = -45f; frLeg = -45f; flPaw = -15f; frPaw = -15f
+                hlLeg = -48f; hrLeg = -48f
+                hlShank = 78f; hrShank = 78f
+                hlFoot = -72f; hrFoot = -72f
+                tailP = -10f; tailSide = 30f
             }
-            // 伸懒腰: 前肢前伸压胸, 尾巴上翘
+            // 伸懒腰: 前肢前伸压胸, 前低后高, 头抬起, 尾巴上翘
             "stretch" -> {
-                spineArch = -10f; headP = -6f
-                flLeg = 30f; frLeg = 30f; flPaw = 5f; frPaw = 5f
-                hlLeg = 5f; hrLeg = 5f
-                hlShank = -5f; hrShank = -5f
-                tailP = 30f; tailY = 0f
+                spineArch = 16f; headP = -20f
+                flLeg = -50f; frLeg = -50f; flPaw = -12f; frPaw = -12f
+                hlLeg = 4f; hrLeg = 4f
+                hlShank = 0f; hrShank = 0f
+                hlFoot = 0f; hrFoot = 0f
+                tailP = 42f; tailSide = 0f
             }
         }
 
@@ -150,7 +165,7 @@ private fun buildEulerMap(
         hlLeg += (jointAngles["cat_hl_leg"] ?: 0f)
         hrLeg += (jointAngles["cat_hr_leg"] ?: 0f)
         tailP += (jointAngles["cat_tail_pitch"] ?: 0f)
-        tailY += (jointAngles["cat_tail_yaw"] ?: 0f)
+        tailSide += (jointAngles["cat_tail_yaw"] ?: 0f)
 
         addJoint(listOf("Head", "head"), headP, headY, 0f)
         addJoint(listOf("Spine", "spine"), spineArch, 0f, 0f)
@@ -164,10 +179,11 @@ private fun buildEulerMap(
         addJoint(listOf("r_hind_shank"), hrShank, 0f, 0f)
         addJoint(listOf("l_hind_foot"), hlFoot, 0f, 0f)
         addJoint(listOf("r_hind_foot"), hrFoot, 0f, 0f)
-        addJoint(listOf("Tail1", "tail1"), tailP, tailY, 0f)
-        addJoint(listOf("Tail2", "tail2"), 22f, 12f, 0f)
-        addJoint(listOf("Tail3", "tail3"), 22f, 8f, 0f)
-        addJoint(listOf("Tail4", "tail4"), 15f, 5f, 0f)
+        // 尾骨链: 第一根跟随滑杆, 后面几节按固定比例递进, 形成自然的卷曲
+        addJoint(listOf("Tail1", "tail1"), tailP, 0f, tailSide)
+        addJoint(listOf("Tail2", "tail2"), 26f + tailP * 0.25f, 0f, tailSide * 0.8f)
+        addJoint(listOf("Tail3", "tail3"), 20f + tailP * 0.2f, 0f, tailSide * 0.6f)
+        addJoint(listOf("Tail4", "tail4"), 14f + tailP * 0.15f, 0f, tailSide * 0.4f)
     } else {
         var spineP = 0f; var spineY = 0f
         var headP = 0f; var headY = 0f
@@ -296,7 +312,12 @@ internal fun PaintViewModel.getMeshForState(state: Model3DState): Mesh3D {
         val eulerMap = buildEulerMap(state.posePreset, state.jointAngles, isCat)
         val jointCount = skinned.skeleton?.count ?: 0
         val outJointPositions = if (jointCount > 0) FloatArray(jointCount * 3) else null
-        val deformed = skinned.createDeformedMesh(eulerMap, outJointPositions)
+        var deformed = skinned.createDeformedMesh(eulerMap, outJointPositions)
+        val poseDy = if (isCat) catPoseOffsetY(state.posePreset) else 0f
+        if (poseDy != 0f) {
+            deformed = deformed.translated(0f, poseDy, 0f)
+            outJointPositions?.let { for (i in 1 until it.size step 3) it[i] += poseDy }
+        }
         active3DWorldJoints = outJointPositions
         deformed
     } else {

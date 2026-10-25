@@ -21,6 +21,16 @@ class Mesh3D(
     val triangleCount: Int get() = indices.size / 3
     val wireframeLineCount: Int get() = wireframeIndices.size / 2
 
+    /** 返回平移后的副本 (法线/索引不变), 用于姿态预设的整体升降 */
+    fun translated(dx: Float, dy: Float, dz: Float): Mesh3D {
+        if (dx == 0f && dy == 0f && dz == 0f) return this
+        val p = positions.copyOf()
+        for (i in p.indices step 3) {
+            p[i] += dx; p[i + 1] += dy; p[i + 2] += dz
+        }
+        return Mesh3D(p, normals, indices, wireframeIndices, wireframeEdgeTriangles)
+    }
+
     val flatPositions: FloatArray by lazy {
         val triCount = indices.size / 3
         val result = FloatArray(triCount * 9)

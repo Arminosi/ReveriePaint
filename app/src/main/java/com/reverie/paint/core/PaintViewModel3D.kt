@@ -89,8 +89,9 @@ internal fun PaintViewModel.getSkinnedModelForState(state: Model3DState): Skinne
  * 这里返回整个模型在自身坐标系里的 Y 偏移 (glTF: +Y 向上), 由 [getMeshForState] 施加到形变后的网格上。
  */
 private fun catPoseOffsetY(posePreset: String): Float = when (posePreset.lowercase()) {
-    "sit" -> -0.34f
-    "loaf" -> -0.46f
+    "sit" -> -0.50f
+    "loaf" -> -0.60f
+    "stretch" -> -0.10f
     else -> 0f
 }
 
@@ -112,48 +113,48 @@ private fun buildEulerMap(
     }
 
     if (isCat) {
-        // 猫猫骨骼约定 (重绑管线 scripts/model/build_cat_glb.py):
-        // 骨骼局部 +Y 沿骨长, 局部 X = 世界 +X (每一根骨都是), 局部 Z 与该骨垂直。
-        // 由 sign_probe 实测的符号 (glTF: +Y 上, +Z 脸朝前, +X 猫的右侧):
-        //   Head   pitch > 0 = 低头         Head   yaw > 0 = 头转向猫的右侧
-        //   Spine  pitch > 0 = 前半身下沉   l/r_front_leg pitch > 0 = 爪子向后摆
-        //   hind_thigh pitch > 0 = 膝盖后移 hind_shank pitch > 0 = 跗骨上抬折起
-        //   hind_foot  pitch > 0 = 爪子后移 tail pitch > 0 = 尾巴上翘
-        // 尾巴的"左右摆"必须走 roll (绕局部 Z): 绕局部 Y 只是沿骨轴的扭转, 看不出摆动。
-        var headP = 0f; var spineArch = 0f
+        // 猫猫骨骼约定 (重绑管线 scripts/model/build_cat_glb.py)。局部 X 全部指向世界 +X，
+        // 实测符号 (glTF: +Y 上, +Z 脸朝前, +X 猫右侧):
+        //   Hips/Spine pitch > 0 = 前半身下沉      Head pitch > 0 = 低头
+        //   前肢 shoulder/leg pitch > 0 = 爪子后摆  后肢 thigh 后移 / shank 折起 / foot 后移
+        //   尾骨 pitch > 0 = 上翘, 左右摆走 roll (绕局部 Z, 绕局部 Y 只是沿骨轴扭转)
+        // 数值由离线 IK 拟合得出: 目标是把四只爪子和骨盆压到同一水平面 (见 fit 脚本),
+        // 拟合后 侧视图上四爪贴地、躯干角度正确, 不再是"腿在空中划水"。
+        var hipP = 0f; var headP = 0f; var spineArch = 0f
         var flLeg = 0f; var frLeg = 0f; var hlLeg = 0f; var hrLeg = 0f
+        var flSh = 0f; var frSh = 0f
         var flPaw = 0f; var frPaw = 0f
         var hlShank = 0f; var hrShank = 0f
         var hlFoot = 0f; var hrFoot = 0f
         var tailP = 35f; var tailSide = 8f
 
         when (posePreset.lowercase()) {
-            // 端坐: 后肢折到体侧, 胯部落地 (整体下沉), 脊椎把胸腔抬回平视高度, 前肢伸直
+            // 端坐: 骨盆落地, 躯干立起到 55°, 后肢折在体侧, 前肢竖直撑地
             "sit" -> {
-                spineArch = -16f; headP = 14f
-                flLeg = 2f; frLeg = 2f
-                hlLeg = -38f; hrLeg = -38f
-                hlShank = 58f; hrShank = 58f
-                hlFoot = -62f; hrFoot = -62f
-                tailP = -30f; tailSide = 20f
+                hipP = 11f; spineArch = -29.5f; headP = 24f
+                flSh = 43f; frSh = 43f; flLeg = -27f; frLeg = -27f
+                hlLeg = -119f; hrLeg = -119f
+                hlShank = 124f; hrShank = 124f
+                hlFoot = -28f; hrFoot = -28f
+                tailP = -40f; tailSide = 25f
             }
-            // 农民揣 (狮身人面式): 整体压低, 前肢前伸, 后肢折在腹下
+            // 农民揣 (狮身人面式): 躯干压到贴近地面, 前爪收到胸下, 后肢折进腹下
             "loaf" -> {
-                spineArch = -4f; headP = 4f
-                flLeg = -45f; frLeg = -45f; flPaw = -15f; frPaw = -15f
-                hlLeg = -48f; hrLeg = -48f
-                hlShank = 78f; hrShank = 78f
-                hlFoot = -72f; hrFoot = -72f
-                tailP = -10f; tailSide = 30f
+                hipP = 0f; spineArch = -14f; headP = 6f
+                flSh = 69f; frSh = 69f; flLeg = -86f; frLeg = -86f
+                hlLeg = -109f; hrLeg = -109f
+                hlShank = 127f; hrShank = 127f
+                hlFoot = -76f; hrFoot = -76f
+                tailP = -25f; tailSide = 35f
             }
-            // 伸懒腰: 前肢前伸压胸, 前低后高, 头抬起, 尾巴上翘
+            // 伸懒腰: 前肢前伸贴地, 胸口压低, 后躯抬高, 头抬起, 尾巴上翘
             "stretch" -> {
-                spineArch = 16f; headP = -20f
-                flLeg = -50f; frLeg = -50f; flPaw = -12f; frPaw = -12f
-                hlLeg = 4f; hrLeg = 4f
-                hlShank = 0f; hrShank = 0f
-                hlFoot = 0f; hrFoot = 0f
-                tailP = 42f; tailSide = 0f
+                hipP = -5f; spineArch = -10.6f; headP = -15f
+                flSh = -36f; frSh = -36f; flLeg = -9f; frLeg = -9f
+                hlLeg = 23f; hrLeg = 23f
+                hlShank = 8f; hrShank = 8f
+                hlFoot = -18f; hrFoot = -18f
+                tailP = 35f; tailSide = 0f
             }
         }
 
@@ -167,6 +168,9 @@ private fun buildEulerMap(
         tailP += (jointAngles["cat_tail_pitch"] ?: 0f)
         tailSide += (jointAngles["cat_tail_yaw"] ?: 0f)
 
+        addJoint(listOf("Hips", "hips"), hipP, 0f, 0f)
+        addJoint(listOf("l_front_shoulder"), flSh, 0f, 0f)
+        addJoint(listOf("r_front_shoulder"), frSh, 0f, 0f)
         addJoint(listOf("Head", "head"), headP, headY, 0f)
         addJoint(listOf("Spine", "spine"), spineArch, 0f, 0f)
         addJoint(listOf("leftFrontLeg", "LeftFrontLeg", "l_front_leg"), flLeg, 0f, 0f)

@@ -321,10 +321,6 @@ internal fun PaintViewModel.addLayer() {
     if (recorder.recording) {
         recorder.layerOp(com.reverie.paint.model.RecordingEvents.L_ADD)
     }
-    val curLayer = layers.getOrNull(currentLayerIndex)
-    if (curLayer != null && active3DLayers.containsKey(curLayer.id)) {
-        commit3DLayerPixels(curLayer.id)
-    }
     val defaultName = generateDefaultLayerName()
     Breadcrumbs.record("Layer", "Add layer: $defaultName")
     runCore(after = {
@@ -413,11 +409,6 @@ internal fun PaintViewModel.setCurrentLayer(i: Int) {
     Breadcrumbs.record("Layer", "Set current layer: $i")
     val prevIdx = currentLayerIndex
     val changed = prevIdx != i
-    val prevLayer = layers.getOrNull(prevIdx)
-    if (prevLayer != null && active3DLayers.containsKey(prevLayer.id) && changed) {
-        // 离开 3D 参考图层时，将其烘焙写入底层引擎，使上层绘图可见其底层参考
-        commit3DLayerPixels(prevLayer.id)
-    }
 
     currentLayerIndex = i
     if (changed && (transientTransformSelectionPending || canUndoTransformSelection || canRedoTransformSelection)) {
@@ -552,9 +543,7 @@ internal fun PaintViewModel.copyLayer(i: Int) {
     isCopyingLayer = true
     clearLayerSelection()
     val srcLayer = layers.getOrNull(i)
-    if (srcLayer != null && active3DLayers.containsKey(srcLayer.id)) {
-        commit3DLayerPixels(srcLayer.id)
-    }
+    val src3DState = srcLayer?.let { active3DLayers[it.id] }
     if (recorder.recording) {
         recorder.layerOp(com.reverie.paint.model.RecordingEvents.L_COPY, i)
     }
@@ -562,6 +551,13 @@ internal fun PaintViewModel.copyLayer(i: Int) {
     runCore(after = {
         isCopyingLayer = false
         clearLayerSelection()
+        if (src3DState != null) {
+            val newLayer = layers.getOrNull(currentLayerIndex)
+            if (newLayer != null) {
+                active3DLayers = active3DLayers + (newLayer.id to src3DState.copy(layerId = newLayer.id))
+                ensure3DLayerClearedInCore(newLayer.id)
+            }
+        }
         notifyLayerChanged()
     }) {
         val newIdx = ReverieCoreBridge.copyLayer(i)

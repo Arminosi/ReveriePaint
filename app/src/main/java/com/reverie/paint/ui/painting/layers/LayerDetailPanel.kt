@@ -157,6 +157,17 @@ internal fun LayerDetailPage(
     val layer = vm.layers.firstOrNull { it.index == index }
     val isBg = layer?.isBackground == true
     val name = layer?.name ?: ""
+    val is3DLayer = layer != null && vm.active3DLayers.containsKey(layer.id)
+    if (is3DLayer) {
+        Layer3DDetailPage(
+            vm = vm,
+            layer = layer!!,
+            index = index,
+            onBack = onBack,
+            onRename = onRename,
+        )
+        return
+    }
     if (layer?.isBackground == true) {
     Column(modifier = Modifier.fillMaxWidth()) {
             Row(
@@ -1636,3 +1647,351 @@ internal fun blendModeResId(opId: String): Int = when (opId) {
     "glow" -> R.string.blend_glow
     else -> R.string.blend_normal
 }
+
+@Composable
+private fun Layer3DDetailPage(
+    vm: PaintViewModel,
+    layer: PaintViewModel.LayerUiState,
+    index: Int,
+    onBack: () -> Unit,
+    onRename: (String) -> Unit,
+) {
+    val state = vm.active3DLayers[layer.id]
+    var showRasterizeConfirm by remember { mutableStateOf(false) }
+    var showGroupPicker by remember { mutableStateOf(false) }
+    val availableGroups = remember(vm.layers) {
+        vm.layers.filter { it.isGroup && it.index != index }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState()),
+    ) {
+        // 1. Header: < 3D 参考图层设置
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .clip(RoundedCornerShape(7.dp))
+                    .noRippleClickable(onBack),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    painterResource(R.drawable.ic_chevron),
+                    contentDescription = stringResource(R.string.common_back),
+                    tint = Morandi.icon,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    stringResource(R.string.layer_3d_settings_title),
+                    color = Morandi.text,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    layerDisplayName(layer.name),
+                    color = Morandi.subText,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Morandi.accent.copy(alpha = 0.16f))
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+            ) {
+                Text(
+                    "3D",
+                    color = Morandi.accent,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+            Spacer(Modifier.width(4.dp))
+        }
+
+        Box(Modifier.fillMaxWidth().height(1.dp).background(Morandi.border))
+
+        // 2. 渲染风格切换 (石膏素模 / 光影切面 / 结构线框)
+        if (state != null) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(
+                    stringResource(R.string.layer_3d_render_mode_title),
+                    color = Morandi.subText,
+                    fontSize = 12.sp,
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Morandi.panelHi)
+                        .padding(3.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    val modes = listOf(
+                        com.reverie.paint.model.RenderMode3D.CLAY to R.string.layer_3d_style_clay,
+                        com.reverie.paint.model.RenderMode3D.SHADING to R.string.layer_3d_style_shading,
+                        com.reverie.paint.model.RenderMode3D.WIREFRAME to R.string.layer_3d_style_wireframe,
+                    )
+                    modes.forEach { (mode, labelRes) ->
+                        val isSel = state.renderMode == mode
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(if (isSel) Morandi.accent else Color.Transparent)
+                                .noRippleClickable { vm.set3DRenderMode(mode) }
+                                .padding(vertical = 7.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                stringResource(labelRes),
+                                color = if (isSel) Color.White else Morandi.text,
+                                fontSize = 11.sp,
+                                fontWeight = if (isSel) FontWeight.SemiBold else FontWeight.Normal,
+                            )
+                        }
+                    }
+                }
+            }
+
+            Box(Modifier.fillMaxWidth().padding(horizontal = 14.dp).height(1.dp).background(Morandi.border.copy(alpha = 0.5f)))
+        }
+
+        // 3. 不透明度调节
+        var localOpacity by remember(index) { mutableFloatStateOf(layer.opacity.toFloat()) }
+        var lastOpacityNs by remember(index) { mutableLongStateOf(0L) }
+        LaunchedEffect(layer.opacity) {
+            localOpacity = layer.opacity.toFloat()
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(stringResource(R.string.layer_opacity), color = Morandi.text, fontSize = 13.sp)
+            Spacer(Modifier.weight(1f))
+            Text("${(localOpacity * 100).roundToInt()}%", color = Morandi.subText, fontSize = 13.sp)
+        }
+        ReSlider(
+            value = localOpacity,
+            onValue = {
+                localOpacity = it
+                val now = System.nanoTime()
+                if (now - lastOpacityNs > 50_000_000L) {
+                    lastOpacityNs = now
+                    vm.setLayerOpacity(index, it.toDouble(), preview = true)
+                }
+            },
+            onRelease = {
+                vm.setLayerOpacity(index, localOpacity.toDouble())
+            },
+            modifier = Modifier.padding(horizontal = 14.dp),
+        )
+
+        Box(Modifier.fillMaxWidth().padding(horizontal = 14.dp).height(1.dp).background(Morandi.border))
+
+        // 4. Krita 8 色标签选择器
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            val currentLabel = layer.colorLabel
+            for (label in 0..8) {
+                val color = layerLabelColor(label)
+                val isSelected = currentLabel == label
+                Box(
+                    modifier = Modifier
+                        .size(22.dp)
+                        .clip(CircleShape)
+                        .background(if (label == 0) Morandi.panelHi else color)
+                        .then(
+                            if (isSelected) Modifier.border(2.dp, Morandi.accent, CircleShape)
+                            else Modifier
+                        ).clickable { vm.setLayerColorLabel(index, label) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (label == 0) {
+                        Box(Modifier.size(8.dp).clip(CircleShape).background(Morandi.subText.copy(alpha = 0.5f)))
+                    } else if (isSelected) {
+                        Box(Modifier.size(6.dp).clip(CircleShape).background(Color.White))
+                    }
+                }
+            }
+        }
+
+        Box(Modifier.fillMaxWidth().padding(horizontal = 14.dp).height(1.dp).background(Morandi.border))
+
+        // 5. 3D 参考可用操作列表 (严格移除混合模式、剪切蒙版、Alpha锁定/继承、翻转、选区等无关项)
+        Column {
+            OpItem(R.drawable.ic_lasso, stringResource(R.string.layer_3d_extract_outline)) {
+                vm.extract3DOutlines(layer.id)
+                onBack()
+            }
+            OpItem(R.drawable.ic_refresh, stringResource(R.string.layer_3d_mode_reset)) {
+                vm.reset3DView()
+            }
+            OpItem(R.drawable.ic_copy, stringResource(R.string.layer_op_duplicate)) {
+                vm.copyLayer(index)
+            }
+            OpItem(R.drawable.ic_rename, stringResource(R.string.layer_op_rename)) {
+                onRename(layer.name)
+            }
+            if (layer.depth > 0) {
+                OpItem(R.drawable.ic_folder, stringResource(R.string.layer_op_move_out_group)) {
+                    vm.moveLayerOut(index)
+                }
+            }
+            if (availableGroups.isNotEmpty()) {
+                OpItem(R.drawable.ic_folder, stringResource(R.string.layer_op_move_into_group)) {
+                    showGroupPicker = true
+                }
+            }
+            OpToggle(R.drawable.ic_lock, stringResource(R.string.layer_op_lock_layer), layer.locked) {
+                vm.setLayerLocked(index, !layer.locked)
+            }
+            OpItem(R.drawable.ic_fill, stringResource(R.string.layer_3d_rasterize)) {
+                showRasterizeConfirm = true
+            }
+            OpItem(R.drawable.ic_trash, stringResource(R.string.layer_op_delete_layer)) {
+                vm.removeLayer(index)
+                onBack()
+            }
+        }
+
+        if (showRasterizeConfirm) {
+            Dialog(onDismissRequest = { showRasterizeConfirm = false }) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.9f)
+                        .shadow(16.dp, RoundedCornerShape(14.dp), spotColor = Color.Black.copy(alpha = 0.4f))
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Morandi.panel)
+                        .glassBorder(RoundedCornerShape(14.dp))
+                        .padding(18.dp),
+                ) {
+                    Column {
+                        Text(
+                            stringResource(R.string.layer_3d_rasterize),
+                            color = Morandi.text,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            stringResource(R.string.layer_3d_rasterize_dialog_desc),
+                            color = Morandi.subText,
+                            fontSize = 13.sp,
+                            lineHeight = 18.sp,
+                        )
+                        Spacer(Modifier.height(18.dp))
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Morandi.panelHi)
+                                    .clickable { showRasterizeConfirm = false }
+                                    .padding(horizontal = 14.dp, vertical = 7.dp),
+                            ) {
+                                Text(stringResource(R.string.common_cancel), color = Morandi.text, fontSize = 13.sp)
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Morandi.accent)
+                                    .clickable {
+                                        showRasterizeConfirm = false
+                                        vm.rasterize3DLayer(layer.id)
+                                        onBack()
+                                    }
+                                    .padding(horizontal = 14.dp, vertical = 7.dp),
+                            ) {
+                                Text(
+                                    stringResource(R.string.layer_rasterize_confirm),
+                                    color = Color.White,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (showGroupPicker) {
+            Dialog(onDismissRequest = { showGroupPicker = false }) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.9f)
+                        .shadow(16.dp, RoundedCornerShape(14.dp), spotColor = Color.Black.copy(alpha = 0.4f))
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Morandi.panel)
+                        .glassBorder(RoundedCornerShape(14.dp))
+                        .padding(18.dp),
+                ) {
+                    Column {
+                        Text(stringResource(R.string.layer_move_into_group_title), color = Morandi.text, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(12.dp))
+                        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+                            if (availableGroups.isEmpty()) {
+                                Text(stringResource(R.string.layer_no_other_groups), color = Morandi.subText, fontSize = 13.sp)
+                            } else {
+                                availableGroups.forEach { grp ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .noRippleClickable {
+                                                vm.moveLayerToGroup(index, grp.index)
+                                                showGroupPicker = false
+                                            }.padding(vertical = 10.dp, horizontal = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    ) {
+                                        Icon(
+                                            painterResource(R.drawable.ic_folder),
+                                            null,
+                                            tint = Morandi.icon,
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                        Text(layerDisplayName(grp.name), color = Morandi.text, fontSize = 14.sp)
+                                    }
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(16.dp))
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Morandi.panelHi)
+                                    .clickable { showGroupPicker = false }
+                                    .padding(horizontal = 14.dp, vertical = 6.dp),
+                            ) {
+                                Text(stringResource(R.string.common_cancel), color = Morandi.text, fontSize = 13.sp)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+

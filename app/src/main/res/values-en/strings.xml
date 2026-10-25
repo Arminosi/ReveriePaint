@@ -2937,6 +2937,9 @@
 
     <!-- 3D Reference Layer -->
     <string name="layer_new_3d_reference">New 3D Reference Layer</string>
+    <string name="layer_3d_settings_title">3D Reference Layer Settings</string>
+    <string name="layer_3d_render_mode_title">Render Style</string>
+    <string name="layer_3d_rasterize_dialog_desc">Bake current 3D view and lighting into a standard pixel layer. After rasterizing, 3D rotation and bone posing will no longer be available. Continue?</string>
     <string name="layer_3d_tag">3D Reference</string>
     <string name="layer_3d_mode_rotate">Rotate</string>
     <string name="layer_3d_mode_pan">Pan</string>

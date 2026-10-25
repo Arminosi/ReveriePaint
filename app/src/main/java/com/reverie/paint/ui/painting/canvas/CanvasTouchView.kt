@@ -2909,9 +2909,10 @@ class CanvasTouchView(context: Context) : View(context) {
                 v.onLiquifyBitmapDrawn(bmp)
             }
             val cur3DLayer = v.layers.getOrNull(v.currentLayerIndex)
-            if (v.isCurrentLayer3D && cur3DLayer?.visible == true) {
-                val state = v.currentLayer3DState
-                if (state != null) {
+            if (v.active3DLayers.isNotEmpty()) {
+                for (layer in v.layers) {
+                    if (!layer.visible) continue
+                    val state = v.active3DLayers[layer.id] ?: continue
                     val mesh = v.getMeshForState(state)
                     canvas3DDrawer.draw(
                         canvas,
@@ -2919,9 +2920,9 @@ class CanvasTouchView(context: Context) : View(context) {
                         state,
                         imgW.toFloat(),
                         imgH.toFloat(),
-                        cur3DLayer.opacity.toFloat(),
+                        layer.opacity.toFloat(),
                     )
-                    if (v.active3DInteractionMode == Interaction3DMode.BONE) {
+                    if (layer.id == cur3DLayer?.id && v.isCurrentLayer3D && v.active3DInteractionMode == Interaction3DMode.BONE) {
                         canvas3DDrawer.drawBones(
                             canvas,
                             v.active3DSkeleton,

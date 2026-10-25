@@ -2937,6 +2937,9 @@
 
     <!-- 3D Reference Layer -->
     <string name="layer_new_3d_reference">新建 3D 参考图层</string>
+    <string name="layer_3d_settings_title">3D 参考图层设置</string>
+    <string name="layer_3d_render_mode_title">渲染风格</string>
+    <string name="layer_3d_rasterize_dialog_desc">将 3D 模型当前视角与光影烘焙为普通像素图层，栅格化后将无法继续旋转模型或编辑骨骼，是否继续？</string>
     <string name="layer_3d_tag">3D 参考</string>
     <string name="layer_3d_mode_rotate">旋转视角</string>
     <string name="layer_3d_mode_pan">平移位置</string>

@@ -129,7 +129,7 @@ art/        # 图标素材
 ## 6. Kotlin / Compose 编码规范
 
 - 缩进 4 空格, 行宽 ≤120 (见 `.editorconfig`)
-- **UI 文案统一使用 strings.xml 国际化资源管理** (`stringResource(R.string.*)`), 严禁在 Compose 中硬编码中文字符串字面量; 新增或修改文案需同步提供中英文翻译 (`values/` 与 `values-en/`), 中文文案尽量少用句号; 主题色一律引用 `ui/theme` 的 Morandi 语义色, 禁止散落硬编码颜色
+- **UI 文案统一使用 strings.xml 国际化资源管理** (`stringResource(R.string.*)`), 严禁在 Compose 中硬编码中文字符串字面量; 平时日常编写代码时只需维护简体中文 (`values/strings.xml`) 与英文 (`values-en/strings.xml`), 中文文案尽量少用句号; 日语 (`values-ja/`)、繁体中文 (`values-zh-rTW/`) 与猫猫语 (`values-cat/`) 三种扩展语言只在每次大版本更新发版前或用户明确指示时进行全量增量补全, 平时日常开发无需频繁同步; 主题色一律引用 `ui/theme` 的 Morandi 语义色, 禁止散落硬编码颜色
 - 状态管理: ViewModel 用 `mutableStateOf/mutableIntStateOf/...` + `by` 委托; 高频数值 (缩放%/旋转°) 用专用 `mutable*StateOf` 重载避免装箱
 - ViewModel 过大时按域拆分为同包扩展文件 (如 `PaintViewModelBrush.kt`), 保持类名不变, 不要为拆分而引入新接口层
 - Composable 命名 PascalCase, 普通函数 camelCase; 一个功能族一个文件是允许的 (如 `ToolPanels.kt` 收纳多个小面板), 但单文件超过 ~2000 行时应拆分
@@ -201,7 +201,10 @@ Conventional Commits, **中文描述**, 格式:
 - **严格检查工作区干净状态**: 执行 `git status`, 若存在未提交的修改或未跟踪文件, 必须立即暂停发布流程并列出未提交文件, 严禁私自打包或夹带未经验证的代码
 - **机械自检必须全绿**: 运行 `./gradlew :app:compileDebugKotlin :app:testDebugUnitTest`, 验证通过后方可推进
 
-### 3. 版本号与更新日志撰写
+### 3. 多语言本地化增量补全 (大版本发版门禁)
+- **同步扩展语言**: 检查并对比 `values/strings.xml` 与 `values-en/strings.xml`, 对日语 (`values-ja/strings.xml`)、繁体中文 (`values-zh-rTW/strings.xml`) 与猫猫语 (`values-cat/strings.xml`) 进行全量增量补全, 确保大版本发版时多语言覆盖无缺失
+
+### 4. 版本号与更新日志撰写
 - **更新版本配置**: 修改 `app/build.gradle.kts` 中的 `versionCode` 与 `versionName`
 - **解析 Git 历史与 PR 关联**:
   - 执行 `git log <last_tag>..HEAD --oneline` 提取自上个正式 tag 以来的全量提交
@@ -214,11 +217,11 @@ Conventional Commits, **中文描述**, 格式:
   - 严禁使用句号 (。) 与任何表情符号 (emoji), 保持极简清晰
 - **提交版本变更**: 执行 `git add app/build.gradle.kts CHANGELOG.md && git commit -m "chore(release): 发布 X.Y.Z 版本并更新变更日志"`
 
-### 4. 标签与远程推送
+### 5. 标签与远程推送
 - **打附注标签**: `git tag -a vX.Y.Z -m "Release vX.Y.Z"`
 - **推送主分支与标签**: 先 `git push origin main`, 后 `git push origin vX.Y.Z` (触发 GitHub Actions `release.yml` 构建流水线)
 
-### 5. CI 监控与 Release 同步
+### 6. CI 监控与 Release 同步
 - **监控 CI 构建**: 后台监控 GitHub Actions 运行状态 (`release.yml`), 等待编译与打包完成
 - **更新 GitHub Release 正文**: CI 完成创建 release 后, 提取 `CHANGELOG.md` 中对应版本的日志, 执行 `gh release edit vX.Y.Z --notes-file <临时日志路径>` 补充完整更新说明 (自动触发 MirrorChyan 镜像与日志同步)
 - **结果汇总汇报**: 向用户提供新版本号、Release 链接与 APK 产物大小

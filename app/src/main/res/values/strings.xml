@@ -304,6 +304,9 @@
     <string name="settings_lang_follow_system">跟随系统</string>
     <string name="settings_lang_zh_cn">简体中文</string>
     <string name="settings_lang_en">English</string>
+    <string name="settings_lang_ja">日本語</string>
+    <string name="settings_lang_zh_tw">繁體中文 (台灣)</string>
+    <string name="settings_lang_cat">猫猫语</string>
     <string name="settings_general">通用设置</string>
     <string name="settings_general_sub">自动保存策略、撤销历史步数与退出偏好</string>
     <string name="settings_category_basic">基础偏好</string>

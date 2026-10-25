@@ -23,7 +23,10 @@ enum class AppLanguage(
 ) {
     FOLLOW_SYSTEM("", "跟随系统", "Follow System"),
     ZH_CN("zh-CN", "简体中文", "Simplified Chinese"),
-    EN("en", "English", "English");
+    EN("en", "English", "English"),
+    JA("ja", "日本語", "Japanese"),
+    ZH_TW("zh-TW", "繁體中文 (台灣)", "Traditional Chinese (Taiwan)"),
+    CAT("cat", "猫猫语", "Cat Language");
 
     companion object {
         fun fromCode(code: String): AppLanguage {
@@ -51,7 +54,10 @@ object LanguageManager {
     fun getLocale(language: AppLanguage = currentLanguage): Locale {
         return when (language) {
             AppLanguage.ZH_CN -> Locale.SIMPLIFIED_CHINESE
+            AppLanguage.ZH_TW -> Locale.TRADITIONAL_CHINESE
             AppLanguage.EN -> Locale.ENGLISH
+            AppLanguage.JA -> Locale.JAPANESE
+            AppLanguage.CAT -> Locale("cat")
             AppLanguage.FOLLOW_SYSTEM -> {
                 val sysLocales = Resources.getSystem().configuration.locales
                 if (!sysLocales.isEmpty) sysLocales[0] else Locale.getDefault()
@@ -60,7 +66,8 @@ object LanguageManager {
     }
 
     fun isChinese(language: AppLanguage = currentLanguage): Boolean {
-        return getLocale(language).language.startsWith("zh")
+        return language == AppLanguage.ZH_CN || language == AppLanguage.ZH_TW ||
+            getLocale(language).language.startsWith("zh")
     }
 
     fun setLanguage(activity: Activity, language: AppLanguage) {

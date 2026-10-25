@@ -107,6 +107,9 @@ internal fun GeneralSettingsSubPage(
                     AppLanguage.FOLLOW_SYSTEM to stringResource(R.string.settings_lang_follow_system),
                     AppLanguage.ZH_CN to stringResource(R.string.settings_lang_zh_cn),
                     AppLanguage.EN to stringResource(R.string.settings_lang_en),
+                    AppLanguage.JA to stringResource(R.string.settings_lang_ja),
+                    AppLanguage.ZH_TW to stringResource(R.string.settings_lang_zh_tw),
+                    AppLanguage.CAT to stringResource(R.string.settings_lang_cat),
                 )
                 val currentText = langOptions.find { it.first == currentLang }?.second
                     ?: stringResource(R.string.settings_lang_follow_system)

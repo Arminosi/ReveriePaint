@@ -52,8 +52,10 @@ object PosePresets {
      */
     private val TUNED_PRESET_SHIFT: Map<String, Map<String, Float>> = mapOf(
         "cat" to mapOf(
-            SIT to -0.50f,
+            // 端坐: 之前 -0.50 会把整只猫压到地面线以下 (前腿陷进地下), 交回几何贴地
             LOAF to -0.60f,
+            // 蜷缩/伏卧: 四肢收在身下, 需要把身体压到贴地才有"卧"的观感 (与农民揣同一档)
+            CURL to -0.60f,
             STRETCH to -0.10f,
         ),
     )
@@ -161,14 +163,14 @@ object PosePresets {
                 hrLeg = -10f; hrShank = 10f
                 tailP = 25f; tailSide = 12f
             }
-            // 蜷缩入睡: 脊柱弓起, 头低下巴贴胸, 四肢收拢, 尾巴绕体
+            // 蜷缩入睡: 农民揣的伏卧底盘 + 头低下巴贴胸 + 尾巴绕体
             CURL -> {
-                hipP = 8f; spineArch = 18f; chestP = 10f; neckP = 8f; headP = 14f
-                flSh = 30f; frSh = 30f; flLeg = -55f; frLeg = -55f; flPaw = 25f; frPaw = 25f
-                hlLeg = -40f; hrLeg = -40f
-                hlShank = 60f; hrShank = 60f
-                hlFoot = -20f; hrFoot = -20f
-                tailP = -20f; tailSide = 45f
+                hipP = -12f; spineArch = 4f; chestP = 8f; neckP = 12f; headP = 18f
+                flSh = 42f; frSh = 42f; flLeg = -68f; frLeg = -68f; flPaw = 26f; frPaw = 26f
+                hlLeg = -52f; hrLeg = -52f
+                hlShank = 70f; hrShank = 70f
+                hlFoot = -22f; hrFoot = -22f
+                tailP = -18f; tailSide = 50f
             }
             // 伏击准备: 前半身压低, 后躯蓄力, 前爪前探, 尾巴水平微摆
             POUNCE -> {

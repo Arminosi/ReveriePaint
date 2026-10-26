@@ -142,6 +142,23 @@ def pose_map(preset):
         flSh=42; frSh=42; flLeg=-68; frLeg=-68; flPaw=26; frPaw=26
         hlLeg=-52; hrLeg=-52; hlShank=70; hrShank=70; hlFoot=-22; hrFoot=-22
         tailP=-25; tailSide=30
+    elif preset=='walk':
+        hipP=3; spineArch=-3; chestP=3; neckP=2; headP=2
+        flSh=-12; flLeg=-18; flPaw=10
+        frSh=10; frLeg=14; frPaw=-6
+        hlLeg=12; hlShank=-8
+        hrLeg=-10; hrShank=10
+        tailP=25; tailSide=12
+    elif preset=='curl':
+        hipP=-12; spineArch=4; chestP=8; neckP=12; headP=18
+        flSh=42; frSh=42; flLeg=-68; frLeg=-68; flPaw=26; frPaw=26
+        hlLeg=-52; hrLeg=-52; hlShank=70; hrShank=70; hlFoot=-22; hrFoot=-22
+        tailP=-18; tailSide=50
+    elif preset=='pounce':
+        hipP=14; spineArch=-6; chestP=-10; neckP=-6; headP=6
+        flSh=-18; frSh=-18; flLeg=8; frLeg=8; flPaw=8; frPaw=8
+        hlLeg=-20; hrLeg=-20; hlShank=35; hrShank=35; hlFoot=-10; hrFoot=-10
+        tailP=10; tailSide=18
     elif preset=='stretch':
         hipP=10; spineArch=-8; chestP=-18; neckP=-5; headP=18
         flSh=-25; frSh=-25; flLeg=-10; frLeg=-10; flPaw=15; frPaw=15
@@ -309,10 +326,10 @@ def main():
     print('rest minY =', round(rest_min, 4))
 
     exported = []
-    for preset in ['stand', 'sit', 'loaf', 'stretch']:
+    for preset in ['stand', 'sit', 'loaf', 'stretch', 'walk', 'curl', 'pounce']:
         raw, _ = fk_and_skin(preset, 0.0)
         auto = rest_min - bbox_min(raw)
-        tuned = {'stand': 0.0, 'sit': -0.50, 'loaf': -0.60, 'stretch': -0.10}[preset]
+        tuned = {'stand': 0.0, 'loaf': -0.60, 'curl': -0.60, 'stretch': -0.10}.get(preset, auto)
         for label, shift in (('app', tuned), ('auto', auto)):
             verts, _ = fk_and_skin(preset, shift)
             name = '{}_{}'.format(preset, label)

@@ -91,13 +91,12 @@ Java_com_reverie_paint_core_ReverieCoreBridge_saveRevpAsync(JNIEnv *env, jobject
 JNIEXPORT jlongArray JNICALL
 Java_com_reverie_paint_core_ReverieCoreBridge_revpSaveStats(JNIEnv *env, jobject)
 {
-    // 上一次保存的阶段耗时(ms)与体积: [total, snapshot, encode, write, pngCount,
-    // pngBytes, fileBytes, async]。只在 UI 侧显示性能标尺时使用 (每次保存后取一次)。
-    qint64 stats[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    // 上一次保存的阶段耗时(ms)与体积 (共 RevpStatCount 项)。只在 UI 侧显示性能标尺时使用 (每次保存后取一次)。
+    qint64 stats[ReverieCore::RevpStatCount] = {0};
     core()->revpSaveStats(stats);
-    jlongArray arr = env->NewLongArray(8);
+    jlongArray arr = env->NewLongArray(ReverieCore::RevpStatCount);
     if (!arr) return nullptr;
-    env->SetLongArrayRegion(arr, 0, 8, reinterpret_cast<const jlong *>(stats));
+    env->SetLongArrayRegion(arr, 0, ReverieCore::RevpStatCount, reinterpret_cast<const jlong *>(stats));
     return arr;
 }
 

@@ -221,6 +221,9 @@ bool ReverieCore::exportPsd(const QString &path)
 
 #include <thread>
 #include <atomic>
+#if defined(Q_OS_ANDROID)
+#include <android/log.h>
+#endif
 
 namespace {
 
@@ -228,39 +231,81 @@ namespace {
 // 保存慢时必须能一眼看出慢在快照、PNG 编码还是写盘, 否则只能盲改。
 // 写入方可能是引擎线程(同步保存)或写盘线程(异步保存), 读取方是引擎线程
 // (标尺每秒取一次) ⇒ 用原子量。
-enum RevpStat {
-    StatTotal = 0,   // 整个 saveRevp 的墙钟
-    StatSnapshot,    // 引擎线程: 元数据/XML + 预览转换 + 各图层与关键帧快照
-    StatEncode,      // 工作线程: readBytes + 色彩转换 + PNG 编码
-    StatWrite,       // 写盘: zip deflate + 文件写入 + 关闭改名
-    StatPngCount,    // PNG 条目数
-    StatPngBytes,    // PNG 字节总量
-    StatFileBytes,   // 最终 .revp 体积
-    StatAsync,       // 1 = 异步保存
-    RevpStatCount
+std::atomic<qint64> s_revpStats[ReverieCore::RevpStatCount];
+
+struct RevpDetailedStats {
+    qint64 totalMs = 0;
+    qint64 snapshotMs = 0;
+    qint64 encodeNs = 0;
+    qint64 writeNs = 0;
+    qint64 pngCount = 0;
+    qint64 pngBytes = 0;
+    qint64 fileBytes = 0;
+    bool async = false;
+    qint64 compositeMs = 0;
+    qint64 layerCloneMs = 0;
+    qint64 selMaskMs = 0;
+    qint64 convertNs = 0;
+    qint64 pngDeflateNs = 0;
+    qint64 zipWriteNs = 0;
+    qint64 closeNs = 0;
+    qint64 reusedEntries = 0;
+    qint64 reusedBytes = 0;
 };
 
-std::atomic<qint64> s_revpStats[RevpStatCount];
-
-void publishRevpStats(qint64 totalMs, qint64 snapshotMs, qint64 encodeNs, qint64 writeNs,
-                      qint64 pngCount, qint64 pngBytes, qint64 fileBytes, bool async)
+void publishRevpStats(const RevpDetailedStats &d)
 {
-    s_revpStats[StatTotal].store(totalMs, std::memory_order_relaxed);
-    s_revpStats[StatSnapshot].store(snapshotMs, std::memory_order_relaxed);
-    s_revpStats[StatEncode].store(encodeNs / 1000000, std::memory_order_relaxed);
-    s_revpStats[StatWrite].store(writeNs / 1000000, std::memory_order_relaxed);
-    s_revpStats[StatPngCount].store(pngCount, std::memory_order_relaxed);
-    s_revpStats[StatPngBytes].store(pngBytes, std::memory_order_relaxed);
-    s_revpStats[StatFileBytes].store(fileBytes, std::memory_order_relaxed);
-    s_revpStats[StatAsync].store(async ? 1 : 0, std::memory_order_relaxed);
+    s_revpStats[ReverieCore::StatTotal].store(d.totalMs, std::memory_order_relaxed);
+    s_revpStats[ReverieCore::StatSnapshot].store(d.snapshotMs, std::memory_order_relaxed);
+    s_revpStats[ReverieCore::StatEncode].store(d.encodeNs / 1000000, std::memory_order_relaxed);
+    s_revpStats[ReverieCore::StatWrite].store(d.writeNs / 1000000, std::memory_order_relaxed);
+    s_revpStats[ReverieCore::StatPngCount].store(d.pngCount, std::memory_order_relaxed);
+    s_revpStats[ReverieCore::StatPngBytes].store(d.pngBytes, std::memory_order_relaxed);
+    s_revpStats[ReverieCore::StatFileBytes].store(d.fileBytes, std::memory_order_relaxed);
+    s_revpStats[ReverieCore::StatAsync].store(d.async ? 1 : 0, std::memory_order_relaxed);
+    s_revpStats[ReverieCore::StatComposite].store(d.compositeMs, std::memory_order_relaxed);
+    s_revpStats[ReverieCore::StatLayerClone].store(d.layerCloneMs, std::memory_order_relaxed);
+    s_revpStats[ReverieCore::StatSelMask].store(d.selMaskMs, std::memory_order_relaxed);
+    s_revpStats[ReverieCore::StatConvert].store(d.convertNs / 1000000, std::memory_order_relaxed);
+    s_revpStats[ReverieCore::StatPngDeflate].store(d.pngDeflateNs / 1000000, std::memory_order_relaxed);
+    s_revpStats[ReverieCore::StatZipWrite].store(d.zipWriteNs / 1000000, std::memory_order_relaxed);
+    s_revpStats[ReverieCore::StatClose].store(d.closeNs / 1000000, std::memory_order_relaxed);
+    s_revpStats[ReverieCore::StatReusedEntries].store(d.reusedEntries, std::memory_order_relaxed);
+    s_revpStats[ReverieCore::StatReusedBytes].store(d.reusedBytes, std::memory_order_relaxed);
+
+    const double mb = static_cast<double>(d.fileBytes) / (1024.0 * 1024.0);
+#if defined(Q_OS_ANDROID)
+    __android_log_print(ANDROID_LOG_INFO, "RP_IO",
+        "save profile: total=%lldms snapshot(composite=%lld,clone=%lld,sel=%lld) "
+        "convert=%lld png=%lld zip=%lld close=%lld entries=%lld(reused=%lld,reusedBytes=%lld) file=%.2fMB%s",
+        (long long)d.totalMs, (long long)d.compositeMs, (long long)d.layerCloneMs, (long long)d.selMaskMs,
+        (long long)(d.convertNs / 1000000), (long long)(d.pngDeflateNs / 1000000),
+        (long long)(d.zipWriteNs / 1000000), (long long)(d.closeNs / 1000000),
+        (long long)d.pngCount, (long long)d.reusedEntries, (long long)d.reusedBytes,
+        mb, d.async ? " (async)" : "");
+#else
+    qInfo("RP_IO save profile: total=%lldms snapshot(composite=%lld,clone=%lld,sel=%lld) "
+          "convert=%lld png=%lld zip=%lld close=%lld entries=%lld(reused=%lld,reusedBytes=%lld) file=%.2fMB%s",
+          (long long)d.totalMs, (long long)d.compositeMs, (long long)d.layerCloneMs, (long long)d.selMaskMs,
+          (long long)(d.convertNs / 1000000), (long long)(d.pngDeflateNs / 1000000),
+          (long long)(d.zipWriteNs / 1000000), (long long)(d.closeNs / 1000000),
+          (long long)d.pngCount, (long long)d.reusedEntries, (long long)d.reusedBytes,
+          mb, d.async ? " (async)" : "");
+#endif
 }
 
 // 一轮 PNG 写入的累计统计 (编码 / 写盘耗时, 条目数与字节数)
 struct RevpPngStats {
     qint64 encodeNs = 0;
+    qint64 convertNs = 0;
+    qint64 deflateNs = 0;
     qint64 writeNs = 0;
+    qint64 zipWriteNs = 0;
+    qint64 closeNs = 0;
     qint64 count = 0;
     qint64 bytes = 0;
+    qint64 reusedEntries = 0;
+    qint64 reusedBytes = 0;
 };
 
 // 图层 -> 栅格关键帧通道 (与 ReverieCoreAnimation.cpp 的 rasterChannelOf 同义,
@@ -324,7 +369,45 @@ QByteArray encodePngBytes(const QImage &img, int quality)
 struct RevpPngJob {
     QString name;
     QImage img;                                     // 拥有的快照 (可为空)
-    std::function<QByteArray(int quality)> produce; // 或: 工作线程现取现编码
+    std::function<QByteArray(int quality, qint64 *outConvertNs, qint64 *outDeflateNs)> produce; // 或: 工作线程现取现编码
+    mutable std::atomic<qint64> convertNs{0};
+    mutable std::atomic<qint64> deflateNs{0};
+
+    RevpPngJob() = default;
+    RevpPngJob(RevpPngJob &&o) noexcept
+        : name(std::move(o.name))
+        , img(std::move(o.img))
+        , produce(std::move(o.produce))
+        , convertNs(o.convertNs.load(std::memory_order_relaxed))
+        , deflateNs(o.deflateNs.load(std::memory_order_relaxed))
+    {}
+    RevpPngJob &operator=(RevpPngJob &&o) noexcept {
+        if (this != &o) {
+            name = std::move(o.name);
+            img = std::move(o.img);
+            produce = std::move(o.produce);
+            convertNs.store(o.convertNs.load(std::memory_order_relaxed), std::memory_order_relaxed);
+            deflateNs.store(o.deflateNs.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        }
+        return *this;
+    }
+    RevpPngJob(const RevpPngJob &o)
+        : name(o.name)
+        , img(o.img)
+        , produce(o.produce)
+        , convertNs(o.convertNs.load(std::memory_order_relaxed))
+        , deflateNs(o.deflateNs.load(std::memory_order_relaxed))
+    {}
+    RevpPngJob &operator=(const RevpPngJob &o) {
+        if (this != &o) {
+            name = o.name;
+            img = o.img;
+            produce = o.produce;
+            convertNs.store(o.convertNs.load(std::memory_order_relaxed), std::memory_order_relaxed);
+            deflateNs.store(o.deflateNs.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        }
+        return *this;
+    }
 };
 
 // 并行编码 + 串行写入 (zip 条目只能按顺序写) + 逐块释放。
@@ -346,11 +429,18 @@ void writeRevpPngJobs(KoStore *store, QVector<RevpPngJob> &jobs, RevpPngStats *s
         std::vector<QByteArray> encoded(static_cast<size_t>(count));
         const auto encodeSlot = [&encoded, &jobsRef, base, quality](int slot) {
             const RevpPngJob &job = jobsRef[base + slot];
+            qint64 cNs = 0;
+            qint64 dNs = 0;
             if (job.produce) {
-                encoded[size_t(slot)] = job.produce(quality);
+                encoded[size_t(slot)] = job.produce(quality, &cNs, &dNs);
             } else if (!job.img.isNull()) {
+                QElapsedTimer t;
+                t.start();
                 encoded[size_t(slot)] = encodePngBytes(job.img, quality);
+                dNs = t.nsecsElapsed();
             }
+            job.convertNs.store(cNs, std::memory_order_relaxed);
+            job.deflateNs.store(dNs, std::memory_order_relaxed);
         };
         if (stats) timer.start();
         if (count > 1) {
@@ -362,6 +452,10 @@ void writeRevpPngJobs(KoStore *store, QVector<RevpPngJob> &jobs, RevpPngStats *s
         }
         if (stats) stats->encodeNs += timer.nsecsElapsed();
         for (int i = 0; i < count; ++i) {
+            if (stats) {
+                stats->convertNs += jobsRef[base + i].convertNs.load(std::memory_order_relaxed);
+                stats->deflateNs += jobsRef[base + i].deflateNs.load(std::memory_order_relaxed);
+            }
             // 写完立刻释放该条目的数据源 (QImage / 工厂捕获的快照设备)
             jobs[base + i].img = QImage();
             jobs[base + i].produce = nullptr;
@@ -377,7 +471,11 @@ void writeRevpPngJobs(KoStore *store, QVector<RevpPngJob> &jobs, RevpPngStats *s
                 store->write(encoded[size_t(i)]);
                 store->close();
             }
-            if (stats) stats->writeNs += timer.nsecsElapsed();
+            if (stats) {
+                const qint64 w = timer.nsecsElapsed();
+                stats->zipWriteNs += w;
+                stats->writeNs += w;
+            }
         }
     }
     // 后续条目 (meta / 资产 / 录制) 恢复正常压缩
@@ -408,7 +506,9 @@ RevpPngJob makeSnapshotLayerJob(const QString &name, const KisPaintDeviceSP &dev
     if (!dev) return job;
     KisPaintDeviceSP snap = new KisPaintDevice(dev->colorSpace());
     snap->makeCloneFrom(dev, dev->exactBounds());
-    job.produce = [snap, docW, docH](int quality) {
+    job.produce = [snap, docW, docH](int quality, qint64 *outConvertNs, qint64 *outDeflateNs) {
+        QElapsedTimer t;
+        t.start();
         QImage img;
         if (!snap->exactBounds().isEmpty()) {
             img = snap->convertToQImage(nullptr, 0, 0, docW, docH);
@@ -417,7 +517,11 @@ RevpPngJob makeSnapshotLayerJob(const QString &name, const KisPaintDeviceSP &dev
             img = QImage(1, 1, QImage::Format_ARGB32_Premultiplied);
             img.fill(Qt::transparent);
         }
-        return encodePngBytes(img, quality);
+        if (outConvertNs) *outConvertNs = t.nsecsElapsed();
+        t.start();
+        QByteArray bytes = encodePngBytes(img, quality);
+        if (outDeflateNs) *outDeflateNs = t.nsecsElapsed();
+        return bytes;
     };
     return job;
 }
@@ -432,7 +536,9 @@ RevpPngJob makeKeyframePngJob(const QString &name, KisRasterKeyframeChannel *ch,
     if (!ch || !dev) return job;
     KisPaintDeviceSP frameDev = new KisPaintDevice(dev->colorSpace());
     ch->writeToDevice(time, frameDev);
-    job.produce = [frameDev, docW, docH](int quality) {
+    job.produce = [frameDev, docW, docH](int quality, qint64 *outConvertNs, qint64 *outDeflateNs) {
+        QElapsedTimer t;
+        t.start();
         QImage img;
         if (frameDev->exactBounds().isEmpty()) {
             img = QImage(1, 1, QImage::Format_ARGB32_Premultiplied);
@@ -440,8 +546,12 @@ RevpPngJob makeKeyframePngJob(const QString &name, KisRasterKeyframeChannel *ch,
         } else {
             img = frameDev->convertToQImage(nullptr, 0, 0, docW, docH);
         }
+        if (outConvertNs) *outConvertNs = t.nsecsElapsed();
         if (img.isNull()) return QByteArray();
-        return encodePngBytes(img, quality);
+        t.start();
+        QByteArray bytes = encodePngBytes(img, quality);
+        if (outDeflateNs) *outDeflateNs = t.nsecsElapsed();
+        return bytes;
     };
     return job;
 }
@@ -461,19 +571,33 @@ bool writeRevpStore(const QString &path,
         return false;
     }
 
+    QElapsedTimer writeTimer;
+
     // 1. Meta / Manifest JSON
+    if (outStats) writeTimer.start();
     if (store->open("meta.json")) {
         QJsonDocument doc(meta);
         QByteArray data = doc.toJson(QJsonDocument::Indented);
         store->write(data);
         store->close();
     }
+    if (outStats) {
+        const qint64 w = writeTimer.nsecsElapsed();
+        outStats->zipWriteNs += w;
+        outStats->writeNs += w;
+    }
 
     // layers.xml
     if (!layersXml.isEmpty()) {
+        if (outStats) writeTimer.start();
         if (store->open("layers.xml")) {
             store->write(layersXml.toUtf8());
             store->close();
+        }
+        if (outStats) {
+            const qint64 w = writeTimer.nsecsElapsed();
+            outStats->zipWriteNs += w;
+            outStats->writeNs += w;
         }
     }
 
@@ -483,11 +607,17 @@ bool writeRevpStore(const QString &path,
 
     // 5. Imported assets (音频/视频等二进制资源, 文件名即资源名)
     for (auto it = assets.constBegin(); it != assets.constEnd(); ++it) {
+        if (outStats) writeTimer.start();
         // 已压缩媒体不再做容器压缩 (大项目里这类资产可达几十 MB)
         store->setCompressionEnabled(!isPrecompressedAsset(it.key()));
         if (store->open("assets/" + it.key())) {
             store->write(it.value());
             store->close();
+        }
+        if (outStats) {
+            const qint64 w = writeTimer.nsecsElapsed();
+            outStats->zipWriteNs += w;
+            outStats->writeNs += w;
         }
     }
     store->setCompressionEnabled(true);
@@ -498,9 +628,15 @@ bool writeRevpStore(const QString &path,
 
     // 6. Recording
     if (!recordingBlob.isEmpty()) {
+        if (outStats) writeTimer.start();
         if (store->open("recording")) {
             store->write(recordingBlob);
             store->close();
+        }
+        if (outStats) {
+            const qint64 w = writeTimer.nsecsElapsed();
+            outStats->zipWriteNs += w;
+            outStats->writeNs += w;
         }
     }
 
@@ -557,7 +693,11 @@ bool writeRevpStore(const QString &path,
             QFile::remove(tmpPath);
         }
     }
-    if (outStats) outStats->writeNs += closeTimer.nsecsElapsed();
+    if (outStats) {
+        const qint64 c = closeTimer.nsecsElapsed();
+        outStats->closeNs += c;
+        outStats->writeNs += c;
+    }
 
     QFile f(path);
     return f.exists() && f.size() > 0;
@@ -709,6 +849,8 @@ bool ReverieCore::saveRevp(const QString &path, const QString &extraMetaJson, co
 
     // 预览/缩略图: 只有这一项需要整幅物化 (缩略图要从它缩放), 其余条目全部流式
     // 取图走 renderMergedQImage() (上游 1.3.3): 有描边图层时合成后才是正确画面
+    QElapsedTimer stageTimer;
+    stageTimer.start();
     const QImage comp = renderMergedQImage();
     const int docW = image->width();
     const int docH = image->height();
@@ -723,17 +865,25 @@ bool ReverieCore::saveRevp(const QString &path, const QString &extraMetaJson, co
 
         RevpPngJob thumb;
         thumb.name = QStringLiteral("thumbnail.png");
-        thumb.produce = [comp](int quality) {
-            const QImage t = comp.scaled(400, 400, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-            return encodePngBytes(t, quality);
+        thumb.produce = [comp](int quality, qint64 *outConvertNs, qint64 *outDeflateNs) {
+            QElapsedTimer t;
+            t.start();
+            const QImage tImg = comp.scaled(400, 400, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            if (outConvertNs) *outConvertNs = t.nsecsElapsed();
+            t.start();
+            QByteArray bytes = encodePngBytes(tImg, quality);
+            if (outDeflateNs) *outDeflateNs = t.nsecsElapsed();
+            return bytes;
         };
         pngJobs.append(std::move(thumb));
     }
+    const qint64 compositeMs = stageTimer.elapsed();
 
     // 图层: 引擎线程只做瓦片级克隆 (指针拷贝), readBytes + 色彩转换 + PNG 编码都在
     // 工作线程并行完成 —— 这才是大项目保存耗时的大头 (旧实现: 每层先分配并常驻
     // 一整幅 ARGB32, 4096 画幅 15 图层就是 960MB, 然后才逐个编码)。
     // 同步保存期间渲染线程正阻塞在本函数里, 图层设备不会被并发写。
+    stageTimer.restart();
     for (int i = 0; i < m_layers.size(); ++i) {
         const LayerEntry &e = m_layers[i];
         if (e.isGroup || e.nodeType == NodeTypeAdjustment) continue;
@@ -759,6 +909,7 @@ bool ReverieCore::saveRevp(const QString &path, const QString &extraMetaJson, co
                 kfCh, dev, t, docW, docH));
         }
     }
+    const qint64 layerCloneMs = stageTimer.elapsed();
 
     QJsonArray assetNames;
     for (auto it = m_revAssets.constBegin(); it != m_revAssets.constEnd(); ++it) {
@@ -768,6 +919,7 @@ bool ReverieCore::saveRevp(const QString &path, const QString &extraMetaJson, co
         meta["assets"] = assetNames;
     }
 
+    stageTimer.restart();
     QVector<RevpPngJob> selectionPngJobs;
     if (!m_storedSelections.isEmpty()) {
         QJsonArray selArr;
@@ -795,15 +947,32 @@ bool ReverieCore::saveRevp(const QString &path, const QString &extraMetaJson, co
         }
         meta["storedSelections"] = selArr;
     }
+    const qint64 selMaskMs = stageTimer.elapsed();
 
     const qint64 snapshotMs = QDateTime::currentMSecsSinceEpoch() - saveStartMs;
     RevpPngStats pngStats;
     const bool ok = writeRevpStore(path, meta, xml, std::move(pngJobs), m_revAssets, recordingBlob,
                                    std::move(selectionPngJobs), &pngStats);
     QFile out(path);
-    publishRevpStats(QDateTime::currentMSecsSinceEpoch() - saveStartMs, snapshotMs,
-                     pngStats.encodeNs, pngStats.writeNs, pngStats.count, pngStats.bytes,
-                     out.exists() ? out.size() : 0, false);
+    RevpDetailedStats d;
+    d.totalMs = QDateTime::currentMSecsSinceEpoch() - saveStartMs;
+    d.snapshotMs = snapshotMs;
+    d.encodeNs = pngStats.encodeNs;
+    d.writeNs = pngStats.writeNs;
+    d.pngCount = pngStats.count;
+    d.pngBytes = pngStats.bytes;
+    d.fileBytes = out.exists() ? out.size() : 0;
+    d.async = false;
+    d.compositeMs = compositeMs;
+    d.layerCloneMs = layerCloneMs;
+    d.selMaskMs = selMaskMs;
+    d.convertNs = pngStats.convertNs;
+    d.pngDeflateNs = pngStats.deflateNs;
+    d.zipWriteNs = pngStats.zipWriteNs;
+    d.closeNs = pngStats.closeNs;
+    d.reusedEntries = pngStats.reusedEntries;
+    d.reusedBytes = pngStats.reusedBytes;
+    publishRevpStats(d);
     return ok;
 }
 
@@ -951,6 +1120,8 @@ bool ReverieCore::saveRevpAsync(const QString &path, const QString &extraMetaJso
     // 注: convertToQImage 返回的 QImage 已经是独立分配的新图, 旧代码的 .copy() 纯属
     // 多余的一次整幅拷贝 —— 这里连同内存一起省掉。
     // 取图走 renderMergedQImage() (上游 1.3.3): 有描边图层时它负责合成, 且全流程只此一次物化。
+    QElapsedTimer stageTimer;
+    stageTimer.start();
     const QImage comp = renderMergedQImage();
     const int docW = image->width();
     const int docH = image->height();
@@ -965,13 +1136,21 @@ bool ReverieCore::saveRevpAsync(const QString &path, const QString &extraMetaJso
 
         RevpPngJob thumb;
         thumb.name = QStringLiteral("thumbnail.png");
-        thumb.produce = [comp](int quality) {
-            const QImage t = comp.scaled(400, 400, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-            return encodePngBytes(t, quality);
+        thumb.produce = [comp](int quality, qint64 *outConvertNs, qint64 *outDeflateNs) {
+            QElapsedTimer t;
+            t.start();
+            const QImage tImg = comp.scaled(400, 400, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            if (outConvertNs) *outConvertNs = t.nsecsElapsed();
+            t.start();
+            QByteArray bytes = encodePngBytes(tImg, quality);
+            if (outDeflateNs) *outDeflateNs = t.nsecsElapsed();
+            return bytes;
         };
         pngJobs.append(std::move(thumb));
     }
+    const qint64 compositeMs = stageTimer.elapsed();
 
+    stageTimer.restart();
     for (int i = 0; i < m_layers.size(); ++i) {
         const LayerEntry &e = m_layers[i];
         if (e.isGroup || e.nodeType == NodeTypeAdjustment) continue;
@@ -997,6 +1176,7 @@ bool ReverieCore::saveRevpAsync(const QString &path, const QString &extraMetaJso
                 kfCh, dev, t, docW, docH));
         }
     }
+    const qint64 layerCloneMs = stageTimer.elapsed();
 
     QJsonArray assetNames;
     for (auto it = m_revAssets.constBegin(); it != m_revAssets.constEnd(); ++it) {
@@ -1007,6 +1187,7 @@ bool ReverieCore::saveRevpAsync(const QString &path, const QString &extraMetaJso
     }
     const QMap<QString, QByteArray> assetsCopy = m_revAssets;
 
+    stageTimer.restart();
     QVector<RevpPngJob> selectionPngJobs;
     if (!m_storedSelections.isEmpty()) {
         QJsonArray selArr;
@@ -1034,20 +1215,37 @@ bool ReverieCore::saveRevpAsync(const QString &path, const QString &extraMetaJso
         }
         meta["storedSelections"] = selArr;
     }
+    const qint64 selMaskMs = stageTimer.elapsed();
 
     const qint64 snapshotMs = QDateTime::currentMSecsSinceEpoch() - saveStartMs;
     s_savingRevpAsync.store(true);
     // mutable: 任务表要按值 move 进线程体 (否则 std::move 退化成浅拷贝)
     std::thread([path, meta, xml, pngJobs = std::move(pngJobs), assetsCopy, recordingBlob,
                  selectionPngJobs = std::move(selectionPngJobs), saveStartMs,
-                 snapshotMs]() mutable {
+                 snapshotMs, compositeMs, layerCloneMs, selMaskMs]() mutable {
         RevpPngStats pngStats;
         const bool ok = writeRevpStore(path, meta, xml, std::move(pngJobs), assetsCopy,
                                        recordingBlob, std::move(selectionPngJobs), &pngStats);
         QFile out(path);
-        publishRevpStats(QDateTime::currentMSecsSinceEpoch() - saveStartMs, snapshotMs,
-                         pngStats.encodeNs, pngStats.writeNs, pngStats.count, pngStats.bytes,
-                         out.exists() ? out.size() : 0, true);
+        RevpDetailedStats d;
+        d.totalMs = QDateTime::currentMSecsSinceEpoch() - saveStartMs;
+        d.snapshotMs = snapshotMs;
+        d.encodeNs = pngStats.encodeNs;
+        d.writeNs = pngStats.writeNs;
+        d.pngCount = pngStats.count;
+        d.pngBytes = pngStats.bytes;
+        d.fileBytes = out.exists() ? out.size() : 0;
+        d.async = true;
+        d.compositeMs = compositeMs;
+        d.layerCloneMs = layerCloneMs;
+        d.selMaskMs = selMaskMs;
+        d.convertNs = pngStats.convertNs;
+        d.pngDeflateNs = pngStats.deflateNs;
+        d.zipWriteNs = pngStats.zipWriteNs;
+        d.closeNs = pngStats.closeNs;
+        d.reusedEntries = pngStats.reusedEntries;
+        d.reusedBytes = pngStats.reusedBytes;
+        publishRevpStats(d);
         s_savingRevpAsync.store(false);
         qDebug() << "saveRevpAsync finished, result=" << ok << "path=" << path;
     }).detach();

@@ -130,6 +130,15 @@ object PerfTrace {
     private var savePngBytes = -1L
     private var saveFileBytes = -1L
     private var saveWasAsync = false
+    private var saveCompositeMs = 0L
+    private var saveLayerCloneMs = 0L
+    private var saveSelMaskMs = 0L
+    private var saveConvertMs = 0L
+    private var savePngDeflateMs = 0L
+    private var saveZipWriteMs = 0L
+    private var saveCloseMs = 0L
+    private var saveReusedEntries = 0L
+    private var saveReusedBytes = 0L
 
     // 上一次液化 apply 的分段耗时 (由 liquifyStats 填入; lqCount 用于判断是否有新数据)
     private var lqCount = -1L
@@ -412,6 +421,15 @@ object PerfTrace {
         pngBytes: Long,
         fileBytes: Long,
         wasAsync: Boolean,
+        compositeMs: Long = 0L,
+        layerCloneMs: Long = 0L,
+        selMaskMs: Long = 0L,
+        convertMs: Long = 0L,
+        pngDeflateMs: Long = 0L,
+        zipWriteMs: Long = 0L,
+        closeMs: Long = 0L,
+        reusedEntries: Long = 0L,
+        reusedBytes: Long = 0L,
     ) {
         if (!enabled) return
         saveTotalMs = totalMs
@@ -422,6 +440,15 @@ object PerfTrace {
         savePngBytes = pngBytes
         saveFileBytes = fileBytes
         saveWasAsync = wasAsync
+        saveCompositeMs = compositeMs
+        saveLayerCloneMs = layerCloneMs
+        saveSelMaskMs = selMaskMs
+        saveConvertMs = convertMs
+        savePngDeflateMs = pngDeflateMs
+        saveZipWriteMs = zipWriteMs
+        saveCloseMs = closeMs
+        saveReusedEntries = reusedEntries
+        saveReusedBytes = reusedBytes
         hudCacheMs = 0L
     }
 
@@ -940,9 +967,22 @@ object PerfTrace {
             sb.append("--")
         } else {
             sb.append(saveTotalMs).append("ms 快照 ").append(saveSnapshotMs)
-                .append("/编码 ").append(saveEncodeMs).append("/写盘 ").append(saveWriteMs)
+            if (saveCompositeMs > 0 || saveLayerCloneMs > 0) {
+                sb.append("(合").append(saveCompositeMs).append("/克").append(saveLayerCloneMs).append(')')
+            }
+            sb.append("/编码 ").append(saveEncodeMs)
+            if (saveConvertMs > 0 || savePngDeflateMs > 0) {
+                sb.append("(转").append(saveConvertMs).append("/压").append(savePngDeflateMs).append(')')
+            }
+            sb.append("/写盘 ").append(saveWriteMs)
+            if (saveZipWriteMs > 0 || saveCloseMs > 0) {
+                sb.append("(写").append(saveZipWriteMs).append("/关").append(saveCloseMs).append(')')
+            }
             sb.append(' ').append(savePngCount).append("PNG ")
-                .append("%.0f".format(savePngBytes / 1048576.0)).append("MB→")
+            if (saveReusedEntries > 0) {
+                sb.append("(复用").append(saveReusedEntries).append(") ")
+            }
+            sb.append("%.0f".format(savePngBytes / 1048576.0)).append("MB→")
                 .append("%.0f".format(saveFileBytes / 1048576.0)).append("MB")
             if (saveWasAsync) sb.append(" async")
         }

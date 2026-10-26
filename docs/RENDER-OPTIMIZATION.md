@@ -1004,3 +1004,40 @@ Krita 继续负责最终正确性(形变 / 采样 / 像素 / 事务 / 撤销 / �
 **推论**: 之前读数是"合成占 1.46s, 下一步该缓存预览合成", 根因其实是转换而不是合成;
 缓存合成只能去掉 77ms, 因此**不再做**预览合成缓存。剩余大头转到 PNG deflate
 (全量保存 png 段合计 ≈2.0s, 4 线程并行后墙钟 ≈0.5s), 对应实施方案的 Phase 3.1 (libpng A/B)。
+
+### PNG 编码器: 默认改走 libpng 直写 (2026-10-26, Phase 3.1)
+
+**依据**: 取图快路径落地后, 全量保存里 PNG 段合计 ≈1.9s (4 线程并行墙钟 ≈0.5s), 成为唯一大头。
+Qt 的 PNG 写出固定走"逐行试 5 种 filter"的启发式, 再按 quality 反推 zlib 档位 (q70 -> level 2);
+绘画内容整行平坦/全透明极多, 启发式在这里基本是纯开销。
+
+**改法**: `encodePngBytes()` 增加 libpng 直写分支 (默认启用), `QImage::Format_ARGB32` 的内存序是
+`B,G,R,A`, 用 `png_set_bgr` 直接喂行指针, 省掉一次整幅 RGBA 重排; 灰度掩码
+(`Format_Grayscale8`, 存储选区条目) 保持 1 字节/像素写 grayscale PNG。
+
+**实测** (平板 4096×4096, 4 图层, 同一工程连续保存)
+
+| 编码器 | 保存总时长 | PNG 段合计 | 产物体积 |
+|---|---|---|---|
+| Qt (`pngenc=qt`) | 756–843ms | 1904–2096ms | 1.33MB |
+| libpng level 3 / filter none | 253ms | 390ms | 1.36MB |
+| libpng level 6 / filter sub | 507–523ms | 1295–1315ms | 0.41MB |
+| libpng level 9 / filter none | 631ms | 1466ms | 0.36MB |
+| **libpng level 6 / filter none (默认)** | **607–620ms** | **1459ms** | **0.36MB** |
+
+- 增量保存 (未改动, 复用 4 条目) 从 147ms 降到 125ms, 复用量 1.25MB -> 0.31MB。
+- zlib 档位在 3 -> 4 之间有断崖: level<=3 走 fast deflate (体积 ≈ Qt), level>=4 体积降到 1/3.7。
+- 默认取 level 6 / filter none: 比 Qt 快约 20%, 体积小 3.7x; 想要更快可 `pnglevel 3`, 想更小可 `pnglevel 9`。
+
+**正确性**: 同一工程分别用 Qt 与 libpng 保存, 6 个 PNG 条目 (4 图层 + preview + thumbnail)
+解码后逐像素一致 (md5 相同); 应用自读自写 (杀进程重开) 正常。灰度分支另用宿主 libpng 复刻
+同样的调用序列验证 (999x7 非 4 倍数宽度, 解码为 mode L 且像素逐点一致)。
+
+**开关**: `debug.reverie.pngenc=qt|libpng` (默认 libpng) / `debug.reverie.pnglevel=<1..9>` /
+`debug.reverie.pngfilter=none|sub|all`。
+
+### 兼容性回环 (2026-10-26)
+
+- 旧版本(1.6.0 tag 单独构建的 APK)打开新版本产出的 `.revp`: 4 图层 / 笔画完整, `loadRevp returned true`,
+  无自愈分支 (`isHealed=false`)。
+- 反方向 (1.6.0 产物 → 新版本打开另存) 见上一节: 逐字节一致。

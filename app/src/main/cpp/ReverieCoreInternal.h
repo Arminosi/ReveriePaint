@@ -49,6 +49,7 @@
 #include <KoPattern.h>
 #include <QMutex>
 #include <QImage>
+#include <png.h>
 
 class QThreadPool;
 

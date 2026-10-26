@@ -54,10 +54,8 @@ object PosePresets {
      */
     private val TUNED_PRESET_SHIFT: Map<String, Map<String, Float>> = mapOf(
         "cat" to mapOf(
-            // 端坐: 之前 -0.50 会把整只猫压到地面线以下 (前腿陷进地下), 交回几何贴地
-            LOAF to -0.60f,
-            // 蜷缩/伏卧: 需要把身体压到贴地才有"卧"的观感, 但压太狠会让口鼻埋进地面, 比农民揣浅一档
-            CURL to -0.45f,
+            // 端坐/伏卧现在由"骨盆下沉"(Hips_ty) 真正压低身体, 不再用整模型升降假动作;
+            // 只剩伸懒腰保留一点点构图微调
             STRETCH to -0.10f,
         ),
     )
@@ -67,13 +65,42 @@ object PosePresets {
     /** 弯曲滑杆键: 0~100 (百分比), 与预设自带弯曲量叠加 */
     const val CAT_CURL_KEY = "cat_curl"
 
-    /** 整体升降滑杆键: -100~100 -> -0.5~+0.5 (glTF +Y 向上), 用于把端坐/伏卧摆到地面 */
-    const val CAT_RISE_KEY = "cat_rise"
-
-    /** 猫猫整体升降量 (美术微调用), 与预设标定值叠加 */
-    fun catRootRise(modelType: String, jointAngles: Map<String, Float>): Float {
-        if (!isCat(modelType)) return 0f
-        return ((jointAngles[CAT_RISE_KEY] ?: 0f) / 100f).coerceIn(-0.5f, 0.5f)
+    /**
+     * 骨骼局部平移表 (键名 <骨骼>_tx/_ty/_tz, 单位见 UI: 面板滑杆 /100)
+     *
+     * 这是"骨盆下沉"这类自由度: 骨架只有旋转时，端坐/伏卧只能靠整模型升降假动作补偿;
+     * 有了平移就能让骨盆真正落到地面，网格相对地面形变，而不是整体挪位置。
+     */
+    fun buildTranslations(
+        modelType: String,
+        posePreset: String,
+        jointAngles: Map<String, Float>,
+    ): Map<String, FloatArray> {
+        val map = HashMap<String, FloatArray>()
+        fun put(bone: String, tx: Float, ty: Float, tz: Float) {
+            if (tx == 0f && ty == 0f && tz == 0f) return
+            map[bone] = floatArrayOf(tx, ty, tz)
+        }
+        if (isCat(modelType)) {
+            // 预设自带的骨盆下沉 (猫猫 Hips 局部 Y 约等于世界上方)
+            when (posePreset.lowercase()) {
+                SIT -> put("Hips", 0f, -0.12f, 0f)
+                CURL -> put("Hips", 0f, -0.22f, 0f)
+                LOAF -> put("Hips", 0f, -0.20f, 0f)
+            }
+        }
+        for ((key, value) in jointAngles) {
+            val (bone, axis) = when {
+                key.endsWith("_tx") -> key.removeSuffix("_tx") to 0
+                key.endsWith("_ty") -> key.removeSuffix("_ty") to 1
+                key.endsWith("_tz") -> key.removeSuffix("_tz") to 2
+                else -> continue
+            }
+            if (bone.isEmpty()) continue
+            val arr = map.getOrPut(bone) { FloatArray(3) }
+            arr[axis] += value / 100f
+        }
+        return map
     }
 
     /** 猫猫蜷缩弯曲量: 预设自带 + 面板滑杆, 归一到 0..1 */
@@ -104,6 +131,7 @@ object PosePresets {
             null,
             0f,
             catCurlBend(modelType, preset, emptyMap()),
+            buildTranslations(modelType, preset, emptyMap()),
         )
         val shift = skinned.restMinY - skinned.minYOf(mesh)
         if (groundShiftCache.size > 64) groundShiftCache.clear()

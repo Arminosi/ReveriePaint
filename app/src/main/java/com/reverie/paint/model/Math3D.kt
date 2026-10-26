@@ -42,6 +42,15 @@ object Math3D {
         return out
     }
 
+    /** 单位矩阵写入指定位置 */
+    fun identityInto(out: FloatArray, outOff: Int) {
+        for (i in 0 until 16) out[outOff + i] = 0f
+        out[outOff] = 1f
+        out[outOff + 5] = 1f
+        out[outOff + 10] = 1f
+        out[outOff + 15] = 1f
+    }
+
     /**
      * 4x4 矩阵相乘并写入调用方提供的缓冲: out[outOff..] = a[aOff..] * b[bOff..]
      *

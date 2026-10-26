@@ -131,6 +131,7 @@ class Skeleton3D(
         outSkinningMatrices: FloatArray,
         outWorldJointPositions: FloatArray? = null,
         worldScratch: FloatArray? = null,
+        jointTranslations: Map<String, FloatArray>? = null,
     ) {
         val n = joints.size
         if (n == 0) return
@@ -156,6 +157,8 @@ class Skeleton3D(
             val hasParent = joint.parentIndex in 0 until n
 
             val hasRotation = euler != null && (euler[0] != 0f || euler[1] != 0f || euler[2] != 0f)
+            // 骨骼局部平移 (骨盆升降等): 贴在局部矩阵右侧, 即 local * T * R, 位移在骨骼自身坐标系里
+            val tr = jointTranslations?.let { it[joint.name] ?: semanticKeys[i]?.let { k -> it[k] } }
             val local: FloatArray
             val localOff: Int
             if (hasRotation) {
@@ -165,6 +168,19 @@ class Skeleton3D(
                 Math3D.multiplyMMInto(tmp, rotTmpOff, tmp, rotYOff, tmp, rotXOff)
                 Math3D.rotationMatrixInto(tmp, rotZOff, euler[2], 0f, 0f, 1f)
                 Math3D.multiplyMMInto(tmp, rotAllOff, tmp, rotTmpOff, tmp, rotZOff)
+                if (tr != null) {
+                    tmp[rotAllOff + 12] = tr[0]
+                    tmp[rotAllOff + 13] = tr[1]
+                    tmp[rotAllOff + 14] = tr[2]
+                }
+                Math3D.multiplyMMInto(tmp, localRotOff, joint.localMatrix, 0, tmp, rotAllOff)
+                local = tmp
+                localOff = localRotOff
+            } else if (tr != null) {
+                Math3D.identityInto(tmp, rotAllOff)
+                tmp[rotAllOff + 12] = tr[0]
+                tmp[rotAllOff + 13] = tr[1]
+                tmp[rotAllOff + 14] = tr[2]
                 Math3D.multiplyMMInto(tmp, localRotOff, joint.localMatrix, 0, tmp, rotAllOff)
                 local = tmp
                 localOff = localRotOff
@@ -391,6 +407,7 @@ class SkinnedMesh3D(
         buffer: DeformBuffer? = null,
         groundShiftY: Float = 0f,
         spineBend: Float = 0f,
+        jointTranslations: Map<String, FloatArray>? = null,
     ): Mesh3D {
         if (skeleton == null || jointIndices == null || jointWeights == null || skeleton.count == 0) {
             return baseMesh
@@ -408,6 +425,7 @@ class SkinnedMesh3D(
             skinningMatrices,
             outWorldJointPositions,
             usableBuffer?.worldMatrices,
+            jointTranslations,
         )
 
         val origPositions = baseMesh.positions
@@ -461,7 +479,7 @@ class SkinnedMesh3D(
             if (totalWeight < 0.001f) {
                 // 未分配权重的顶点保持原位
                 defPositions[v * 3] = px
-                defPositions[v * 3 + 1] = py + dy
+                defPositions[v * 3 + 1] = py
                 defPositions[v * 3 + 2] = pz
                 if (hasNormals) {
                     defNormals[v * 3] = origNormals[v * 3]
@@ -474,7 +492,7 @@ class SkinnedMesh3D(
             // 权重归一化: 部分导出器只写 3 个有效权重 / 权重和不足 1, 不归一化会让顶点被"吸"向原点
             val invW = 1f / totalWeight
             defPositions[v * 3] = fx * invW
-            defPositions[v * 3 + 1] = fy * invW + dy
+            defPositions[v * 3 + 1] = fy * invW
             defPositions[v * 3 + 2] = fz * invW
 
             if (hasNormals) {
@@ -514,6 +532,15 @@ class SkinnedMesh3D(
                     outWorldJointPositions[i + 1] = by * r[2] + r[1]
                     outWorldJointPositions[i + 2] = r[0]
                 }
+            }
+        }
+
+        // 整体升降放在弯曲之后: 弯曲会非线性改 y, 先加位移会让贴地量算不准
+        if (dy != 0f) {
+            var k = 1
+            while (k < defPositions.size) {
+                defPositions[k] += dy
+                k += 3
             }
         }
 

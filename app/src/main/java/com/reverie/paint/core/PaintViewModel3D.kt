@@ -133,14 +133,14 @@ internal fun PaintViewModel.deformState(state: Model3DState, buffer: DeformBuffe
     if (skinned != null && skeleton != null && skinned.jointIndices != null && skinned.jointWeights != null) {
         val euler = PosePresets.buildEulerMap(state.modelType, state.posePreset, state.jointAngles)
         // 贴地量只由"预设"决定, 不随用户微调角度漂移
-        val shift = PosePresets.groundShiftForPreset(skinned, state.modelType, state.posePreset) +
-            PosePresets.catRootRise(state.modelType, state.jointAngles)
+        val shift = PosePresets.groundShiftForPreset(skinned, state.modelType, state.posePreset)
+        val translations = PosePresets.buildTranslations(state.modelType, state.posePreset, state.jointAngles)
         val outJoints = when {
             buffer != null && buffer.worldJoints.size >= skeleton.count * 3 -> buffer.worldJoints
             else -> FloatArray(skeleton.count * 3)
         }
         val bend = PosePresets.catCurlBend(state.modelType, state.posePreset, state.jointAngles)
-        val mesh = skinned.createDeformedMesh(euler, outJoints, buffer, shift, bend)
+        val mesh = skinned.createDeformedMesh(euler, outJoints, buffer, shift, bend, translations)
         return Deformed3D(mesh, skeleton, outJoints)
     }
     // 无骨骼蒙皮但已由 glTF/GLB 解析器读出的网格 (静态道具模型): 直接用它, 不要再走 OBJ 兜底

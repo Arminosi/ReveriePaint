@@ -941,3 +941,34 @@ Krita 继续负责最终正确性(形变 / 采样 / 像素 / 事务 / 撤销 / �
 - [ ] 真机(取数): 大画布连续绘制一段, 记录 `脏比 / 重传 MB/帧 / draw p95` 与 logcat 窗口行
 - [ ] 真机(取数): 保存一次大项目, 记录 `save 总/快照/编码/写盘` 与 `PNG→体积`
 
+
+## 12. 保存性能 (.revp)
+
+### 链路
+
+- 引擎线程: 元数据 -> 预览合成 -> 逐层瓦片克隆并投递 -> 选区掩码 -> 资产/录制
+- 工作线程池: 按 bounds 转换 + PNG 编码 (在飞上限 = 池线程数 x 2)
+- 写盘线程: 严格按条目顺序写入 `.tmp`, 末尾 EOCD 校验 + fsync + 原子 rename
+- 实现: `ReverieCoreIO.cpp` 的 `RevpSavePipeline`, 同步与异步保存共用
+
+### 不得回退的既有优化
+
+- `renderMergedQImage()` 不再 `.copy()` 整幅
+- 稀疏图层只转换 `exactBounds()` 与画布的交集, 容器内仍是整幅尺寸 PNG
+- `preview.png` 长边默认上限 2048 (`debug.reverie.previewmax`), 自愈分支会把降采样预览放大回画布尺寸
+- 条目名与顺序是兼容性契约, 不得改动
+
+### 增量保存
+
+- 开关 `debug.reverie.saveincr` (默认关闭), 自检 `debug.reverie.saveverify`
+- 判据: node 指针 + 图层名 + `KisPaintDevice::sequenceNumber()` + 旧文件 size/mtime
+- 只复用 `layer_*.png`, 描边层 / `frame_*` / 预览 / 缩略图每次重编码
+- 缓存最多 4 个路径, `newDocument` / `closeDocument` / `loadRevp` 时清空
+- 任一条件不满足即退回全量编码, 保存不会因缓存失败
+
+### sequenceNumber 写点审计结论
+
+- `writeBytes` / `fill` / `clear` / `fastBitBlt` / `convertFromQImage` 在 Krita 内部都会 `cache()->invalidate()`, 序号自动递增
+- 唯一绕过的是迭代器直写 (`ReverieCoreFilterPlugins.cpp` 的卷积, `ReverieMaskingBrushRenderer.cpp`), 其调用方均随后 `setDirty`
+- `moveTo` 的调用点 (`ReverieCoreSelectionTools.cpp`) 均随后 `setDirty`
+- 仍需真机 `saveverify` 全矩阵压测后才能把默认值改为开启

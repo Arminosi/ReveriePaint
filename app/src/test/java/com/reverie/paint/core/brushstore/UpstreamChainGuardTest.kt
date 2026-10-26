@@ -22,7 +22,7 @@ import java.io.File
  *     `val p = currentBrushParamsFromVm(...)` 一行替换为同文件 currentBrushParamsFromVm 函数体中
  *     `BrushParams(` 到对应 `)` 的构造表达式（逐行，参数名还原 dc/sc/spc，命名参数标签位保持）
  *  d) restore 区域跳过：BrushStoreVm.prepareRestore 一行（S4）
- *  e) reset 区域跳过：v2 注释 + BrushStoreVm.reset 两行（S6.1）
+ *  e) reset 区域跳过：v2 注释 + 条件短路行（`if (BrushStoreVm.reset(...)) return`）两行（S6.1 / #136）
  *  f) replay_setup 区域：无额外登记
  * 除以上登记外，任何一行差异都必须 FAIL。
  */
@@ -51,8 +51,8 @@ class UpstreamChainGuardTest {
         "BrushStoreVm.prepareRestore(this, preset)",
     )
     private val skipReset = setOf(
-        "// v2：先复位存储（清覆盖/物化回快照），再继续下面的上游重置逻辑（拷 asset/删记录/defaultParams）",
-        "BrushStoreVm.reset(this, presetName)",
+        "// v2：先复位存储；白名单（import/abr）连记录一起回到导入态并短路，其余继续走上游逻辑",
+        "if (BrushStoreVm.reset(this, presetName)) return",
     )
     private val skipSave = setOf(
         "// v2：只落盘（stage + 防抖 commit/materialize），引擎重载由下面的旧块负责",

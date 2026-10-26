@@ -2888,17 +2888,14 @@ class CanvasTouchView(context: Context) : View(context) {
                     // 逐帧路径复用顶点缓冲; 形变结果自带骨架与关节世界坐标,
                     // 骨架覆盖层永远画在当前图层自己的骨架上 (旧实现命中缓存时不刷新 → 错位)
                     val deformed = v.getInteractiveDeformed(state)
-                    // 已烘焙上位的图层由引擎参与正常合成 (会被上层遮挡), 这里不再叠加
-                    if (!v.is3DLayerBaked(layer.id)) {
-                        canvas3DDrawer.draw(
-                            canvas,
-                            deformed.mesh,
-                            state,
-                            imgW.toFloat(),
-                            imgH.toFloat(),
-                            layer.opacity.toFloat(),
-                        )
-                    }
+                    canvas3DDrawer.draw(
+                        canvas,
+                        deformed.mesh,
+                        state,
+                        imgW.toFloat(),
+                        imgH.toFloat(),
+                        layer.opacity.toFloat(),
+                    )
                     if (layer.id == cur3DLayer?.id && v.isCurrentLayer3D && v.active3DInteractionMode == Interaction3DMode.BONE) {
                         canvas3DDrawer.drawBones(
                             canvas,
@@ -4965,8 +4962,6 @@ class CanvasTouchView(context: Context) : View(context) {
                         v.isInteracting3D = true
                         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
                             touch3DStartState = state.copy()
-                            // 抬手后图层的烘焙内容会让位给实时预览, 避免重影
-                            v.begin3DLivePreview(state.layerId)
                         }
                         if (fingerCount >= 2) {
                             touch3DIsPinch = true
@@ -5067,7 +5062,6 @@ class CanvasTouchView(context: Context) : View(context) {
                             if (start != null && end != null && start != end) {
                                 v.push3DUndoState(start)
                             }
-                            v.currentLayer3DState?.let { v.schedule3DBake(it.layerId) }
                         }
                         touch3DStartState = null
                         touch3DIsPinch = false

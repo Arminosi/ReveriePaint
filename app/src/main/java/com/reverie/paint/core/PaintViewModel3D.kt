@@ -393,7 +393,6 @@ internal fun PaintViewModel.create3DLayer(
             ensure3DLayerClearedInCore(layer.id)
             prewarm3DModel(initialState)
             active3DSelectedJointName = null
-            schedule3DBake(layer.id)
             showActionToast(R.string.toast_3d_layer_created, R.drawable.ic_eye)
         }
     }) {
@@ -476,7 +475,6 @@ internal fun PaintViewModel.create3DLayerFromFile(
             active3DLayers = active3DLayers + (layer.id to initialState)
             ensure3DLayerClearedInCore(layer.id)
             active3DSelectedJointName = null
-            schedule3DBake(layer.id)
             showActionToast(R.string.toast_3d_layer_created, R.drawable.ic_eye)
         }
     }) {
@@ -605,8 +603,6 @@ internal fun PaintViewModel.reset3DZoom() {
 internal fun PaintViewModel.update3DState(updated: Model3DState) {
     active3DLayers = active3DLayers + (updated.layerId to updated)
     com.reverie.paint.ui.painting.canvas.CanvasTouchView.activeTouchView?.postInvalidate()
-    // 静止后自动烘焙上位, 让 3D 图层和普通图层一样参与图层顺序 (被上层遮挡)
-    schedule3DBake(updated.layerId)
 }
 
 /**
@@ -639,7 +635,7 @@ internal fun PaintViewModel.set3DRenderMode(mode: RenderMode3D) {
 /**
  * 异步将 3D 烘焙结果写回底层 Krita 颜料图层 (在工作线程渲染，彻底杜绝主线程阻塞)
  */
-internal fun PaintViewModel.commit3DLayerPixels(layerId: Long, onDone: (() -> Unit)? = null) {
+internal fun PaintViewModel.commit3DLayerPixels(layerId: Long) {
     val state = active3DLayers[layerId] ?: return
     val layerIdx = layers.indexOfFirst { it.id == layerId }
     if (layerIdx < 0) return
@@ -654,7 +650,6 @@ internal fun PaintViewModel.commit3DLayerPixels(layerId: Long, onDone: (() -> Un
 
         runCore(render = true, after = {
             notifyLayerChanged(forceThumbs = false)
-            onDone?.invoke()
         }) {
             val targetIdx = layers.indexOfFirst { it.id == layerId }
             if (targetIdx >= 0) {
@@ -679,7 +674,6 @@ internal fun PaintViewModel.rasterize3DLayer(layerId: Long) {
     commit3DLayerPixels(layerId)
     active3DLayers = active3DLayers - layerId
     interactiveSlots.remove(layerId)
-    baked3DLayers = baked3DLayers - layerId
     active3DSelectedJointName = null
     live3DPreviewBitmap = null
     showActionToast(R.string.toast_3d_rasterized, R.drawable.ic_layers)

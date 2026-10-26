@@ -6256,11 +6256,6 @@ class PaintViewModel : ViewModel() {
     var active3DSelectedJointName by mutableStateOf<String?>(null)
     /** 骨骼拖拽锁定的旋转轴: -1 = 未锁定, 0 = 俯仰环(X), 1 = 偏转环(Y) */
     var active3DBoneAxis by mutableStateOf(-1)
-    /** 已经"烘焙上位"到引擎图层的 3D 图层: 它们参与正常图层合成 (会被上层遮挡), 不再叠加绘制 */
-    var baked3DLayers by mutableStateOf<Set<Long>>(emptySet())
-        internal set
-    internal var bake3DJob: kotlinx.coroutines.Job? = null
-    internal var bake3DGeneration = 0
     var live3DPreviewBitmap by mutableStateOf<android.graphics.Bitmap?>(null)
     var isInteracting3D by mutableStateOf(false)
     var show3DModelPicker by mutableStateOf(false)

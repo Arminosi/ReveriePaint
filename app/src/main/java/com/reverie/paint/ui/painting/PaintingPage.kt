@@ -229,6 +229,12 @@ fun PaintingPage(
             targetLayerDetailId = null
         }
     }
+    // 快捷图层小窗 (常驻浮窗) 打开时也要立即取一遍缩略图, 否则小窗会停在空白格子上
+    LaunchedEffect(vm.quickLayerWindowOpen) {
+        if (vm.quickLayerWindowOpen) {
+            vm.refreshLayerThumbs(force = true)
+        }
+    }
     var settingsPanelOpen by remember { mutableStateOf(false) }
     var colorPanelOpen by remember { mutableStateOf(false) }
     var drawingGuidePanelOpen by remember { mutableStateOf(false) }

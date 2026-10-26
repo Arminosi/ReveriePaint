@@ -49,6 +49,11 @@ internal fun PaintViewModel.thumbFor(
     return if (b != null && !b.isRecycled) b else null
 }
 
+/** 图层缩略图现在是否真的看得见: 完整图层面板, 或常驻的快捷图层小窗。
+ *  刷新门控用它而不是只用 layerPanelOpen —— 小窗开着时同样需要缩略图。 */
+internal val PaintViewModel.layerThumbsVisible: Boolean
+    get() = layerPanelOpen || quickLayerWindowOpen
+
 internal fun PaintViewModel.clearLayerThumbs() {
     layerThumbStates.clear()
     layerThumbIndexName.clear()
@@ -58,6 +63,10 @@ internal fun PaintViewModel.clearLayerThumbs() {
 private var thumbRefreshJob: Job? = null
 @Volatile
 private var isRefreshingThumbs = false
+
+/** 渲染中的刷新期间又来了请求: 收尾后补跑一次 (见 doRefreshLayerThumbs) */
+@Volatile
+private var thumbRefreshPending = false
 
 /** Thumbnail refresh debounce: thumbs are only visible in the layer panel,
  *  which is never open while actively painting, so we skip refreshes when
@@ -81,7 +90,7 @@ internal fun PaintViewModel.engineBusy(): Boolean =
 /** (Re)generate layer thumbnails on the render thread. Debounced; triggers
  *  inside the window keep postponing the refresh until the user pauses. */
 internal fun PaintViewModel.refreshLayerThumbs(force: Boolean = false) {
-    if (!force && !layerPanelOpen) {
+    if (!force && !layerThumbsVisible) {
         return
     }
     // 正在落笔/液化/滤镜: 推迟到引擎空闲再刷, 别和笔画抢渲染线程
@@ -92,7 +101,7 @@ internal fun PaintViewModel.refreshLayerThumbs(force: Boolean = false) {
             viewModelScope.launch {
                 repeat(THUMB_DEFER_MAX_TICKS) {
                     delay(THUMB_DEFER_POLL_MS)
-                    if (!vm.layerPanelOpen) return@launch
+                    if (!vm.layerThumbsVisible) return@launch
                     if (!vm.engineBusy()) {
                         lastThumbRefreshNs = System.nanoTime()
                         vm.doRefreshLayerThumbs()
@@ -100,7 +109,7 @@ internal fun PaintViewModel.refreshLayerThumbs(force: Boolean = false) {
                     }
                 }
                 // 一直没闲下来也要刷一次, 否则面板会长期停留在旧缩略图
-                if (vm.layerPanelOpen) {
+                if (vm.layerThumbsVisible) {
                     lastThumbRefreshNs = System.nanoTime()
                     vm.doRefreshLayerThumbs()
                 }
@@ -114,7 +123,7 @@ internal fun PaintViewModel.refreshLayerThumbs(force: Boolean = false) {
             viewModelScope.launch {
                 delay(THUMB_REFRESH_DEBOUNCE_MS)
                 lastThumbRefreshNs = System.nanoTime()
-                if (layerPanelOpen) {
+                if (layerThumbsVisible) {
                     doRefreshLayerThumbs()
                 }
             }
@@ -125,9 +134,22 @@ internal fun PaintViewModel.refreshLayerThumbs(force: Boolean = false) {
 }
 
 private fun PaintViewModel.doRefreshLayerThumbs() {
-    if (isRefreshingThumbs) return
+    if (isRefreshingThumbs) {
+        // 上一轮还在引擎线程上渲染: 直接 return 会把这次请求吞掉, 面板就停在
+        // 旧/空缩略图上直到下一次有人触发 (典型场景: 打开工程时面板已开, 面板
+        // 打开触发的刷新与 loadRevp 抢同一个引擎队列)。记一个待办, 等当前这轮
+        // 收尾后补跑一次。
+        thumbRefreshPending = true
+        return
+    }
     isRefreshingThumbs = true
-    runCore(render = false, after = { isRefreshingThumbs = false }) {
+    runCore(render = false, after = {
+        isRefreshingThumbs = false
+        if (thumbRefreshPending) {
+            thumbRefreshPending = false
+            if (layerThumbsVisible) doRefreshLayerThumbs()
+        }
+    }) {
         try {
             val n = ReverieCoreBridge.layerCount()
             if (n <= 0) return@runCore

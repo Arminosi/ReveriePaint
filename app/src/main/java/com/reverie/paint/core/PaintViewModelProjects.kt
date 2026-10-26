@@ -512,6 +512,10 @@ internal fun PaintViewModel.loadProject(p: com.reverie.paint.model.Project) {
             canvasCreatedTime = if (p.lastModified > 0) p.lastModified else System.currentTimeMillis()
             colorMode = p.colorMode
             syncLayersFromNative()
+            // 工程刚载入时图层面板可能早已打开: 面板打开时的强制刷新跑在 loadRevp 之前,
+            // 那一刻 layerCount() 还是 0 (或旧文档), 之后没人再触发, 面板就停在透明缩略图上,
+            // 直到第一次落笔 (afterLayerMutation) 才恢复。这里补一次。
+            refreshLayerThumbs(force = layerThumbsVisible)
             val targetLayer = p.selectedLayerIndex
             if (targetLayer in 0 until layers.size && currentLayerIndex != targetLayer) {
                 currentLayerIndex = targetLayer

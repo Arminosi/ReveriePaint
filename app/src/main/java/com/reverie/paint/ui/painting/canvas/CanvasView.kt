@@ -391,7 +391,10 @@ fun CanvasView(
             )
         }
 
-        if (vm.frontBufferPredictionEnabled && FrontBufferProbe.isSupported()) {
+        // 存在 3D 参考图层时不开前缓冲 overlay: 它是盖在主视图之上的独立 SurfaceView,
+        // 落笔期间的覆盖块会把主视图里叠加绘制的 3D 内容盖掉 (表现为"脏块擦掉 3D, 抬笔又恢复")。
+        // 3D 图层存在时退回普通渲染, 只牺牲一点墨迹延迟。
+        if (vm.frontBufferPredictionEnabled && vm.active3DLayers.isEmpty() && FrontBufferProbe.isSupported()) {
             androidx.compose.ui.viewinterop.AndroidView(
                 modifier = Modifier.fillMaxSize(),
                 factory = { ctx ->

@@ -690,7 +690,8 @@ internal fun skipReplayEventPayload(
             r.skipStr() // name
         }
         TOOL_OP -> {
-            when (r.u8()) {
+            val op = r.u8()
+            when (op) {
                 com.reverie.paint.model.RecordingEvents.T_PATTERN_FILL -> {
                     r.skip(29) // layer u32, wholeLayer u8, x u32, y u32, tol u8, merged u8, expand u32, feather u8, closeGap u8, opacity f64
                     r.skipStr() // compositeOp
@@ -723,6 +724,16 @@ internal fun skipReplayEventPayload(
                 T_PRESET_SELECT -> {
                     r.skip(2) // idx u16
                     r.skipStr() // name
+                }
+                // #127 W-12 的 V2 变体：idx u16 + name + presetId + 有效字节 md5。
+                // #128 的跳读函数晚于它合入，只认识了 V1，于是这几段字符串被当成后续事件的
+                // type 字节读掉——不会抛错，只会静默错位：effectiveTotalMs 返回 -1（空闲压缩
+                // 失效、回放退回墙钟），导出的可视检查点数随之算错。
+                com.reverie.paint.model.RecordingEvents.T_PRESET_SELECT_V2 -> {
+                    r.skip(2) // idx u16 (0xFFFF 哨兵)
+                    r.skipStr() // name
+                    r.skipStr() // presetId
+                    r.skipStr() // 有效字节 md5
                 }
                 T_TEXT -> {
                     r.skip(12) // x/y/fs 3*f32
@@ -758,9 +769,30 @@ internal fun skipReplayEventPayload(
                     val n = r.u16()
                     r.skip(n * 2)
                 }
+                // 未知子类型：payload 长度不可知，继续往下读一定错位（且不会报错）。
+                // 明确失败好过静默算错——effectiveTotalMs 会降级为 -1，导出走 onError。
+                else -> unknownReplayEvent("tool_op", op)
             }
         }
+        else -> unknownReplayEvent("event", type)
     }
+}
+
+/**
+ * 跳读时遇到未登记的事件类型或工具子类型。
+ *
+ * 只在字节流里出现、而 [skipReplayEventPayload] 没登记时触发。payload 长度无从得知，
+ * 继续读会把 payload 当成下一条事件的 type，整段事件流从此错位——op 50
+ * （`T_PRESET_SELECT_V2`）漏登记时就是这样：不抛错，只是导出帧数和空闲压缩时长全错。
+ * 所以这里记一条诊断后直接抛，让调用方明确降级（effectiveTotalMs → -1、导出 → onError），
+ * 下次新增事件类型忘了登记会立刻暴露，而不是悄悄坏掉。
+ */
+private fun unknownReplayEvent(scope: String, op: Int): Nothing {
+    com.reverie.paint.core.brushstore.BrushDiagnostics.log(
+        "replay_skip_unknown",
+        "scope" to scope, "op" to op,
+    )
+    throw IllegalStateException("unknown replay $scope op=$op: payload length unknown, stream desynced")
 }
 
 internal fun PaintViewModel.dispatchReplayLocked(

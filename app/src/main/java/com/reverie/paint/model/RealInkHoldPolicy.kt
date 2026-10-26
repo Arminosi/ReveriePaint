@@ -25,6 +25,15 @@ internal object RealInkHoldPolicy {
         tool == Tool.BRUSH && effTool == Tool.BRUSH
 
     /**
+     * 前缓冲不透明烘焙与 3D 图层门控支持判定:
+     * - 当无棋盘格背景时, 前缓冲无法执行不透明烘焙 (半透明笔刷会露底/与普通模式不同色)
+     * - 当有可见 3D 图层时, 前缓冲置顶会遮挡 3D 图层
+     * 两种情况均不支持按住真墨, 退回普通模式渲染。
+     */
+    fun bakeSupported(hasCheckerboard: Boolean, has3DVisible: Boolean): Boolean =
+        hasCheckerboard && !has3DVisible
+
+    /**
      * 抬笔追赶判定: 当且仅当笔已抬起、追赶已激活、目标版本号已落定且窗口已画到或超过目标版本时,
      * 才允许清空前缓冲。
      */
@@ -51,6 +60,7 @@ internal object RealInkHoldPolicy {
      * @param settingsPanelOpen 设置半模态
      * @param moreToolsOpen 更多工具半模态
      * @param drawingGuidePanelOpen 绘图辅助悬浮窗 (不挡按住; 参数保留以免接线处漏改)
+     * @param modalDialogOpen 模态对话框/文字输入/全局对话框/图层拖拽浮层等全屏阻挡状态
      */
     fun overlayPanelsBlockHold(
         brushPanelBlocking: Boolean,
@@ -58,10 +68,11 @@ internal object RealInkHoldPolicy {
         colorPanelBlocking: Boolean,
         settingsPanelOpen: Boolean,
         moreToolsOpen: Boolean,
-        drawingGuidePanelOpen: Boolean,
+        drawingGuidePanelOpen: Boolean = false,
+        modalDialogOpen: Boolean = false,
     ): Boolean {
         // drawingGuidePanelOpen 故意不参与: 见 KDoc。
         return brushPanelBlocking || layerPanelBlocking || colorPanelBlocking ||
-            settingsPanelOpen || moreToolsOpen
+            settingsPanelOpen || moreToolsOpen || modalDialogOpen
     }
 }

@@ -199,6 +199,8 @@ fun PaintingPage(
 
     var canvasEditMenuOpen by remember { mutableStateOf(false) }
     var canvasEditMenuCustomizeOpen by remember { mutableStateOf(false) }
+    var showExitSaveDialog by remember { mutableStateOf(false) }
+    var showDiscardConfirmDialog by remember { mutableStateOf(false) }
     var isZenMode by remember { mutableStateOf(false) }
 
     // Popup panels
@@ -756,6 +758,11 @@ fun PaintingPage(
                     settingsPanelOpen = settingsPanelOpen,
                     moreToolsOpen = moreToolsOpen,
                     drawingGuidePanelOpen = drawingGuidePanelOpen,
+                    modalDialogOpen = textDialogPos != null ||
+                        showExitSaveDialog || showDiscardConfirmDialog ||
+                        vm.showLowStorageDialog || vm.showToolbarSqueezedDialog ||
+                        canvasEditMenuCustomizeOpen || vm.shadingAssistDialogOpen ||
+                        vm.activeLayerDrag != null,
                 ),
                 drawingGuidePanelOpen = drawingGuidePanelOpen,
                 filterSessionActive = (filterController != null),
@@ -842,9 +849,6 @@ fun PaintingPage(
                 )
             }
         }
-
-        var showExitSaveDialog by remember { mutableStateOf(false) }
-        var showDiscardConfirmDialog by remember { mutableStateOf(false) }
 
         val requestExit: () -> Unit = {
             if (vm.hasUnsavedChanges()) {

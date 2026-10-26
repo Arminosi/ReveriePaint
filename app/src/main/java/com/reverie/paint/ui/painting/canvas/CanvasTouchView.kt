@@ -3213,10 +3213,13 @@ class CanvasTouchView(context: Context) : View(context) {
         rebuildUiExclusionSnapshot()
         ensureViewTransform()
         latchFrontBufferReady(v)
+        val has3DVisible = v.layers.any { it.visible && v.active3DLayers.containsKey(it.id) }
+        val hasCheckerboard = checkerboardPaint != null
         var allowed = v.frontBufferPredictionEnabled && (!hasSymmetry || v.mirrorGate.isQueueing) &&
             v.displayTiles.drawable() != null && FrontBufferProbe.realInkHoldAllowed() &&
             strokeFbReady && !v.anim.shiftTraceActive &&
-            RealInkHoldPolicy.isRealInkTool(tool, effTool())
+            RealInkHoldPolicy.isRealInkTool(tool, effTool()) &&
+            RealInkHoldPolicy.bakeSupported(hasCheckerboard, has3DVisible)
         // compose: 覆盖层 (像素网格/绘图辅助线/动态导引线/光标) 由前缓冲按窗口同一顺序画进去 ——
         // 不挖孔、不建掩码、不让窗口重画、吸附线也按住。只有蚂蚁线可见或画布旋转/镜像时这一笔退回 H-min。
         val modeFlag = FrontBufferFeatureFlags.holeMode

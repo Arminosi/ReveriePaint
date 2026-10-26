@@ -119,4 +119,31 @@ class RealInkHoldPolicyTest {
         }
         assertFalse(RealInkHoldPolicy.overlayPanelsBlockHold(false, false, false, false, false, drawingGuidePanelOpen = false))
     }
+
+    @Test
+    fun `bakeSupported truth table`() {
+        // hasCheckerboard = true, has3DVisible = false -> true
+        assertTrue(RealInkHoldPolicy.bakeSupported(hasCheckerboard = true, has3DVisible = false))
+        // hasCheckerboard = false, has3DVisible = false -> false
+        assertFalse(RealInkHoldPolicy.bakeSupported(hasCheckerboard = false, has3DVisible = false))
+        // hasCheckerboard = true, has3DVisible = true -> false
+        assertFalse(RealInkHoldPolicy.bakeSupported(hasCheckerboard = true, has3DVisible = true))
+        // hasCheckerboard = false, has3DVisible = true -> false
+        assertFalse(RealInkHoldPolicy.bakeSupported(hasCheckerboard = false, has3DVisible = true))
+    }
+
+    @Test
+    fun `modal dialog blocks hold even when all panels are closed`() {
+        assertTrue(
+            RealInkHoldPolicy.overlayPanelsBlockHold(
+                brushPanelBlocking = false,
+                layerPanelBlocking = false,
+                colorPanelBlocking = false,
+                settingsPanelOpen = false,
+                moreToolsOpen = false,
+                drawingGuidePanelOpen = false,
+                modalDialogOpen = true,
+            )
+        )
+    }
 }

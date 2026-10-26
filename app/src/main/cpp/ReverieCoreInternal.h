@@ -11,6 +11,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QBuffer>
 #include <QElapsedTimer>
 #include <QJsonDocument>
@@ -101,6 +102,7 @@ inline bool rpDebugFlag(const char *propName, const char *envName, bool defVal)
  *  上限 4 线程 (移动端 4 大核已能打满 zlib/warp 吞吐, 更多只增功耗与发热)。
  *  定义于 ReverieCoreDocument.cpp。 */
 QThreadPool *reverieBackgroundPool();
+void revpClearSaveCache();
 #include <algorithm>
 #include <queue>
 #include <kis_clone_layer.h>

@@ -392,6 +392,8 @@ struct RevpPngJob {
     std::function<QByteArray(int quality, qint64 *outConvertNs, qint64 *outDeflateNs)> produce; // 或: 工作线程现取现编码
     mutable std::atomic<qint64> convertNs{0};
     mutable std::atomic<qint64> deflateNs{0};
+    bool isReused = false;
+    int seq = -1;
 
     RevpPngJob() = default;
     RevpPngJob(RevpPngJob &&o) noexcept
@@ -400,6 +402,8 @@ struct RevpPngJob {
         , produce(std::move(o.produce))
         , convertNs(o.convertNs.load(std::memory_order_relaxed))
         , deflateNs(o.deflateNs.load(std::memory_order_relaxed))
+        , isReused(o.isReused)
+        , seq(o.seq)
     {}
     RevpPngJob &operator=(RevpPngJob &&o) noexcept {
         if (this != &o) {
@@ -408,6 +412,8 @@ struct RevpPngJob {
             produce = std::move(o.produce);
             convertNs.store(o.convertNs.load(std::memory_order_relaxed), std::memory_order_relaxed);
             deflateNs.store(o.deflateNs.load(std::memory_order_relaxed), std::memory_order_relaxed);
+            isReused = o.isReused;
+            seq = o.seq;
         }
         return *this;
     }
@@ -417,6 +423,8 @@ struct RevpPngJob {
         , produce(o.produce)
         , convertNs(o.convertNs.load(std::memory_order_relaxed))
         , deflateNs(o.deflateNs.load(std::memory_order_relaxed))
+        , isReused(o.isReused)
+        , seq(o.seq)
     {}
     RevpPngJob &operator=(const RevpPngJob &o) {
         if (this != &o) {
@@ -425,6 +433,8 @@ struct RevpPngJob {
             produce = o.produce;
             convertNs.store(o.convertNs.load(std::memory_order_relaxed), std::memory_order_relaxed);
             deflateNs.store(o.deflateNs.load(std::memory_order_relaxed), std::memory_order_relaxed);
+            isReused = o.isReused;
+            seq = o.seq;
         }
         return *this;
     }
@@ -622,6 +632,7 @@ public:
         QByteArray data;
         bool isPng = false;
         bool isCompressed = true;
+        bool reused = false;
         std::atomic<bool> ready{false};
         qint64 convertNs = 0;
         qint64 deflateNs = 0;
@@ -656,6 +667,23 @@ public:
         entry->isCompressed = isCompressed;
         entry->ready.store(true, std::memory_order_release);
 
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_entries.push_back(entry);
+        }
+        m_cvWriter.notify_one();
+    }
+
+    // 增量保存: 直接沿用上次产物里的 PNG 字节 (不转换、不 deflate)
+    void addReusedPng(const QString &name, const QByteArray &data) {
+        if (m_abort.load(std::memory_order_acquire)) return;
+        auto entry = std::make_shared<Entry>();
+        entry->name = name;
+        entry->data = data;
+        entry->isPng = true;
+        entry->isCompressed = false;
+        entry->reused = true;
+        entry->ready.store(true, std::memory_order_release);
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             m_entries.push_back(entry);
@@ -771,6 +799,10 @@ private:
                     m_stats.count++;
                     m_stats.bytes += entry->data.size();
                 }
+                if (entry->reused) {
+                    m_stats.reusedEntries++;
+                    m_stats.reusedBytes += entry->data.size();
+                }
                 writeTimer.start();
 
                 store->setCompressionEnabled(entry->isCompressed);
@@ -816,6 +848,136 @@ private:
     std::thread m_writerThread;
 };
 
+// ---- 增量保存 (debug.reverie.saveincr): 未改动的图层沿用上次同路径产物里的 PNG 字节 ----
+// 判据: node 指针 + 图层名 + KisPaintDevice::sequenceNumber() 均未变, 且旧文件 size+mtime
+// 与上次保存完成时一致。任一不满足就退回全量编码, 绝不因缓存让保存失败。
+// seq 必须在引擎线程快照时刻采集 (异步保存时引擎线程仍在绘制)。
+struct SavedLayerEntry {
+    quintptr node = 0;
+    QString layerName;
+    int seq = -1;
+};
+struct SavedFileIndex {
+    qint64 size = 0;
+    qint64 mtimeMs = 0;
+    QHash<QString, SavedLayerEntry> entries;
+};
+std::mutex s_incrMutex;
+QHash<QString, SavedFileIndex> s_incrCache;
+
+struct RevpIncrCtx {
+    bool enabled = false;
+    bool verify = false;
+    QString path;
+    std::shared_ptr<KoStore> old;
+    QHash<QString, SavedLayerEntry> oldEntries;
+    QHash<QString, SavedLayerEntry> newEntries;
+};
+
+std::shared_ptr<RevpIncrCtx> revpIncrBegin(const QString &path)
+{
+    auto ctx = std::make_shared<RevpIncrCtx>();
+    ctx->path = path;
+    ctx->enabled = rpDebugFlag("debug.reverie.saveincr", "REVERIE_SAVEINCR", false);
+    ctx->verify = rpDebugFlag("debug.reverie.saveverify", "REVERIE_SAVEVERIFY", false);
+    if (!ctx->enabled) return ctx;
+    {
+        std::lock_guard<std::mutex> lock(s_incrMutex);
+        auto it = s_incrCache.constFind(path);
+        if (it != s_incrCache.constEnd()) {
+            const QFileInfo fi(path);
+            if (fi.exists() && fi.size() == it->size
+                && fi.lastModified().toMSecsSinceEpoch() == it->mtimeMs) {
+                ctx->oldEntries = it->entries;
+            } else {
+                s_incrCache.remove(path);
+            }
+        }
+    }
+    if (!ctx->oldEntries.isEmpty()) {
+        KoStore *st = KoStore::createStore(path, KoStore::Read, "", KoStore::Zip);
+        if (st && !st->bad()) {
+            ctx->old.reset(st);
+        } else {
+            delete st;
+            ctx->oldEntries.clear();
+        }
+    }
+    return ctx;
+}
+
+// 命中则返回旧 PNG 字节 (已校验 PNG 魔数), 否则空
+QByteArray revpIncrLookup(RevpIncrCtx &ctx, const QString &name, const SavedLayerEntry &cur)
+{
+    auto it = ctx.oldEntries.constFind(name);
+    if (it == ctx.oldEntries.constEnd() || !ctx.old) return QByteArray();
+    if (it->node != cur.node || it->layerName != cur.layerName || it->seq != cur.seq) return QByteArray();
+    if (!ctx.old->open(name)) return QByteArray();
+    QByteArray data = ctx.old->read(ctx.old->size());
+    ctx.old->close();
+    static const char kMagic[] = "\x89PNG\r\n\x1a\n";
+    if (data.size() < 8 || memcmp(data.constData(), kMagic, 8) != 0) return QByteArray();
+    return data;
+}
+
+void revpIncrEnqueueLayer(RevpSavePipeline *pipeline, RevpIncrCtx &ctx, const QString &name,
+                          const QString &layerName, KisNode *node, KisPaintDeviceSP dev,
+                          bool eligible, int docW, int docH)
+{
+    if (!ctx.enabled || !eligible) {
+        pipeline->enqueueJob(makeSnapshotLayerJob(name, dev, docW, docH));
+        return;
+    }
+    SavedLayerEntry cur;
+    cur.node = reinterpret_cast<quintptr>(node);
+    cur.layerName = layerName;
+    cur.seq = dev->sequenceNumber(); // 快照时刻 (引擎线程), 先于克隆
+    ctx.newEntries.insert(name, cur);
+    const QByteArray old = revpIncrLookup(ctx, name, cur);
+    if (!old.isEmpty() && !ctx.verify) {
+        pipeline->addReusedPng(name, old);
+        return;
+    }
+    RevpPngJob job = makeSnapshotLayerJob(name, dev, docW, docH);
+    if (!old.isEmpty() && ctx.verify) {
+        // 自检: 同像素同档位的 PNG 编码结果应逐字节一致, 不一致说明漏了 setDirty
+        auto inner = job.produce;
+        job.produce = [inner, old, name](int q, qint64 *c, qint64 *d) {
+            QByteArray fresh = inner(q, c, d);
+            if (fresh != old) {
+                RPC_LOG("saveverify MISMATCH %s: reused entry differs from fresh encode",
+                        name.toUtf8().constData());
+            }
+            return fresh;
+        };
+    }
+    pipeline->enqueueJob(std::move(job));
+}
+
+// 保存成功后登记: 只记录本次实际写进产物的条目
+void revpIncrCommit(RevpIncrCtx &ctx, bool ok)
+{
+    if (!ctx.enabled) return;
+    std::lock_guard<std::mutex> lock(s_incrMutex);
+    if (!ok) {
+        s_incrCache.remove(ctx.path);
+        return;
+    }
+    const QFileInfo fi(ctx.path);
+    if (!fi.exists()) {
+        s_incrCache.remove(ctx.path);
+        return;
+    }
+    if (s_incrCache.size() >= 4 && !s_incrCache.contains(ctx.path)) {
+        s_incrCache.erase(s_incrCache.begin());
+    }
+    SavedFileIndex idx;
+    idx.size = fi.size();
+    idx.mtimeMs = fi.lastModified().toMSecsSinceEpoch();
+    idx.entries = ctx.newEntries;
+    s_incrCache.insert(ctx.path, idx);
+}
+
 bool writeRevpStore(const QString &path,
                     const QJsonObject &meta,
                     const QString &layersXml,
@@ -851,6 +1013,12 @@ bool writeRevpStore(const QString &path,
 static std::atomic<bool> s_savingRevpAsync{false};
 
 } // namespace
+
+void revpClearSaveCache()
+{
+    std::lock_guard<std::mutex> lock(s_incrMutex);
+    s_incrCache.clear();
+}
 
 bool ReverieCore::saveRevp(const QString &path, const QString &extraMetaJson, const QByteArray &recordingBlob)
 {
@@ -1015,6 +1183,7 @@ bool ReverieCore::saveRevp(const QString &path, const QString &extraMetaJson, co
     writeLayersXml(&xml);
 
     RevpPngStats pngStats;
+    auto incr = revpIncrBegin(path);
     RevpSavePipeline pipeline(path, &pngStats);
     pipeline.startWriter();
 
@@ -1066,8 +1235,8 @@ bool ReverieCore::saveRevp(const QString &path, const QString &extraMetaJson, co
         if (e.isGroup || e.nodeType == NodeTypeAdjustment) continue;
         KisPaintDeviceSP dev = layerPaintDeviceFor(e);
         if (!dev) continue;
-        pipeline.enqueueJob(makeSnapshotLayerJob(
-            QString("layer_%1.png").arg(i, 3, 10, QChar('0')), dev, docW, docH));
+        revpIncrEnqueueLayer(&pipeline, *incr, QString("layer_%1.png").arg(i, 3, 10, QChar('0')),
+                             e.name, e.node, dev, !e.isStrokeLayer, docW, docH);
     }
 
     // 动画关键帧画面: 每个动画图层的每个关键帧整幅画布导出 (同样流式)
@@ -1120,6 +1289,7 @@ bool ReverieCore::saveRevp(const QString &path, const QString &extraMetaJson, co
     const qint64 snapshotMs = QDateTime::currentMSecsSinceEpoch() - saveStartMs;
     pipeline.finishProduction();
     const bool ok = pipeline.waitDone();
+    revpIncrCommit(*incr, ok);
 
     QFile out(path);
     RevpDetailedStats d;
@@ -1304,6 +1474,7 @@ bool ReverieCore::saveRevpAsync(const QString &path, const QString &extraMetaJso
     writeLayersXml(&xml);
 
     s_savingRevpAsync.store(true);
+    auto incr = revpIncrBegin(path);
     auto pipeline = std::make_shared<RevpSavePipeline>(path);
     pipeline->startWriter();
 
@@ -1355,8 +1526,8 @@ bool ReverieCore::saveRevpAsync(const QString &path, const QString &extraMetaJso
         if (e.isGroup || e.nodeType == NodeTypeAdjustment) continue;
         KisPaintDeviceSP dev = layerPaintDeviceFor(e);
         if (!dev) continue;
-        pipeline->enqueueJob(makeSnapshotLayerJob(
-            QString("layer_%1.png").arg(i, 3, 10, QChar('0')), dev, docW, docH));
+        revpIncrEnqueueLayer(pipeline.get(), *incr, QString("layer_%1.png").arg(i, 3, 10, QChar('0')),
+                             e.name, e.node, dev, !e.isStrokeLayer, docW, docH);
     }
 
     // 关键帧: 同样只做瓦片拷贝 (writeToDevice 到独立设备), 转换 + 编码在写盘流水线
@@ -1409,8 +1580,9 @@ bool ReverieCore::saveRevpAsync(const QString &path, const QString &extraMetaJso
     const qint64 snapshotMs = QDateTime::currentMSecsSinceEpoch() - saveStartMs;
     pipeline->finishProduction();
 
-    std::thread([pipeline, path, saveStartMs, snapshotMs, compositeMs, layerCloneMs, selMaskMs]() {
+    std::thread([pipeline, incr, path, saveStartMs, snapshotMs, compositeMs, layerCloneMs, selMaskMs]() {
         const bool ok = pipeline->waitDone();
+        revpIncrCommit(*incr, ok);
         QFile out(path);
         const RevpPngStats &pngStats = pipeline->stats();
         RevpDetailedStats d;
@@ -1922,6 +2094,7 @@ bool ReverieCore::loadKraTree(const QByteArray &maindocBytes, KisImageSP image, 
 bool ReverieCore::loadRevp(const QString &path)
 {
     m_lastLoadHealed = false;
+    revpClearSaveCache();
     qWarning() << "ReverieCore::loadRevp START:" << path;
     QScopedPointer<KoStore> store(KoStore::createStore(path, KoStore::Read, "", KoStore::Zip));
     if (!store) {

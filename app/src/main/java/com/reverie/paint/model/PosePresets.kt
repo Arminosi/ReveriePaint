@@ -103,12 +103,14 @@ object PosePresets {
         return map
     }
 
-    /** 猫猫蜷缩弯曲量: 预设自带 + 面板滑杆, 归一到 0..1 */
-    fun catCurlBend(modelType: String, posePreset: String, jointAngles: Map<String, Float>): Float {
-        if (!isCat(modelType)) return 0f
-        val preset = if (posePreset.equals(CURL, ignoreCase = true)) 0.55f else 0f
-        return (preset + (jointAngles[CAT_CURL_KEY] ?: 0f) / 100f).coerceIn(0f, 1f)
-    }
+    /**
+     * 猫猫蜷缩弯曲量 —— **暂时停用**。
+     *
+     * 程序化沿身体前向做圆弧弯曲时, 截面被按 cosθ 缩放却没有对应的工作空间校正,
+     * 躯干会被明显拉伸变形 (实机反馈"模型拉伸得不成样子")。真正的蜷缩要靠脊柱中段骨骼
+     * (spine_mid) 重蒙皮来弯, 不能用无权重约束的顶点弯曲硬掰。等待资产重绑后重写。
+     */
+    fun catCurlBend(modelType: String, posePreset: String, jointAngles: Map<String, Float>): Float = 0f
 
     /**
      * 计算预设姿态的整体升降量 (glTF: +Y 向上)。

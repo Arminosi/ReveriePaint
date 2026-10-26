@@ -28,7 +28,7 @@ object Outline3D {
         state: Model3DState,
         docW: Float,
         docH: Float,
-        creaseDegrees: Float = 32f,
+        creaseDegrees: Float = 60f,
     ): FloatArray {
         val triCount = mesh.triangleCount
         val vertCount = mesh.vertexCount
@@ -83,7 +83,7 @@ object Outline3D {
 
         // 顶点按位置焊接: glTF/内置网格普遍是"每面独立顶点"(平面着色), 不焊接就没有相邻面,
         // 轮廓/折角判定会全部退化成边界边 (这也是旧线框看着像"三角网格"的原因之一)
-        val canon = weldByPosition(positions, vertCount)
+        val canon = weldByPosition(positions, vertCount, weldRadiusOf(positions, vertCount))
 
         // 边 -> 相邻三角形 (最多两个)
         val edgeTriA = HashMap<Long, Int>(triCount * 2)
@@ -118,7 +118,8 @@ object Outline3D {
             val b = (key and 0xFFFFFFFFL).toInt()
             val x0 = sx[a]; val y0 = sy[a]
             val x1 = sx[b]; val y1 = sy[b]
-            if (abs(x1 - x0) < 0.35f && abs(y1 - y0) < 0.35f) continue
+            // 过滤亚像素碎线: 猫猫这类"碎片壳"网格在轮廓附近会产生大量 1~2px 抖动碎线
+            if (hypot(x1 - x0, y1 - y0) < 3.5f) continue
             out.add(x0); out.add(y0); out.add(x1); out.add(y1)
         }
         val result = FloatArray(out.size)
@@ -126,15 +127,29 @@ object Outline3D {
         return result
     }
 
-    /** 位置量化焊接: 1/8192 ≈ 1.2e-4, 对 unit 尺度模型足够区分且能合并重复顶点 */
-    private fun weldByPosition(positions: FloatArray, vertCount: Int): IntArray {
+    /** 焊接半径: 按模型包围盒对角线取 0.25% (猫猫这类拼接壳需要略大的容差才能重建邻接) */
+    private fun weldRadiusOf(positions: FloatArray, vertCount: Int): Float {
+        var minX = Float.MAX_VALUE; var minY = Float.MAX_VALUE; var minZ = Float.MAX_VALUE
+        var maxX = -Float.MAX_VALUE; var maxY = -Float.MAX_VALUE; var maxZ = -Float.MAX_VALUE
+        for (i in 0 until vertCount) {
+            val x = positions[i * 3]; val y = positions[i * 3 + 1]; val z = positions[i * 3 + 2]
+            if (x < minX) minX = x; if (x > maxX) maxX = x
+            if (y < minY) minY = y; if (y > maxY) maxY = y
+            if (z < minZ) minZ = z; if (z > maxZ) maxZ = z
+        }
+        val diag = hypot(hypot(maxX - minX, maxY - minY), maxZ - minZ)
+        return (diag * 0.0025f).coerceIn(1e-4f, 0.02f)
+    }
+
+    private fun weldByPosition(positions: FloatArray, vertCount: Int, radius: Float): IntArray {
+        val q = 1f / radius
         val map = HashMap<Long, Int>(vertCount * 2)
         val canon = IntArray(vertCount)
         var next = 0
         for (i in 0 until vertCount) {
-            val qx = (Math.round(positions[i * 3] * 8192f).toLong() and 0x1FFFFF)
-            val qy = (Math.round(positions[i * 3 + 1] * 8192f).toLong() and 0x1FFFFF)
-            val qz = (Math.round(positions[i * 3 + 2] * 8192f).toLong() and 0x1FFFFF)
+            val qx = (Math.round(positions[i * 3] * q).toLong() and 0x1FFFFF)
+            val qy = (Math.round(positions[i * 3 + 1] * q).toLong() and 0x1FFFFF)
+            val qz = (Math.round(positions[i * 3 + 2] * q).toLong() and 0x1FFFFF)
             val key = (qx shl 42) or (qy shl 21) or qz
             val hit = map[key]
             if (hit != null) {

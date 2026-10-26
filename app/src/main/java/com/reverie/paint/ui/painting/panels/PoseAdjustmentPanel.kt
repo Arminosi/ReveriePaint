@@ -4,9 +4,6 @@
 
 package com.reverie.paint.ui.painting.panels
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -57,6 +54,13 @@ private data class JointDef(
     val max: Float,
     val category: JointCategory,
 )
+
+/**
+ * 画布骨骼模式点选的任意骨骼, 三轴角度键 (与 [com.reverie.paint.model.PosePresets] 的兜底键约定一致)
+ */
+private const val AXIS_PITCH_SUFFIX = "_p"
+private const val AXIS_YAW_SUFFIX = "_y"
+private const val AXIS_ROLL_SUFFIX = "_r"
 
 /**
  * 3D 人偶与模型专属骨骼关节姿态调节浮动面板 (非模态浮窗，不遮挡画布手势与实时视角旋转)
@@ -164,6 +168,15 @@ fun PoseAdjustmentPanel(
 
     // 追踪滑块交互前快照，松手时推入撤销栈
     var activeSliderStartState by remember { mutableStateOf<Model3DState?>(null) }
+
+    fun commitSliderIfNeeded() {
+        val start = activeSliderStartState
+        val cur = vm.currentLayer3DState
+        if (start != null && cur != null && start != cur) {
+            vm.push3DUndoState(start)
+        }
+        activeSliderStartState = null
+    }
 
     val panelShape = RoundedCornerShape(20.dp)
 
@@ -305,7 +318,110 @@ fun PoseAdjustmentPanel(
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        // 3. 身体部位分类标签导航 (Filter Chips)
+        // 3. 画布点选的任意骨骼: 三轴精确调节 (任意 GLB / VRM / PMX 骨骼名都能用)
+        val selectedBone = vm.active3DSelectedJointName
+        if (selectedBone != null) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(5.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Morandi.accent.copy(alpha = 0.10f))
+                    .border(1.dp, Morandi.accent.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
+                    .padding(horizontal = 10.dp, vertical = 7.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = stringResource(R.string.layer_3d_pose_selected_bone),
+                        color = Morandi.subText,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            text = selectedBone,
+                            color = Morandi.accent,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(7.dp))
+                                .background(Morandi.panelHi)
+                                .clickable {
+                                    val s = vm.currentLayer3DState
+                                    if (s != null) {
+                                        vm.push3DUndoState(s)
+                                        val keys = listOf(
+                                            selectedBone + AXIS_PITCH_SUFFIX,
+                                            selectedBone + AXIS_YAW_SUFFIX,
+                                            selectedBone + AXIS_ROLL_SUFFIX,
+                                        )
+                                        val kept = s.jointAngles.filterKeys { it !in keys }
+                                        vm.update3DState(s.copy(jointAngles = kept))
+                                    }
+                                }
+                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.layer_3d_pose_reset_bone),
+                                color = Morandi.subText,
+                                fontSize = 10.sp,
+                            )
+                        }
+                    }
+                }
+
+                val axisDefs = listOf(
+                    Triple(AXIS_PITCH_SUFFIX, R.string.layer_3d_axis_pitch, -150f to 150f),
+                    Triple(AXIS_YAW_SUFFIX, R.string.layer_3d_axis_yaw, -180f to 180f),
+                    Triple(AXIS_ROLL_SUFFIX, R.string.layer_3d_axis_roll, -180f to 180f),
+                )
+                for ((suffix, labelRes, range) in axisDefs) {
+                    val key = selectedBone + suffix
+                    val angle = state.jointAngles[key] ?: 0f
+                    PoseAngleRow(
+                        label = stringResource(labelRes),
+                        angle = angle,
+                        min = range.first,
+                        max = range.second,
+                        onValue = { newAngle ->
+                            if (activeSliderStartState == null) {
+                                activeSliderStartState = vm.currentLayer3DState
+                            }
+                            vm.set3DJointAngle(key, newAngle)
+                        },
+                        onRelease = { commitSliderIfNeeded() },
+                        onReset = {
+                            if (abs(angle) >= 0.05f) {
+                                val cur = vm.currentLayer3DState
+                                if (cur != null) vm.push3DUndoState(cur)
+                                vm.set3DJointAngle(key, 0f)
+                            }
+                        },
+                    )
+                }
+            }
+        } else {
+            Text(
+                text = stringResource(R.string.layer_3d_pose_no_selection),
+                color = Morandi.subText.copy(alpha = 0.8f),
+                fontSize = 10.sp,
+                modifier = Modifier.padding(start = 2.dp),
+            )
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // 4. 身体部位分类标签导航 (Filter Chips)
         LazyRow(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             modifier = Modifier.fillMaxWidth(),
@@ -341,96 +457,113 @@ fun PoseAdjustmentPanel(
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        // 4. 骨骼关节点微调滑块列表 (带独立零位重置与吸附)
+        // 5. 骨骼关节点微调滑块列表 (带独立零位重置与吸附)
         LazyColumn(
             verticalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(max = if (isPhone) 240.dp else 340.dp),
+                .heightIn(max = if (isPhone) 200.dp else 300.dp),
         ) {
             items(displayJoints, key = { it.key }) { joint ->
                 val angle = state.jointAngles[joint.key] ?: 0f
-                val angleFrac = ((angle - joint.min) / (joint.max - joint.min)).coerceIn(0f, 1f)
-                val sign = if (angle > 0) "+" else ""
-                val isNonZero = abs(angle) >= 0.05f
-
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(3.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(Morandi.panelHi.copy(alpha = 0.45f))
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = stringResource(joint.titleRes),
-                            color = Morandi.text,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium,
-                        )
-
-                        // 独立角度角标 (点击立刻复位该关节到 0°)
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(3.dp),
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(if (isNonZero) Morandi.accent.copy(alpha = 0.14f) else Morandi.panelHi)
-                                .clickable {
-                                    if (isNonZero) {
-                                        vm.push3DUndoState(state)
-                                        vm.set3DJointAngle(joint.key, 0f)
-                                    }
-                                }
-                                .padding(horizontal = 5.dp, vertical = 2.dp),
-                        ) {
-                            Text(
-                                text = "$sign${angle.roundToInt()}°",
-                                color = if (isNonZero) Morandi.accent else Morandi.subText,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                            if (isNonZero) {
-                                Icon(
-                                    painter = painterResource(R.drawable.ic_refresh),
-                                    contentDescription = stringResource(R.string.layer_3d_pose_reset_single),
-                                    tint = Morandi.accent,
-                                    modifier = Modifier.size(10.dp),
-                                )
-                            }
+                PoseAngleRow(
+                    label = stringResource(joint.titleRes),
+                    angle = angle,
+                    min = joint.min,
+                    max = joint.max,
+                    onValue = { newAngle ->
+                        if (activeSliderStartState == null) {
+                            activeSliderStartState = vm.currentLayer3DState
                         }
-                    }
+                        vm.set3DJointAngle(joint.key, newAngle)
+                    },
+                    onRelease = { commitSliderIfNeeded() },
+                    onReset = {
+                        if (abs(angle) >= 0.05f) {
+                            vm.push3DUndoState(state)
+                            vm.set3DJointAngle(joint.key, 0f)
+                        }
+                    },
+                )
+            }
+        }
+    }
+}
 
-                    ReSlider(
-                        value = angleFrac,
-                        onValue = { frac ->
-                            if (activeSliderStartState == null) {
-                                activeSliderStartState = state
-                            }
-                            var newAngle = joint.min + frac * (joint.max - joint.min)
-                            // 零位吸附：在 [-2.5°, +2.5°] 范围内自动吸附回 0°
-                            if (abs(newAngle) <= 2.5f) {
-                                newAngle = 0f
-                            }
-                            vm.set3DJointAngle(joint.key, newAngle)
-                        },
-                        onRelease = {
-                            val start = activeSliderStartState
-                            val cur = vm.currentLayer3DState
-                            if (start != null && cur != null && start != cur) {
-                                vm.push3DUndoState(start)
-                            }
-                            activeSliderStartState = null
-                        },
-                        height = 16,
+/**
+ * 单个关节角度滑块: 标题 + 角度角标 (点按归零) + 滑块 (零位吸附 + 松手入撤销栈)
+ */
+@Composable
+private fun PoseAngleRow(
+    label: String,
+    angle: Float,
+    min: Float,
+    max: Float,
+    onValue: (Float) -> Unit,
+    onRelease: () -> Unit,
+    onReset: () -> Unit,
+) {
+    val angleFrac = ((angle - min) / (max - min)).coerceIn(0f, 1f)
+    val sign = if (angle > 0) "+" else ""
+    val isNonZero = abs(angle) >= 0.05f
+
+    Column(
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 1.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = label,
+                color = Morandi.text,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+            )
+
+            // 独立角度角标 (点击立刻复位该关节到 0°)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(if (isNonZero) Morandi.accent.copy(alpha = 0.14f) else Morandi.panelHi)
+                    .clickable { onReset() }
+                    .padding(horizontal = 5.dp, vertical = 2.dp),
+            ) {
+                Text(
+                    text = "$sign${angle.roundToInt()}°",
+                    color = if (isNonZero) Morandi.accent else Morandi.subText,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                if (isNonZero) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_refresh),
+                        contentDescription = stringResource(R.string.layer_3d_pose_reset_single),
+                        tint = Morandi.accent,
+                        modifier = Modifier.size(10.dp),
                     )
                 }
             }
         }
+
+        ReSlider(
+            value = angleFrac,
+            onValue = { frac ->
+                var newAngle = min + frac * (max - min)
+                // 零位吸附：在 [-2.5°, +2.5°] 范围内自动吸附回 0°
+                if (abs(newAngle) <= 2.5f) {
+                    newAngle = 0f
+                }
+                onValue(newAngle)
+            },
+            onRelease = onRelease,
+            height = 16,
+        )
     }
 }

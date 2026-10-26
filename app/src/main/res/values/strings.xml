@@ -3005,6 +3005,12 @@
     <string name="layer_3d_pose_presets">快速姿态预设</string>
     <string name="layer_3d_pose_joints">骨骼关节点微调</string>
     <string name="layer_3d_pose_reset_joints">重置骨骼微调</string>
+    <string name="layer_3d_pose_selected_bone">选中骨骼</string>
+    <string name="layer_3d_pose_no_selection">点按画布上的骨骼关节即可选中</string>
+    <string name="layer_3d_pose_reset_bone">重置此骨骼</string>
+    <string name="layer_3d_axis_pitch">俯仰</string>
+    <string name="layer_3d_axis_yaw">偏转</string>
+    <string name="layer_3d_axis_roll">翻滚</string>
     <string name="layer_3d_pose_stand">站立立绘</string>
     <string name="layer_3d_pose_sit">日常坐姿</string>
     <string name="layer_3d_pose_action">动感战斗</string>

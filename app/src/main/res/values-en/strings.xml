@@ -3005,6 +3005,12 @@
     <string name="layer_3d_pose_presets">Preset Poses</string>
     <string name="layer_3d_pose_joints">Bone Joint Tuning</string>
     <string name="layer_3d_pose_reset_joints">Reset Bone Tuning</string>
+    <string name="layer_3d_pose_selected_bone">Selected bone</string>
+    <string name="layer_3d_pose_no_selection">Tap a joint on the canvas to select it</string>
+    <string name="layer_3d_pose_reset_bone">Reset this bone</string>
+    <string name="layer_3d_axis_pitch">Pitch</string>
+    <string name="layer_3d_axis_yaw">Yaw</string>
+    <string name="layer_3d_axis_roll">Roll</string>
     <string name="layer_3d_pose_stand">Standing</string>
     <string name="layer_3d_pose_sit">Sitting</string>
     <string name="layer_3d_pose_action">Combat Action</string>

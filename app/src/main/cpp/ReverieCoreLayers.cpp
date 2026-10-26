@@ -777,7 +777,7 @@ void ReverieCore::setLayerVisible(int index, bool visible)
             }
         }
         recompositeProjection();
-        markDirty();
+        markProjectionDirty();
     }
 }
 
@@ -860,7 +860,7 @@ void ReverieCore::setLayerOpacity(int index, qreal opacity)
             m_document->waitForDone();
         }
     }
-    markDirty();
+    markProjectionDirty();
 }
 
 // Opacity change WITHOUT pushing an undo command - used while the user is
@@ -881,7 +881,7 @@ void ReverieCore::setLayerOpacityDirect(int index, qreal opacity)
         if (m_layers[index].nodeType == NodeTypeAdjustment) {
             recompositeProjection();
         }
-        markDirty();
+        markProjectionDirty();
     }
 }
 

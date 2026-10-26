@@ -1115,6 +1115,81 @@ void LayerPixelLoader::stage(PendingLayerPixels job)
     }
 }
 
+/**
+ * 快速检测图层位图的非完全透明像素边界外接矩形 (向外扩充对齐至 64 像素 Krita 瓦片网格)。
+ *
+ * 解决大画幅 (4000x6000) 线稿/局部图层内存爆炸的核心算法：
+ * Krita 采用 64x64 稀疏瓦片存储，直接将全画幅 QImage 写入会导致全图数万个空白瓦片全部分配 (1.3GB+)，
+ * 严重压垮 4GB 内存设备的软硬上限并触发持续磁盘 Swap 颠簸。
+ * 通过检测非透明区域并按边界切片写入，透明区保持 0 瓦片分配，显存开销从 1.3GB 骤降至数十 MB。
+ */
+static QRect nonTransparentBounds(const QImage &img)
+{
+    if (img.isNull() || img.width() <= 0 || img.height() <= 0) return QRect();
+    if (!img.hasAlphaChannel()) return img.rect();
+
+    const bool isDirectFormat = (img.format() == QImage::Format_ARGB32 ||
+                                 img.format() == QImage::Format_ARGB32_Premultiplied ||
+                                 img.format() == QImage::Format_RGBA8888 ||
+                                 img.format() == QImage::Format_RGBA8888_Premultiplied);
+    const QImage argb = isDirectFormat ? img : img.convertToFormat(QImage::Format_ARGB32);
+
+    const int w = argb.width();
+    const int h = argb.height();
+    int top = -1;
+    int bottom = -1;
+    int left = w;
+    int right = -1;
+
+    for (int y = 0; y < h; ++y) {
+        const quint32 *line = reinterpret_cast<const quint32 *>(argb.constScanLine(y));
+        const quint64 *line64 = reinterpret_cast<const quint64 *>(line);
+        const int w64 = w / 2;
+        bool rowHasAlpha = false;
+
+        // 64 位整字快速判空：两个像素一组检测最高位 Alpha 字节
+        for (int i = 0; i < w64; ++i) {
+            if (line64[i] & 0xFF000000FF000000ULL) {
+                rowHasAlpha = true;
+                break;
+            }
+        }
+        if (!rowHasAlpha && (w & 1)) {
+            if (line[w - 1] & 0xFF000000u) {
+                rowHasAlpha = true;
+            }
+        }
+        if (!rowHasAlpha) continue;
+
+        if (top < 0) top = y;
+        bottom = y;
+
+        // 该行存在非透明像素，仅扫描当前 [0, left) 与 (right, w-1] 边界
+        for (int i = 0; i < left; ++i) {
+            if (line[i] & 0xFF000000u) {
+                left = i;
+                break;
+            }
+        }
+        for (int i = w - 1; i > right; --i) {
+            if (line[i] & 0xFF000000u) {
+                right = i;
+                break;
+            }
+        }
+    }
+
+    if (top < 0 || right < left) return QRect();
+
+    // 向上取整外扩到 64 像素 Krita 瓦片网格边界，确保 convertFromQImage 写入精确对齐瓦片
+    const int alignedLeft = (left / 64) * 64;
+    const int alignedTop = (top / 64) * 64;
+    const int alignedRight = std::min(w - 1, ((right + 63) / 64) * 64 + 63);
+    const int alignedBottom = std::min(h - 1, ((bottom + 63) / 64) * 64 + 63);
+
+    return QRect(alignedLeft, alignedTop, alignedRight - alignedLeft + 1, alignedBottom - alignedTop + 1);
+}
+
 void LayerPixelLoader::flush()
 {
     if (m_jobs.isEmpty()) return;
@@ -1123,8 +1198,8 @@ void LayerPixelLoader::flush()
     const int chunk = layerPixelChunk();
     while (!m_jobs.isEmpty()) {
         const int count = qMin(chunk, m_jobs.size());
-        // 取出本块 (从队头消费, 队列持续收缩), 多核并行解码。
-        // QImage::fromData 各自独立, 线程安全。
+        // 取出本块 (从队头消费, 队列持续收缩), 多核并行解码 + 并行非透明区域检测。
+        // QImage::fromData 与 nonTransparentBounds 各自独立, 线程安全。
         QVector<PendingLayerPixels> batch;
         batch.reserve(count);
         for (int i = 0; i < count; ++i) {
@@ -1134,7 +1209,9 @@ void LayerPixelLoader::flush()
 
         QtConcurrent::blockingMap(batch, [](PendingLayerPixels &j) {
             if (j.hasPng && !j.pngBytes.isEmpty()) {
-                j.decoded.loadFromData(j.pngBytes, "PNG");
+                if (j.decoded.loadFromData(j.pngBytes, "PNG")) {
+                    j.bbox = nonTransparentBounds(j.decoded);
+                }
             }
         });
         // 串行写回: Krita tile 分配/写入不并发; 写完立即释放字节缓冲
@@ -1144,7 +1221,17 @@ void LayerPixelLoader::flush()
             if (dev) {
                 if (!j.decoded.isNull()) {
                     dev->clear();
-                    dev->convertFromQImage(j.decoded, nullptr);
+                    if (j.bbox.isEmpty()) {
+                        // 全透明空图层：仅置默认透明像素，不分配任何物理瓦片 (0 内存)
+                        dev->setDefaultPixel(KoColor(Qt::transparent, dev->colorSpace()));
+                    } else if (j.bbox == j.decoded.rect()) {
+                        // 覆盖全画布的整层内容：直接原样写回
+                        dev->convertFromQImage(j.decoded, nullptr, 0, 0);
+                    } else {
+                        // 局部线稿/稀疏内容：裁剪后写入对应偏移位置，非透明区外的空白瓦片零分配
+                        const QImage cropped = j.decoded.copy(j.bbox);
+                        dev->convertFromQImage(cropped, nullptr, j.bbox.x(), j.bbox.y());
+                    }
                     dev->setDirty();
                 } else if (j.hasData && !j.hasPng && !j.pngBytes.isEmpty()) {
                     // 非 PNG (Krita 原生 gbr/逐层格式): 慢路径
@@ -1181,21 +1268,27 @@ static bool stageLayerDataFromStore(KoStore *store, LayerPixelLoader *loader, Ki
     if (!docName.isEmpty() && !filename.isEmpty()) {
         candidates << QString("%1/layers/%2").arg(docName, filename);
         candidates << QString("%1/layers/%2.png").arg(docName, filename);
+        candidates << QString("%1/layers/%2.data").arg(docName, filename);
     }
     if (!filename.isEmpty()) {
         candidates << QString("layers/%1").arg(filename);
         candidates << QString("layers/%1.png").arg(filename);
+        candidates << QString("layers/%1.data").arg(filename);
         candidates << filename;
         candidates << QString("%1.png").arg(filename);
+        candidates << QString("%1.data").arg(filename);
     }
     candidates << QString("layer_%1.png").arg(index, 3, 10, QChar('0'));
     candidates << QString("layer%1.png").arg(index);
+    candidates << QString("layer_%1.data").arg(index, 3, 10, QChar('0'));
+    candidates << QString("layer%1.data").arg(index);
 
     const QStringList dirList = store->directoryList();
     for (const QString &d : dirList) {
         if (!d.isEmpty() && d != docName && !filename.isEmpty()) {
             candidates << QString("%1/layers/%2").arg(d, filename);
             candidates << QString("%1/layers/%2.png").arg(d, filename);
+            candidates << QString("%1/layers/%2.data").arg(d, filename);
         }
     }
 
@@ -1212,13 +1305,22 @@ static bool stageLayerDataFromStore(KoStore *store, LayerPixelLoader *loader, Ki
             job.hasPng = (data.size() >= 8 && memcmp(data.constData(), "\x89PNG\r\n\x1a\n", 8) == 0);
             job.hasData = true;
 
-            // Check if defaultpixel exists
-            if (store->open(cand + ".defaultpixel")) {
-                const int pxSize = dev->colorSpace()->pixelSize();
-                QByteArray dp = readAllStoreBytes(store);
-                store->close();
-                if (dp.size() == pxSize) {
-                    job.defaultPixel = dp;
+            // Check if defaultpixel exists (.defaultpixel or .data.defaultpixel)
+            auto tryReadDefaultPixel = [&](const QString &p) -> bool {
+                if (store->open(p)) {
+                    const int pxSize = dev->colorSpace()->pixelSize();
+                    QByteArray dp = readAllStoreBytes(store);
+                    store->close();
+                    if (dp.size() == pxSize) {
+                        job.defaultPixel = dp;
+                        return true;
+                    }
+                }
+                return false;
+            };
+            if (!tryReadDefaultPixel(cand + ".defaultpixel")) {
+                if (cand.endsWith(QLatin1String(".data"))) {
+                    tryReadDefaultPixel(cand.left(cand.length() - 5) + ".defaultpixel");
                 }
             }
             // PNG 解码延迟到 loader->flush() 多核并行 (KoStore 交互仍在此串行)

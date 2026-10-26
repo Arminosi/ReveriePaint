@@ -1476,6 +1476,11 @@ private:
             ++it->gen;
         }
     }
+    // 图层属性变动 (显隐/透明度/混合模式) 仅使投影与底图失效，不改动图层像素内容，不使缩略图失效
+    void markProjectionDirty() {
+        invalidateStaticUnderlay();
+        markRegionDirty(QRect(0, 0, m_docWidth, m_docHeight));
+    }
     // 运笔内部标脏: 本笔只改当前层 k, 而底图是 [0, b) 且 b <= k (见 strokeStaticUnderlayStop),
     // 底图不受影响, 只登记脏区。
     void markStrokeDirty(const QRect &r) {

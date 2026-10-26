@@ -382,7 +382,13 @@ fun PaintViewModel.importDocuments(
                     counter++
                 }
 
-                val success = when (ext) {
+                val resolvedExt = if (ext in setOf("revp", "kra", "psd", "png", "jpg", "jpeg", "webp", "bmp")) {
+                    ext
+                } else {
+                    sniffFileFormat(tempFile) ?: ext
+                }
+
+                val success = when (resolvedExt) {
                     "revp" -> {
                         tempFile.copyTo(targetFile, overwrite = true)
                         targetFile.exists() && targetFile.length() > 0
@@ -498,6 +504,54 @@ private suspend fun PaintViewModel.convertViaCore(
             System.gc()
         }
     }
+}
+
+/**
+ * 根据文件头特征字与结构探测文件真实格式，防止系统 SAF 文件选择器丢扩展名时误判。
+ */
+internal fun sniffFileFormat(file: File): String? {
+    if (!file.exists() || file.length() < 4L) return null
+    try {
+        file.inputStream().use { input ->
+            val header = ByteArray(16)
+            val read = input.read(header)
+            if (read >= 4) {
+                // PSD: "8BPS" (0x38, 0x42, 0x50, 0x53)
+                if (header[0] == 0x38.toByte() && header[1] == 0x42.toByte() &&
+                    header[2] == 0x50.toByte() && header[3] == 0x53.toByte()
+                ) {
+                    return "psd"
+                }
+                // PNG: 0x89 'P' 'N' 'G'
+                if (header[0] == 0x89.toByte() && header[1] == 0x50.toByte() &&
+                    header[2] == 0x4E.toByte() && header[3] == 0x47.toByte()
+                ) {
+                    return "png"
+                }
+                // JPEG: 0xFF 0xD8 0xFF
+                if (header[0] == 0xFF.toByte() && header[1] == 0xD8.toByte() && header[2] == 0xFF.toByte()) {
+                    return "jpg"
+                }
+                // ZIP: 'P' 'K' 0x03 0x04
+                if (header[0] == 0x50.toByte() && header[1] == 0x4B.toByte() &&
+                    header[2] == 0x03.toByte() && header[3] == 0x04.toByte()
+                ) {
+                    try {
+                        java.util.zip.ZipFile(file).use { zip ->
+                            if (zip.getEntry("meta.json") != null || zip.getEntry("layers.xml") != null) {
+                                return "revp"
+                            }
+                            if (zip.getEntry("maindoc.xml") != null || zip.getEntry("mimetype") != null) {
+                                return "kra"
+                            }
+                        }
+                    } catch (_: Exception) {}
+                    return "revp"
+                }
+            }
+        }
+    } catch (_: Exception) {}
+    return null
 }
 
 internal fun openStreamSafely(context: android.content.Context, uri: android.net.Uri): java.io.InputStream? {

@@ -189,6 +189,7 @@ struct PendingLayerPixels
     QByteArray pngBytes;       // 像素数据原始字节
     QByteArray defaultPixel;   // 可选 .defaultpixel 字节
     QImage decoded;            // flush 阶段填充
+    QRect bbox;                // decoded 的非透明边界 (flush 阶段并行计算)
     bool hasPng = false;       // pngBytes 是 PNG (否则走 dev->read 慢路径)
     bool hasData = false;      // 读到了像素数据
 };

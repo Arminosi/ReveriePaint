@@ -6253,8 +6253,6 @@ class PaintViewModel : ViewModel() {
     // ---- 3D Reference Layer State ----
     var active3DLayers by mutableStateOf<Map<Long, com.reverie.paint.model.Model3DState>>(emptyMap())
     var active3DInteractionMode by mutableStateOf(com.reverie.paint.model.Interaction3DMode.ROTATE)
-    var active3DSkeleton by mutableStateOf<com.reverie.paint.model.Skeleton3D?>(null)
-    var active3DWorldJoints by mutableStateOf<FloatArray?>(null)
     var active3DSelectedJointName by mutableStateOf<String?>(null)
     var live3DPreviewBitmap by mutableStateOf<android.graphics.Bitmap?>(null)
     var isInteracting3D by mutableStateOf(false)

@@ -65,47 +65,70 @@ object GlbParser {
         val nodes = json.optJSONArray("nodes") ?: JSONArray()
         val skins = json.optJSONArray("skins")
 
+        fun componentSizeOf(componentType: Int): Int = when (componentType) {
+            5120, 5121 -> 1
+            5122, 5123 -> 2
+            else -> 4
+        }
+
+        fun componentCountOf(type: String): Int = when (type) {
+            "SCALAR" -> 1
+            "VEC2" -> 2
+            "VEC3" -> 3
+            "VEC4" -> 4
+            "MAT4" -> 16
+            else -> 1
+        }
+
+        /**
+         * 读取 accessor 的浮点数据
+         *
+         * 支持 bufferView.byteStride (交错顶点缓冲): Unity / 部分 VRM 导出器会把
+         * position/normal/joints 打成同一块交错内存, 旧实现按紧凑布局顺序读, 会把模型读成乱码。
+         */
         fun getAccessorFloats(accessorIdx: Int): FloatArray {
             if (accessorIdx < 0 || accessorIdx >= accessors.length()) return FloatArray(0)
             val acc = accessors.getJSONObject(accessorIdx)
-            val bvIdx = acc.getInt("bufferView")
-            val bv = bufferViews.getJSONObject(bvIdx)
+            if (!acc.has("bufferView")) return FloatArray(0)
+            val bv = bufferViews.getJSONObject(acc.getInt("bufferView"))
 
             val bvOffset = bv.optInt("byteOffset", 0)
             val accOffset = acc.optInt("byteOffset", 0)
             val count = acc.getInt("count")
-            val type = acc.getString("type")
-            val numComponents = when (type) {
-                "SCALAR" -> 1
-                "VEC2" -> 2
-                "VEC3" -> 3
-                "VEC4" -> 4
-                "MAT4" -> 16
-                else -> 1
-            }
-
+            val numComponents = componentCountOf(acc.getString("type"))
             val componentType = acc.getInt("componentType")
-            val totalFloats = count * numComponents
-            val result = FloatArray(totalFloats)
+            val normalized = acc.optBoolean("normalized", false)
+            val elemSize = componentSizeOf(componentType) * numComponents
+            val stride = bv.optInt("byteStride", 0).let { if (it > 0) it else elemSize }
 
+            val result = FloatArray(count * numComponents)
             val slice = binBuffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
-            slice.position(bvOffset + accOffset)
-
-            when (componentType) {
-                5126 -> { // FLOAT
-                    for (i in 0 until totalFloats) {
-                        result[i] = slice.float
+            val base = bvOffset + accOffset
+            val capacity = binBuffer.capacity()
+            for (i in 0 until count) {
+                val pos = base + i * stride
+                if (pos < 0 || pos + elemSize > capacity) break
+                slice.position(pos)
+                val out = i * numComponents
+                when (componentType) {
+                    5126 -> for (c in 0 until numComponents) result[out + c] = slice.float
+                    5121 -> for (c in 0 until numComponents) {
+                        val v = slice.get().toInt() and 0xFF
+                        result[out + c] = if (normalized) v / 255.0f else v.toFloat()
                     }
-                }
-                5121 -> { // UNSIGNED_BYTE (normalized or raw)
-                    for (i in 0 until totalFloats) {
-                        result[i] = (slice.get().toInt() and 0xFF) / 255.0f
+                    5123 -> for (c in 0 until numComponents) {
+                        val v = slice.short.toInt() and 0xFFFF
+                        result[out + c] = if (normalized) v / 65535.0f else v.toFloat()
                     }
-                }
-                5123 -> { // UNSIGNED_SHORT
-                    for (i in 0 until totalFloats) {
-                        result[i] = (slice.short.toInt() and 0xFFFF) / 65535.0f
+                    5120 -> for (c in 0 until numComponents) {
+                        val v = slice.get().toInt()
+                        result[out + c] = if (normalized) (v / 127.0f).coerceIn(-1f, 1f) else v.toFloat()
                     }
+                    5122 -> for (c in 0 until numComponents) {
+                        val v = slice.short.toInt()
+                        result[out + c] = if (normalized) (v / 32767.0f).coerceIn(-1f, 1f) else v.toFloat()
+                    }
+                    else -> return FloatArray(0)
                 }
             }
             return result
@@ -114,87 +137,134 @@ object GlbParser {
         fun getAccessorInts(accessorIdx: Int): IntArray {
             if (accessorIdx < 0 || accessorIdx >= accessors.length()) return IntArray(0)
             val acc = accessors.getJSONObject(accessorIdx)
-            val bvIdx = acc.getInt("bufferView")
-            val bv = bufferViews.getJSONObject(bvIdx)
+            if (!acc.has("bufferView")) return IntArray(0)
+            val bv = bufferViews.getJSONObject(acc.getInt("bufferView"))
 
             val bvOffset = bv.optInt("byteOffset", 0)
             val accOffset = acc.optInt("byteOffset", 0)
             val count = acc.getInt("count")
-            val type = acc.getString("type")
-            val numComponents = when (type) {
-                "SCALAR" -> 1
-                "VEC2" -> 2
-                "VEC3" -> 3
-                "VEC4" -> 4
-                else -> 1
-            }
-
+            val numComponents = componentCountOf(acc.getString("type"))
             val componentType = acc.getInt("componentType")
-            val totalInts = count * numComponents
-            val result = IntArray(totalInts)
+            val elemSize = componentSizeOf(componentType) * numComponents
+            val stride = bv.optInt("byteStride", 0).let { if (it > 0) it else elemSize }
 
+            val result = IntArray(count * numComponents)
             val slice = binBuffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
-            slice.position(bvOffset + accOffset)
-
-            when (componentType) {
-                5121 -> { // UNSIGNED_BYTE
-                    for (i in 0 until totalInts) {
-                        result[i] = slice.get().toInt() and 0xFF
-                    }
-                }
-                5123 -> { // UNSIGNED_SHORT
-                    for (i in 0 until totalInts) {
-                        result[i] = slice.short.toInt() and 0xFFFF
-                    }
-                }
-                5125 -> { // UNSIGNED_INT
-                    for (i in 0 until totalInts) {
-                        result[i] = slice.int
-                    }
-                }
-                5120 -> { // BYTE
-                    for (i in 0 until totalInts) {
-                        result[i] = slice.get().toInt()
-                    }
-                }
-                5122 -> { // SHORT
-                    for (i in 0 until totalInts) {
-                        result[i] = slice.short.toInt()
+            val base = bvOffset + accOffset
+            val capacity = binBuffer.capacity()
+            for (i in 0 until count) {
+                val pos = base + i * stride
+                if (pos < 0 || pos + elemSize > capacity) break
+                slice.position(pos)
+                val out = i * numComponents
+                for (c in 0 until numComponents) {
+                    result[out + c] = when (componentType) {
+                        5121 -> slice.get().toInt() and 0xFF
+                        5123 -> slice.short.toInt() and 0xFFFF
+                        5125 -> slice.int
+                        5120 -> slice.get().toInt()
+                        5122 -> slice.short.toInt()
+                        else -> return IntArray(0)
                     }
                 }
             }
             return result
         }
 
-        // 3. 读取 Mesh 顶点与面数据 (第一组有效图元)
+        // 3. 读取 Mesh 顶点与面数据
+        //    导入的 VRM / GLB 角色经常由多个 mesh / 多个 primitive 组成 (身体 + 衣服 + 眼睛 + 头发),
+        //    旧实现只取 meshes[0].primitives[0] → 模型缺件。这里合并所有三角形图元, 顶点索引整体平移。
         var positions = FloatArray(0)
         var normals = FloatArray(0)
         var indices = IntArray(0)
         var joints0: IntArray? = null
         var weights0: FloatArray? = null
 
-        if (meshes.length() > 0) {
-            val meshObj = meshes.getJSONObject(0)
-            val primitives = meshObj.getJSONArray("primitives")
-            if (primitives.length() > 0) {
-                val prim = primitives.getJSONObject(0)
-                val attrs = prim.getJSONObject("attributes")
+        run {
+            val posChunks = ArrayList<FloatArray>()
+            val normChunks = ArrayList<FloatArray>()
+            val idxChunks = ArrayList<IntArray>()
+            val jointChunks = ArrayList<IntArray>()
+            val weightChunks = ArrayList<FloatArray>()
+            var vertexCount = 0
+            var triangleVertexCount = 0
+            var normalsComplete = true
+            var jointsSeen = false
 
-                if (attrs.has("POSITION")) {
-                    positions = getAccessorFloats(attrs.getInt("POSITION"))
+            for (mi in 0 until meshes.length()) {
+                val meshObj = meshes.optJSONObject(mi) ?: continue
+                val primitives = meshObj.optJSONArray("primitives") ?: continue
+                for (pi in 0 until primitives.length()) {
+                    val prim = primitives.optJSONObject(pi) ?: continue
+                    // 只收三角形图元 (mode 缺省 = 4 TRIANGLES)
+                    if (prim.optInt("mode", 4) != 4) continue
+                    val attrs = prim.optJSONObject("attributes") ?: continue
+                    if (!attrs.has("POSITION")) continue
+
+                    val pos = getAccessorFloats(attrs.getInt("POSITION"))
+                    if (pos.isEmpty()) continue
+                    val count = pos.size / 3
+                    posChunks.add(pos)
+                    vertexCount += count
+
+                    val norm = if (attrs.has("NORMAL")) getAccessorFloats(attrs.getInt("NORMAL")) else FloatArray(0)
+                    if (norm.size == pos.size) {
+                        normChunks.add(norm)
+                    } else {
+                        normalsComplete = false
+                        normChunks.add(FloatArray(pos.size))
+                    }
+
+                    val idx = if (prim.has("indices")) {
+                        getAccessorInts(prim.getInt("indices"))
+                    } else {
+                        IntArray(count) { it }
+                    }
+                    idxChunks.add(idx)
+                    triangleVertexCount += idx.size
+
+                    val j = if (attrs.has("JOINTS_0")) getAccessorInts(attrs.getInt("JOINTS_0")) else IntArray(0)
+                    if (j.size >= count * 4) {
+                        jointChunks.add(j)
+                        jointsSeen = true
+                    } else {
+                        jointChunks.add(IntArray(count * 4))
+                    }
+                    val w = if (attrs.has("WEIGHTS_0")) getAccessorFloats(attrs.getInt("WEIGHTS_0")) else FloatArray(0)
+                    weightChunks.add(if (w.size >= count * 4) w else FloatArray(count * 4))
                 }
-                if (attrs.has("NORMAL")) {
-                    normals = getAccessorFloats(attrs.getInt("NORMAL"))
+            }
+
+            if (posChunks.isNotEmpty() && vertexCount > 0) {
+                positions = FloatArray(vertexCount * 3)
+                normals = FloatArray(vertexCount * 3)
+                indices = IntArray(triangleVertexCount)
+                if (jointsSeen) {
+                    joints0 = IntArray(vertexCount * 4)
+                    weights0 = FloatArray(vertexCount * 4)
                 }
-                if (prim.has("indices")) {
-                    indices = getAccessorInts(prim.getInt("indices"))
+
+                var vertexBase = 0
+                var indexBase = 0
+                for (c in posChunks.indices) {
+                    val pos = posChunks[c]
+                    System.arraycopy(pos, 0, positions, vertexBase * 3, pos.size)
+                    System.arraycopy(normChunks[c], 0, normals, vertexBase * 3, pos.size)
+
+                    val idx = idxChunks[c]
+                    for (k in idx.indices) {
+                        val local = idx[k]
+                        indices[indexBase + k] = if (local in 0 until (pos.size / 3)) local + vertexBase else 0
+                    }
+                    indexBase += idx.size
+
+                    joints0?.let { System.arraycopy(jointChunks[c], 0, it, vertexBase * 4, jointChunks[c].size) }
+                    weights0?.let { System.arraycopy(weightChunks[c], 0, it, vertexBase * 4, weightChunks[c].size) }
+
+                    vertexBase += pos.size / 3
                 }
-                if (attrs.has("JOINTS_0")) {
-                    joints0 = getAccessorInts(attrs.getInt("JOINTS_0"))
-                }
-                if (attrs.has("WEIGHTS_0")) {
-                    weights0 = getAccessorFloats(attrs.getInt("WEIGHTS_0"))
-                }
+                // 只要有一个图元缺法线, 就按合并后的索引整体重算, 避免局部全黑
+                if (!normalsComplete) normals = FloatArray(0)
             }
         }
 
@@ -251,13 +321,32 @@ object GlbParser {
                 }
             }
 
+            // 全节点父子图: 关节的父节点常常不是关节 (Armature 根 / 场景根), 需要把祖先变换折进局部矩阵
+            val nodeParent = HashMap<Int, Int>()
+            for (ni in 0 until nodes.length()) {
+                val chArray = nodes.optJSONObject(ni)?.optJSONArray("children") ?: continue
+                for (ci in 0 until chArray.length()) {
+                    nodeParent[chArray.getInt(ci)] = ni
+                }
+            }
+
             for (j in 0 until jointCount) {
                 val nodeIdx = jointNodeIndices.getInt(j)
                 val nodeObj = nodes.getJSONObject(nodeIdx)
                 val name = nodeObj.optString("name", "Joint_$j")
 
                 // 解析局部变换矩阵
-                val localMatrix = parseNodeLocalMatrix(nodeObj)
+                var localMatrix = parseNodeLocalMatrix(nodeObj)
+                // glTF 的关节世界变换必须走完整节点链; 若直接父节点不是关节 (根节点带缩放/旋转的
+                // 导入模型很常见), 把这段祖先变换乘进来, 否则绑定姿态一上来就是形变的
+                var ancestor = nodeParent[nodeIdx]
+                var guard = 0
+                while (ancestor != null && guard++ < 64) {
+                    if (nodeToJointIndex.containsKey(ancestor)) break
+                    val ancObj = nodes.optJSONObject(ancestor) ?: break
+                    localMatrix = Math3D.multiplyMM(parseNodeLocalMatrix(ancObj), localMatrix)
+                    ancestor = nodeParent[ancestor]
+                }
 
                 // 逆绑定矩阵 (MAT4 = 16 floats)
                 val invBind = if (j * 16 + 15 < invBinds.size) {

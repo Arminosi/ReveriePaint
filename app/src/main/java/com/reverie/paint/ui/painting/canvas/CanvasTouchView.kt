@@ -2883,10 +2883,12 @@ class CanvasTouchView(context: Context) : View(context) {
                 for (layer in v.layers) {
                     if (!layer.visible) continue
                     val state = v.active3DLayers[layer.id] ?: continue
-                    val mesh = v.getMeshForState(state)
+                    // 逐帧路径复用顶点缓冲; 形变结果自带骨架与关节世界坐标,
+                    // 骨架覆盖层永远画在当前图层自己的骨架上 (旧实现命中缓存时不刷新 → 错位)
+                    val deformed = v.getInteractiveDeformed(state)
                     canvas3DDrawer.draw(
                         canvas,
-                        mesh,
+                        deformed.mesh,
                         state,
                         imgW.toFloat(),
                         imgH.toFloat(),
@@ -2895,8 +2897,8 @@ class CanvasTouchView(context: Context) : View(context) {
                     if (layer.id == cur3DLayer?.id && v.isCurrentLayer3D && v.active3DInteractionMode == Interaction3DMode.BONE) {
                         canvas3DDrawer.drawBones(
                             canvas,
-                            v.active3DSkeleton,
-                            v.active3DWorldJoints,
+                            deformed.skeleton,
+                            deformed.worldJoints,
                             v.active3DSelectedJointName,
                             imgW.toFloat(),
                             imgH.toFloat(),

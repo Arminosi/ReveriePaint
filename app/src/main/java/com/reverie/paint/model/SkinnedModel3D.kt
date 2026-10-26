@@ -4,8 +4,8 @@
 
 package com.reverie.paint.model
 
-import kotlin.math.cos
-import kotlin.math.sin
+import kotlin.math.abs
+import kotlin.math.hypot
 
 /**
  * 3D 单骨骼关节数据
@@ -22,12 +22,58 @@ data class Joint3D(
 
 /**
  * 骨架层级树与人形/动物标准关节映射
+ *
+ * 性能约定 (AGENTS.md §4 热路径零分配):
+ * - 父子拓扑序、语义键反向映射、绑定姿态世界矩阵、拖拽旋转轴角色全部在构造期算好,
+ *   [computeSkinning] 每帧只做一次正向遍历, 不再递归查找、不再分配临时矩阵。
  */
 class Skeleton3D(
     val joints: List<Joint3D>,
     val humanoidMapping: Map<String, Int> = emptyMap(),
 ) {
     val count: Int get() = joints.size
+
+    /** 父先于子的关节遍历序: FK 一次正向循环即可, 无需递归/visited 数组 */
+    private val order: IntArray
+
+    /** 关节索引 -> 语义键 (standard humanoid key)。多键指向同一关节时按字典序取首个, 保证跨会话确定 */
+    private val semanticKeys: Array<String?>
+
+    /** 绑定姿态下的关节世界矩阵 (count * 16) */
+    private val bindWorld: FloatArray
+
+    /** 垂直拖拽 (pitch, 绕局部 X) 的手指位移 -> 角度符号 */
+    private val pitchSigns: FloatArray
+
+    /** 水平拖拽使用的局部轴: 1 = Y (沿骨骼扭转/转头), 2 = Z (横向摆骨) */
+    private val swingAxes: IntArray
+
+    /** 水平拖拽的手指位移 -> 角度符号 */
+    private val swingSigns: FloatArray
+
+    init {
+        val n = joints.size
+        order = buildTopologicalOrder(n)
+        semanticKeys = resolveSemanticKeys(n)
+
+        bindWorld = FloatArray(n * 16)
+        // order 保证父先于子, 直接正向相乘即可
+        for (k in 0 until n) {
+            val i = order[k]
+            val j = joints[i]
+            val p = j.parentIndex
+            if (p in 0 until n) {
+                Math3D.multiplyMMInto(bindWorld, i * 16, bindWorld, p * 16, j.localMatrix, 0)
+            } else {
+                System.arraycopy(j.localMatrix, 0, bindWorld, i * 16, 16)
+            }
+        }
+
+        pitchSigns = FloatArray(n) { 1f }
+        swingAxes = IntArray(n) { 1 }
+        swingSigns = FloatArray(n) { 1f }
+        computeDragAxisRoles(n)
+    }
 
     fun getJointIndex(boneKey: String): Int {
         humanoidMapping[boneKey]?.let { return it }
@@ -37,62 +83,279 @@ class Skeleton3D(
     }
 
     /**
+     * 垂直拖拽 (俯仰) 的符号: 保证手指向下移动时骨骼末端/朝向也在屏幕上向下
+     */
+    fun dragPitchSign(jointIndex: Int): Float =
+        pitchSigns.getOrElse(jointIndex) { 1f }
+
+    /**
+     * 水平拖拽使用的局部旋转轴 (0 = X, 1 = Y, 2 = Z)
+     *
+     * 沿骨骼长度的轴 (对四肢来说就是 Y) 旋转只会让骨头自转, 屏幕上几乎看不到位移,
+     * 所以对非竖直骨骼改用能产生横向摆动的轴, 让"横向拖拽"始终有可见反馈。
+     */
+    fun dragSwingAxis(jointIndex: Int): Int = swingAxes.getOrElse(jointIndex) { 1 }
+
+    /**
+     * 水平拖拽的符号: 保证手指向右移动时骨骼末端/朝向也在屏幕上向右
+     */
+    fun dragSwingSign(jointIndex: Int): Float = swingSigns.getOrElse(jointIndex) { 1f }
+
+    /** 关节在绑定姿态下的世界坐标 */
+    fun bindWorldPosition(jointIndex: Int, out: FloatArray, outOffset: Int = 0) {
+        val off = jointIndex * 16
+        out[outOffset] = bindWorld[off + 12]
+        out[outOffset + 1] = bindWorld[off + 13]
+        out[outOffset + 2] = bindWorld[off + 14]
+    }
+
+    /** 关节的第一个子关节 (骨骼末端), 没有子关节时返回 -1 */
+    fun firstChildJoint(jointIndex: Int): Int {
+        val j = joints.getOrNull(jointIndex) ?: return -1
+        j.children.firstOrNull { it in joints.indices }?.let { return it }
+        for (k in joints.indices) {
+            if (joints[k].parentIndex == jointIndex) return k
+        }
+        return -1
+    }
+
+    /**
      * 根据关节旋转偏移量计算蒙皮形变矩阵 (Skinning Matrices) 与世界空间关节位置 (World Joint Positions)
      * @param jointEulerMap 关节索引或键名 -> [pitch, yaw, roll] 旋转角度
      * @param outSkinningMatrices 展开的一维蒙皮矩阵数组 (count * 16)
      * @param outWorldJointPositions 输出世界坐标关节位置 (count * 3)
+     * @param worldScratch 可选的 count * 16 世界矩阵复用缓冲 (热路径传入以避免分配)
      */
     fun computeSkinning(
         jointEulerMap: Map<String, FloatArray>,
         outSkinningMatrices: FloatArray,
         outWorldJointPositions: FloatArray? = null,
+        worldScratch: FloatArray? = null,
     ) {
-        val worldMatrices = Array(joints.size) { FloatArray(16) }
-        val computed = BooleanArray(joints.size)
+        val n = joints.size
+        if (n == 0) return
+        require(outSkinningMatrices.size >= n * 16) { "skinning matrix buffer too small" }
 
-        fun computeJointWorld(i: Int) {
-            if (computed[i]) return
+        val world = if (worldScratch != null && worldScratch.size >= n * 16) worldScratch else FloatArray(n * 16)
+        // 一次分配 6 个 4x4 临时矩阵, 避免每个关节 new 出十几个 FloatArray(16)
+        val tmp = FloatArray(16 * 6)
+        val rotYOff = 0
+        val rotXOff = 16
+        val rotZOff = 32
+        val rotTmpOff = 48
+        val rotAllOff = 64
+        val localRotOff = 80
+
+        for (k in 0 until n) {
+            val i = order[k]
             val joint = joints[i]
-            val parentWorld = if (joint.parentIndex in joints.indices) {
-                computeJointWorld(joint.parentIndex)
-                worldMatrices[joint.parentIndex]
+
+            val euler = jointEulerMap[joint.name] ?: semanticKeys[i]?.let { jointEulerMap[it] }
+            val parentOff = joint.parentIndex * 16
+            val selfOff = i * 16
+            val hasParent = joint.parentIndex in 0 until n
+
+            val hasRotation = euler != null && (euler[0] != 0f || euler[1] != 0f || euler[2] != 0f)
+            val local: FloatArray
+            val localOff: Int
+            if (hasRotation) {
+                // 与旧实现完全一致的合成顺序: local * Ry * Rx * Rz
+                Math3D.rotationMatrixInto(tmp, rotYOff, euler!![1], 0f, 1f, 0f)
+                Math3D.rotationMatrixInto(tmp, rotXOff, euler[0], 1f, 0f, 0f)
+                Math3D.multiplyMMInto(tmp, rotTmpOff, tmp, rotYOff, tmp, rotXOff)
+                Math3D.rotationMatrixInto(tmp, rotZOff, euler[2], 0f, 0f, 1f)
+                Math3D.multiplyMMInto(tmp, rotAllOff, tmp, rotTmpOff, tmp, rotZOff)
+                Math3D.multiplyMMInto(tmp, localRotOff, joint.localMatrix, 0, tmp, rotAllOff)
+                local = tmp
+                localOff = localRotOff
             } else {
-                Math3D.identity()
+                local = joint.localMatrix
+                localOff = 0
             }
 
-            // 获取该关节的旋转角度 (支持骨骼原名与标准人形映射键名)
-            val euler = jointEulerMap[joint.name]
-                ?: humanoidMapping.entries.firstOrNull { it.value == i }?.key?.let { jointEulerMap[it] }
-
-            val localWithRot = if (euler != null && (euler[0] != 0f || euler[1] != 0f || euler[2] != 0f)) {
-                var m = joint.localMatrix.copyOf()
-                if (euler[1] != 0f) m = Math3D.rotate(m, euler[1], 0f, 1f, 0f)
-                if (euler[0] != 0f) m = Math3D.rotate(m, euler[0], 1f, 0f, 0f)
-                if (euler[2] != 0f) m = Math3D.rotate(m, euler[2], 0f, 0f, 1f)
-                m
+            if (hasParent) {
+                Math3D.multiplyMMInto(world, selfOff, world, parentOff, local, localOff)
             } else {
-                joint.localMatrix
+                System.arraycopy(local, localOff, world, selfOff, 16)
             }
-
-            val world = Math3D.multiplyMM(parentWorld, localWithRot)
-            worldMatrices[i] = world
-            computed[i] = true
 
             // 蒙皮变换: skinning = world * inverseBind
-            val skinning = Math3D.multiplyMM(world, joint.inverseBindMatrix)
-            System.arraycopy(skinning, 0, outSkinningMatrices, i * 16, 16)
+            Math3D.multiplyMMInto(
+                outSkinningMatrices, selfOff,
+                world, selfOff,
+                joint.inverseBindMatrix, 0,
+            )
 
-            if (outWorldJointPositions != null) {
-                outWorldJointPositions[i * 3] = world[12]
-                outWorldJointPositions[i * 3 + 1] = world[13]
-                outWorldJointPositions[i * 3 + 2] = world[14]
+            if (outWorldJointPositions != null && outWorldJointPositions.size >= n * 3) {
+                outWorldJointPositions[i * 3] = world[selfOff + 12]
+                outWorldJointPositions[i * 3 + 1] = world[selfOff + 13]
+                outWorldJointPositions[i * 3 + 2] = world[selfOff + 14]
             }
         }
+    }
 
-        for (i in joints.indices) {
-            computeJointWorld(i)
+    // ------------------------------------------------------------------
+    // 构造期预计算
+    // ------------------------------------------------------------------
+
+    private fun buildTopologicalOrder(n: Int): IntArray {
+        val result = IntArray(n)
+        val state = IntArray(n) // 0 = 未访问, 1 = 已入队, 2 = 已输出
+        val queue = IntArray(n)
+        var head = 0
+        var tail = 0
+        var written = 0
+
+        for (i in 0 until n) {
+            val p = joints[i].parentIndex
+            if (p !in 0 until n) {
+                state[i] = 1
+                queue[tail++] = i
+            }
+        }
+        while (head < tail) {
+            val i = queue[head++]
+            result[written++] = i
+            state[i] = 2
+            for (c in 0 until n) {
+                if (joints[c].parentIndex == i && state[c] == 0) {
+                    state[c] = 1
+                    queue[tail++] = c
+                }
+            }
+        }
+        // 防御: 环或断裂层级导致未输出的关节按索引补齐 (不会崩溃, 只是 FK 顺序退化)
+        if (written < n) {
+            for (i in 0 until n) {
+                if (state[i] != 2) result[written++] = i
+            }
+        }
+        return result
+    }
+
+    private fun resolveSemanticKeys(n: Int): Array<String?> {
+        val keys = arrayOfNulls<String>(n)
+        for (key in humanoidMapping.keys.sorted()) {
+            val idx = humanoidMapping[key] ?: continue
+            if (idx in 0 until n && keys[idx] == null) keys[idx] = key
+        }
+        return keys
+    }
+
+    /**
+     * 推算出"垂直拖拽 / 水平拖拽"分别该用哪根局部轴、往哪个方向加角度。
+     *
+     * 判据全部来自绑定姿态几何 (与具体模型无关):
+     * - 绕某轴旋转会让骨骼末端/朝向在屏幕上往哪个方向动, 就用哪个符号;
+     * - 水平拖拽优先选"屏幕横向位移最大"的轴 (沿骨轴旋转 → 无位移, 会被自动淘汰);
+     * - 头/颈这类骨骼横向拖拽应该转头 (绕局部 Y 扭转), 单独固定;
+     */
+    private fun computeDragAxisRoles(n: Int) {
+        val axX = FloatArray(3)
+        val axY = FloatArray(3)
+        val axZ = FloatArray(3)
+        // 探针: 骨骼末端 (子关节) / 骨骼正前方 (+Z) / 骨骼侧向 (+X)
+        val probes = Array(3) { FloatArray(3) }
+
+        for (i in 0 until n) {
+            val selfOff = i * 16
+            val ox = bindWorld[selfOff + 12]
+            val oy = bindWorld[selfOff + 13]
+            val oz = bindWorld[selfOff + 14]
+
+            // 三根世界轴
+            worldAxis(selfOff, 0, axX, 0)
+            worldAxis(selfOff, 1, axY, 0)
+            worldAxis(selfOff, 2, axZ, 0)
+
+            val child = firstChildJoint(i)
+            val tip = probes[0]
+            if (child >= 0) {
+                val cOff = child * 16
+                tip[0] = bindWorld[cOff + 12] - ox
+                tip[1] = bindWorld[cOff + 13] - oy
+                tip[2] = bindWorld[cOff + 14] - oz
+            } else {
+                fillScaled(tip, axY, 0.12f)
+            }
+            fillScaled(probes[1], axZ, 0.12f)
+            fillScaled(probes[2], axX, 0.06f)
+
+            // --- 垂直拖拽 (pitch, 局部 X) ---
+            var bestPitch = 0f
+            for (p in 0 until 3) {
+                val screenDy = screenDeltaY(axX, probes[p])
+                if (abs(screenDy) > abs(bestPitch)) bestPitch = screenDy
+            }
+            pitchSigns[i] = if (abs(bestPitch) < 1e-5f) 1f else if (bestPitch > 0f) 1f else -1f
+
+            // --- 水平拖拽 ---
+            val semantic = semanticKeys[i]
+            if (semantic == "head" || semantic == "neck") {
+                // 转头: 绕局部 Y 扭转, 用"正前方"探针定符号
+                swingAxes[i] = 1
+                val dx = screenDeltaX(axY, probes[1])
+                swingSigns[i] = if (abs(dx) < 1e-5f) 1f else if (dx > 0f) 1f else -1f
+                continue
+            }
+
+            var bestAxis = 1
+            var bestDx = 0f
+            for (a in 1..2) {
+                val ax = if (a == 1) axY else axZ
+                var localBest = 0f
+                for (p in 0 until 3) {
+                    val dx = screenDeltaX(ax, probes[p])
+                    if (abs(dx) > abs(localBest)) localBest = dx
+                }
+                if (abs(localBest) > abs(bestDx)) {
+                    bestDx = localBest
+                    bestAxis = a
+                }
+            }
+            swingAxes[i] = bestAxis
+            swingSigns[i] = if (abs(bestDx) < 1e-5f) 1f else if (bestDx > 0f) 1f else -1f
         }
     }
+
+    private fun worldAxis(matrixOffset: Int, column: Int, out: FloatArray, outOffset: Int) {
+        var x = bindWorld[matrixOffset + column * 4]
+        var y = bindWorld[matrixOffset + column * 4 + 1]
+        var z = bindWorld[matrixOffset + column * 4 + 2]
+        val len = hypot(hypot(x, y), z).coerceAtLeast(1e-6f)
+        x /= len; y /= len; z /= len
+        out[outOffset] = x
+        out[outOffset + 1] = y
+        out[outOffset + 2] = z
+    }
+
+    private fun fillScaled(out: FloatArray, v: FloatArray, scale: Float) {
+        out[0] = v[0] * scale
+        out[1] = v[1] * scale
+        out[2] = v[2] * scale
+    }
+
+    /** 单位角度旋转下探针的屏幕横向位移 (正视相机: 世界 +X 为屏幕右) */
+    private fun screenDeltaX(axis: FloatArray, probe: FloatArray): Float =
+        axis[1] * probe[2] - axis[2] * probe[1]
+
+    /** 单位角度旋转下探针的屏幕纵向位移 (世界 +Y 为屏幕上, 屏幕 y 向下) */
+    private fun screenDeltaY(axis: FloatArray, probe: FloatArray): Float =
+        -(axis[2] * probe[0] - axis[0] * probe[2])
+}
+
+/**
+ * 顶点输出缓冲: 交互拖拽时复用同一组数组, 避免每帧产生 300KB 级垃圾
+ * (12k 顶点模型 = positions + normals 各 147KB)。
+ *
+ * 注意: 复用期间上一次返回的 [Mesh3D] 会指向同一组数组, 只允许在"画完即弃"的视口预览路径使用。
+ */
+class DeformBuffer(val vertexCount: Int, jointCount: Int) {
+    val positions = FloatArray(vertexCount * 3)
+    val normals = FloatArray(vertexCount * 3)
+    val skinningMatrices = FloatArray(jointCount.coerceAtLeast(1) * 16)
+    val worldMatrices = FloatArray(jointCount.coerceAtLeast(1) * 16)
+    val worldJoints = FloatArray(jointCount.coerceAtLeast(1) * 3)
 }
 
 /**
@@ -104,26 +367,54 @@ class SkinnedMesh3D(
     val jointIndices: IntArray?,   // 每个顶点 4 个关节索引 [v0_j0, v0_j1, v0_j2, v0_j3, ...]
     val jointWeights: FloatArray?, // 每个顶点 4 个关节权重 [v0_w0, v0_w1, v0_w2, v0_w3, ...]
 ) {
+    /** 绑定姿态 (静止姿态) 的最低点: 自动贴地时以它为"地面"基准线 */
+    val restMinY: Float by lazy {
+        var minY = Float.MAX_VALUE
+        val p = baseMesh.positions
+        var i = 1
+        while (i < p.size) {
+            if (p[i] < minY) minY = p[i]
+            i += 3
+        }
+        if (minY == Float.MAX_VALUE) 0f else minY
+    }
+
     /**
      * 应用骨骼蒙皮形变，生成形变后的静态 Mesh3D
+     *
+     * @param buffer 可复用的顶点输出缓冲 (尺寸不符时自动忽略并新建)
+     * @param groundShiftY 姿态预设的整体升降量 (glTF: +Y 向上), 直接写入结果顶点, 不额外拷贝
      */
     fun createDeformedMesh(
         jointEulerMap: Map<String, FloatArray>,
         outWorldJointPositions: FloatArray? = null,
+        buffer: DeformBuffer? = null,
+        groundShiftY: Float = 0f,
     ): Mesh3D {
         if (skeleton == null || jointIndices == null || jointWeights == null || skeleton.count == 0) {
             return baseMesh
         }
 
-        val skinningMatrices = FloatArray(skeleton.count * 16)
-        skeleton.computeSkinning(jointEulerMap, skinningMatrices, outWorldJointPositions)
+        val vCount = baseMesh.vertexCount
+        val usableBuffer = buffer?.takeIf { it.vertexCount == vCount }
+        val defPositions = usableBuffer?.positions ?: FloatArray(vCount * 3)
+        val defNormals = usableBuffer?.normals ?: FloatArray(vCount * 3)
+
+        val skinningMatrices = usableBuffer?.skinningMatrices
+            ?: FloatArray(skeleton.count * 16)
+        skeleton.computeSkinning(
+            jointEulerMap,
+            skinningMatrices,
+            outWorldJointPositions,
+            usableBuffer?.worldMatrices,
+        )
 
         val origPositions = baseMesh.positions
         val origNormals = baseMesh.normals
-        val vCount = baseMesh.vertexCount
-
-        val defPositions = FloatArray(origPositions.size)
-        val defNormals = FloatArray(origNormals.size)
+        val hasNormals = origNormals.size >= vCount * 3
+        val jointCount = skeleton.count
+        val lastJoint = jointCount - 1
+        val dy = groundShiftY
 
         for (v in 0 until vCount) {
             val bIdx = v * 4
@@ -131,36 +422,36 @@ class SkinnedMesh3D(
             val py = origPositions[v * 3 + 1]
             val pz = origPositions[v * 3 + 2]
 
-            val nx = origNormals[v * 3]
-            val ny = origNormals[v * 3 + 1]
-            val nz = origNormals[v * 3 + 2]
-
-            var fx = 0f; var fy = 0f; var fz = 0f
-            var fnx = 0f; var fny = 0f; var fnz = 0f
-
+            var fx = 0f
+            var fy = 0f
+            var fz = 0f
+            var fnx = 0f
+            var fny = 0f
+            var fnz = 0f
             var totalWeight = 0f
+
             for (k in 0 until 4) {
                 val weight = jointWeights[bIdx + k]
                 if (weight > 0.001f) {
-                    val joint = jointIndices[bIdx + k].coerceIn(0, skeleton.count - 1)
-                    val mOffset = joint * 16
+                    val joint = jointIndices[bIdx + k].coerceIn(0, lastJoint)
+                    val m = joint * 16
 
-                    // Transform position by skinning matrix
-                    val m0 = skinningMatrices[mOffset];     val m4 = skinningMatrices[mOffset + 4]
-                    val m8 = skinningMatrices[mOffset + 8]; val m12 = skinningMatrices[mOffset + 12]
-                    val m1 = skinningMatrices[mOffset + 1]; val m5 = skinningMatrices[mOffset + 5]
-                    val m9 = skinningMatrices[mOffset + 9]; val m13 = skinningMatrices[mOffset + 13]
-                    val m2 = skinningMatrices[mOffset + 2]; val m6 = skinningMatrices[mOffset + 6]
-                    val m10 = skinningMatrices[mOffset + 10]; val m14 = skinningMatrices[mOffset + 14]
+                    val m0 = skinningMatrices[m]
+                    val m1 = skinningMatrices[m + 1]
+                    val m2 = skinningMatrices[m + 2]
+                    val m4 = skinningMatrices[m + 4]
+                    val m5 = skinningMatrices[m + 5]
+                    val m6 = skinningMatrices[m + 6]
+                    val m8 = skinningMatrices[m + 8]
+                    val m9 = skinningMatrices[m + 9]
+                    val m10 = skinningMatrices[m + 10]
+                    val m12 = skinningMatrices[m + 12]
+                    val m13 = skinningMatrices[m + 13]
+                    val m14 = skinningMatrices[m + 14]
 
                     fx += weight * (m0 * px + m4 * py + m8 * pz + m12)
                     fy += weight * (m1 * px + m5 * py + m9 * pz + m13)
                     fz += weight * (m2 * px + m6 * py + m10 * pz + m14)
-
-                    // Transform normal by rotation part of skinning matrix
-                    fnx += weight * (m0 * nx + m4 * ny + m8 * nz)
-                    fny += weight * (m1 * nx + m5 * ny + m9 * nz)
-                    fnz += weight * (m2 * nx + m6 * ny + m10 * nz)
 
                     totalWeight += weight
                 }
@@ -169,20 +460,48 @@ class SkinnedMesh3D(
             if (totalWeight < 0.001f) {
                 // 未分配权重的顶点保持原位
                 defPositions[v * 3] = px
-                defPositions[v * 3 + 1] = py
+                defPositions[v * 3 + 1] = py + dy
                 defPositions[v * 3 + 2] = pz
-                defNormals[v * 3] = nx
-                defNormals[v * 3 + 1] = ny
-                defNormals[v * 3 + 2] = nz
-            } else {
-                defPositions[v * 3] = fx
-                defPositions[v * 3 + 1] = fy
-                defPositions[v * 3 + 2] = fz
+                if (hasNormals) {
+                    defNormals[v * 3] = origNormals[v * 3]
+                    defNormals[v * 3 + 1] = origNormals[v * 3 + 1]
+                    defNormals[v * 3 + 2] = origNormals[v * 3 + 2]
+                }
+                continue
+            }
 
-                val nLen = kotlin.math.hypot(kotlin.math.hypot(fnx, fny), fnz).coerceAtLeast(1e-6f)
+            // 权重归一化: 部分导出器只写 3 个有效权重 / 权重和不足 1, 不归一化会让顶点被"吸"向原点
+            val invW = 1f / totalWeight
+            defPositions[v * 3] = fx * invW
+            defPositions[v * 3 + 1] = fy * invW + dy
+            defPositions[v * 3 + 2] = fz * invW
+
+            if (hasNormals) {
+                val px2 = origNormals[v * 3]
+                val py2 = origNormals[v * 3 + 1]
+                val pz2 = origNormals[v * 3 + 2]
+                for (k in 0 until 4) {
+                    val weight = jointWeights[bIdx + k]
+                    if (weight > 0.001f) {
+                        val joint = jointIndices[bIdx + k].coerceIn(0, lastJoint)
+                        val m = joint * 16
+                        fnx += weight * (skinningMatrices[m] * px2 + skinningMatrices[m + 4] * py2 + skinningMatrices[m + 8] * pz2)
+                        fny += weight * (skinningMatrices[m + 1] * px2 + skinningMatrices[m + 5] * py2 + skinningMatrices[m + 9] * pz2)
+                        fnz += weight * (skinningMatrices[m + 2] * px2 + skinningMatrices[m + 6] * py2 + skinningMatrices[m + 10] * pz2)
+                    }
+                }
+                val nLen = hypot(hypot(fnx, fny), fnz).coerceAtLeast(1e-6f)
                 defNormals[v * 3] = fnx / nLen
                 defNormals[v * 3 + 1] = fny / nLen
                 defNormals[v * 3 + 2] = fnz / nLen
+            }
+        }
+
+        if (outWorldJointPositions != null && dy != 0f) {
+            var i = 1
+            while (i < outWorldJointPositions.size) {
+                outWorldJointPositions[i] += dy
+                i += 3
             }
         }
 
@@ -193,5 +512,17 @@ class SkinnedMesh3D(
             wireframeIndices = baseMesh.wireframeIndices,
             wireframeEdgeTriangles = baseMesh.wireframeEdgeTriangles,
         )
+    }
+
+    /** 形变后网格的最低点 (自动贴地/落地校验用) */
+    fun minYOf(mesh: Mesh3D): Float {
+        var minY = Float.MAX_VALUE
+        val p = mesh.positions
+        var i = 1
+        while (i < p.size) {
+            if (p[i] < minY) minY = p[i]
+            i += 3
+        }
+        return if (minY == Float.MAX_VALUE) 0f else minY
     }
 }

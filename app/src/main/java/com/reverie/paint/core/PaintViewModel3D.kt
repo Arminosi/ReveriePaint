@@ -4,10 +4,10 @@
 
 package com.reverie.paint.core
 
-import android.graphics.Bitmap
 import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import com.reverie.paint.R
 import com.reverie.paint.model.*
@@ -17,6 +17,40 @@ import java.util.concurrent.ConcurrentHashMap
 
 private val meshCache = ConcurrentHashMap<String, Mesh3D>()
 private val skinnedModelCache = ConcurrentHashMap<String, SkinnedMesh3D>()
+
+/**
+ * 一次形变的完整结果: 网格 + 骨架 + 关节世界坐标
+ *
+ * 旧实现把"当前骨架/关节世界坐标"当作 [getMeshForState] 的副作用写入 ViewModel,
+ * 命中缓存时不会刷新, 于是切换图层/模型后骨架覆盖层会画在错误的位置。
+ * 现在骨架与关节坐标随形变结果一起返回, 调用方自己决定画哪一份。
+ */
+internal class Deformed3D(
+    val mesh: Mesh3D,
+    val skeleton: Skeleton3D?,
+    val worldJoints: FloatArray?,
+)
+
+private data class DeformKey(
+    val modelType: String,
+    val posePreset: String,
+    val jointAngles: Map<String, Float>,
+)
+
+/** 静态形变结果 LRU (烘焙/导出/撤销回放复用), 按浮点元素总量限容 */
+private val deformCache = LinkedHashMap<DeformKey, Deformed3D>(8, 0.75f, true)
+private val deformCacheLock = Any()
+private var deformCacheFloats = 0L
+private const val DEFORM_CACHE_FLOAT_BUDGET = 2_000_000L // ≈ 8MB, 旧实现固定 40 份可达 30MB+
+
+/** 交互拖拽槽位: 复用同一组顶点缓冲, 拖拽时每帧不再产生 300KB 级垃圾 */
+private class InteractiveSlot {
+    var state: Model3DState? = null
+    var result: Deformed3D? = null
+    var buffer: DeformBuffer? = null
+}
+
+private val interactiveSlots = ConcurrentHashMap<Long, InteractiveSlot>()
 
 /**
  * 加载或获取已解析的带骨骼蒙皮 3D 模型 (支持内置 GLB 与外部导入的 .glb / .vrm / .pmx)
@@ -85,303 +119,168 @@ internal fun PaintViewModel.getSkinnedModelForState(state: Model3DState): Skinne
 }
 
 /**
- * 猫的姿态预设需要整体升降才有说服力 (端坐/农民揣胯部要落地), 但骨骼层只做旋转。
- * 这里返回整个模型在自身坐标系里的 Y 偏移 (glTF: +Y 向上), 由 [getMeshForState] 施加到形变后的网格上。
+ * 获取当前模型的骨架 (只取解析缓存, 不做形变) —— 骨骼拖拽需要绑定姿态的旋转轴角色
  */
-private fun catPoseOffsetY(posePreset: String): Float = when (posePreset.lowercase()) {
-    "sit" -> -0.50f
-    "loaf" -> -0.60f
-    "stretch" -> -0.10f
-    else -> 0f
+internal fun PaintViewModel.skeletonForState(state: Model3DState): Skeleton3D? =
+    getSkinnedModelForState(state)?.skeleton
+
+/**
+ * 执行一次形变。buffer 非空时复用其中的顶点/矩阵数组。
+ */
+internal fun PaintViewModel.deformState(state: Model3DState, buffer: DeformBuffer?): Deformed3D {
+    val skinned = getSkinnedModelForState(state)
+    val skeleton = skinned?.skeleton
+    if (skinned != null && skeleton != null && skinned.jointIndices != null && skinned.jointWeights != null) {
+        val euler = PosePresets.buildEulerMap(state.modelType, state.posePreset, state.jointAngles)
+        // 贴地量只由"预设"决定, 不随用户微调角度漂移
+        val shift = PosePresets.groundShiftForPreset(skinned, state.modelType, state.posePreset)
+        val outJoints = when {
+            buffer != null && buffer.worldJoints.size >= skeleton.count * 3 -> buffer.worldJoints
+            else -> FloatArray(skeleton.count * 3)
+        }
+        val mesh = skinned.createDeformedMesh(euler, outJoints, buffer, shift)
+        return Deformed3D(mesh, skeleton, outJoints)
+    }
+    // 无骨骼蒙皮但已由 glTF/GLB 解析器读出的网格 (静态道具模型): 直接用它, 不要再走 OBJ 兜底
+    if (skinned != null) return Deformed3D(skinned.baseMesh, skeleton, null)
+    return Deformed3D(buildStaticMesh(state), null, null)
 }
 
 /**
- * 将姿态预设与关节点微调角度组合为骨骼局部欧拉旋转映射表 [BoneName -> [Pitch, Yaw, Roll]]
+ * 获取形变结果 (带缓存)。用于烘焙/导出/线稿等非逐帧路径。
  */
-private fun buildEulerMap(
-    posePreset: String,
-    jointAngles: Map<String, Float>,
-    isCat: Boolean
-): Map<String, FloatArray> {
-    val map = HashMap<String, FloatArray>()
+internal fun PaintViewModel.getDeformedForState(state: Model3DState): Deformed3D {
+    val key = DeformKey(state.modelType, state.posePreset, state.jointAngles)
+    synchronized(deformCacheLock) { deformCache[key]?.let { return it } }
 
-    fun addJoint(boneNames: List<String>, pitch: Float, yaw: Float, roll: Float) {
-        val angles = floatArrayOf(pitch, yaw, roll)
-        for (name in boneNames) {
-            map[name] = angles
+    val result = deformState(state, null)
+
+    synchronized(deformCacheLock) {
+        if (!deformCache.containsKey(key)) {
+            deformCache[key] = result
+            deformCacheFloats += result.mesh.positions.size + result.mesh.normals.size
+            val iter = deformCache.entries.iterator()
+            while (deformCacheFloats > DEFORM_CACHE_FLOAT_BUDGET && iter.hasNext()) {
+                val entry = iter.next()
+                if (entry.key == key) continue
+                deformCacheFloats -= entry.value.mesh.positions.size + entry.value.mesh.normals.size
+                iter.remove()
+            }
         }
     }
-
-    if (isCat) {
-        // 猫猫骨骼约定 (重绑管线 scripts/model/build_cat_glb.py)。局部 X 全部指向世界 +X，
-        // 实测符号 (glTF: +Y 上, +Z 脸朝前, +X 猫右侧):
-        //   Hips/Spine pitch > 0 = 前半身下沉      Head pitch > 0 = 低头
-        //   前肢 shoulder/leg pitch > 0 = 爪子后摆  后肢 thigh 后移 / shank 折起 / foot 后移
-        //   尾骨 pitch > 0 = 上翘, 左右摆走 roll (绕局部 Z, 绕局部 Y 只是沿骨轴扭转)
-        // 数值由离线 IK 拟合得出: 目标是把四只爪子和骨盆压到同一水平面 (见 fit 脚本),
-        // 拟合后 侧视图上四爪贴地、躯干角度正确, 不再是"腿在空中划水"。
-        var hipP = 0f; var headP = 0f; var spineArch = 0f; var chestP = 0f; var neckP = 0f
-        var flSh = 0f; var frSh = 0f; var flLeg = 0f; var frLeg = 0f
-        var flPaw = 0f; var frPaw = 0f
-        var hlLeg = 0f; var hrLeg = 0f
-        var hlShank = 0f; var hrShank = 0f
-        var hlFoot = 0f; var hrFoot = 0f
-        var tailP = 35f; var tailSide = 8f
-
-        when (posePreset.lowercase()) {
-            // 端坐: 骨盆后倾下落, 躯干立起, 前肢竖直支撑, 后肢折叠于体侧, 尾巴环绕贴地
-            "sit" -> {
-                hipP = -15f; spineArch = 10f; chestP = 15f; neckP = 5f; headP = -10f
-                flSh = 12f; frSh = 12f; flLeg = -12f; frLeg = -12f
-                hlLeg = -42f; hrLeg = -42f
-                hlShank = 55f; hrShank = 55f
-                hlFoot = -25f; hrFoot = -25f
-                tailP = -30f; tailSide = 20f
-            }
-            // 农民揣 (卧姿): 躯干沉伏, 前肢收拢于胸下, 后肢折进腹下, 尾巴贴体
-            "loaf" -> {
-                hipP = -12f; spineArch = -4f; chestP = 8f; headP = -6f
-                flSh = 42f; frSh = 42f; flLeg = -68f; frLeg = -68f; flPaw = 26f; frPaw = 26f
-                hlLeg = -52f; hrLeg = -52f
-                hlShank = 70f; hrShank = 70f
-                hlFoot = -22f; hrFoot = -22f
-                tailP = -25f; tailSide = 30f
-            }
-            // 伸懒腰: 前肢伸展, 胸口低伏压低, 后躯高翘, 头抬起, 尾巴翘卷
-            "stretch" -> {
-                hipP = 10f; spineArch = -8f; chestP = -18f; neckP = -5f; headP = 18f
-                flSh = -25f; frSh = -25f; flLeg = -10f; frLeg = -10f; flPaw = 15f; frPaw = 15f
-                hlLeg = 15f; hrLeg = 15f
-                hlShank = -10f; hrShank = -10f
-                hlFoot = 5f; hrFoot = 5f
-                tailP = 40f; tailSide = 0f
-            }
-        }
-
-        headP += (jointAngles["cat_head_pitch"] ?: 0f)
-        val headY = (jointAngles["cat_head_yaw"] ?: 0f)
-        spineArch += (jointAngles["cat_spine_arch"] ?: 0f)
-        flLeg += (jointAngles["cat_fl_leg"] ?: 0f)
-        frLeg += (jointAngles["cat_fr_leg"] ?: 0f)
-        hlLeg += (jointAngles["cat_hl_leg"] ?: 0f)
-        hrLeg += (jointAngles["cat_hr_leg"] ?: 0f)
-        tailP += (jointAngles["cat_tail_pitch"] ?: 0f)
-        tailSide += (jointAngles["cat_tail_yaw"] ?: 0f)
-
-        addJoint(listOf("Hips", "hips"), hipP, 0f, 0f)
-        addJoint(listOf("Spine", "spine"), spineArch, 0f, 0f)
-        addJoint(listOf("Chest", "chest"), chestP, 0f, 0f)
-        addJoint(listOf("Neck", "neck"), neckP, 0f, 0f)
-        addJoint(listOf("Head", "head"), headP, headY, 0f)
-        addJoint(listOf("l_front_shoulder", "frontleg"), flSh, 0f, 0f)
-        addJoint(listOf("r_front_shoulder", "R_frontleg"), frSh, 0f, 0f)
-        addJoint(listOf("leftFrontLeg", "LeftFrontLeg", "l_front_leg", "frontleg0"), flLeg, 0f, 0f)
-        addJoint(listOf("rightFrontLeg", "RightFrontLeg", "r_front_leg", "R_frontleg0"), frLeg, 0f, 0f)
-        addJoint(listOf("l_front_paw", "frontleg1", "frontleg2"), flPaw, 0f, 0f)
-        addJoint(listOf("r_front_paw", "R_frontleg1", "R_frontleg2"), frPaw, 0f, 0f)
-        addJoint(listOf("leftHindLeg", "LeftHindLeg", "l_hind_thigh", "backleg"), hlLeg, 0f, 0f)
-        addJoint(listOf("rightHindLeg", "RightHindLeg", "r_hind_thigh", "R_backleg"), hrLeg, 0f, 0f)
-        addJoint(listOf("l_hind_shank", "backleg0"), hlShank, 0f, 0f)
-        addJoint(listOf("r_hind_shank", "R_backleg0"), hrShank, 0f, 0f)
-        addJoint(listOf("l_hind_foot", "backleg1", "backleg2"), hlFoot, 0f, 0f)
-        addJoint(listOf("r_hind_foot", "R_backleg1", "R_backleg2"), hrFoot, 0f, 0f)
-        // 尾骨链: 第一根跟随滑杆, 后面几节按固定比例递进, 形成自然的卷曲
-        addJoint(listOf("Tail1", "tail1", "tail"), tailP, 0f, tailSide)
-        addJoint(listOf("Tail2", "tail2", "tailstart"), 26f + tailP * 0.25f, 0f, tailSide * 0.8f)
-        addJoint(listOf("Tail3", "tail3"), 20f + tailP * 0.2f, 0f, tailSide * 0.6f)
-        addJoint(listOf("Tail4", "tail4"), 14f + tailP * 0.15f, 0f, tailSide * 0.4f)
-        addJoint(listOf("tail5"), 10f + tailP * 0.1f, 0f, tailSide * 0.2f)
-    } else {
-        var spineP = 0f; var spineY = 0f
-        var headP = 0f; var headY = 0f
-        var lArmP = 0f; var lArmY = 0f; var lArmRoll = 0f
-        var rArmP = 0f; var rArmY = 0f; var rArmRoll = 0f
-        var lElbowP = 0f; var rElbowP = 0f
-        var lThighP = 0f; var lThighY = 0f
-        var rThighP = 0f; var rThighY = 0f
-        var lKneeP = 0f; var rKneeP = 0f
-
-        when (posePreset.lowercase()) {
-            "stand" -> {
-                // 原生标准自然站姿：A-pose 模型无需额外偏移
-            }
-            "sit" -> {
-                // 坐姿: 大腿向前平抬 80°，小腿垂直下垂 80°，双手微屈搭放于腿前
-                lThighP = 80f; lKneeP = -80f
-                rThighP = 80f; rKneeP = -80f
-                lArmP = 25f; lElbowP = 40f
-                rArmP = 25f; rElbowP = 40f
-                spineP = 5f
-            }
-            "action" -> {
-                // 动态奔跑姿态
-                spineP = 12f; spineY = -10f
-                headP = -6f; headY = 10f
-                lArmP = 45f; lElbowP = 50f
-                rArmP = -40f; rElbowP = 30f
-                lThighP = 55f; lKneeP = -55f
-                rThighP = -35f; rKneeP = -30f
-            }
-            "crossed" -> {
-                // 双手抱胸
-                spineP = -4f
-                lArmP = 35f; lArmRoll = 30f; lElbowP = 85f
-                rArmP = 35f; rArmRoll = -30f; rElbowP = 85f
-            }
-            "hips" -> {
-                // 双手叉腰
-                lArmP = -15f; lArmRoll = -25f; lElbowP = 75f
-                rArmP = -15f; rArmRoll = 25f; rElbowP = 75f
-            }
-            "kneel" -> {
-                // 单膝下跪
-                spineP = 12f
-                lThighP = 75f; lKneeP = -75f
-                rThighP = -15f; rKneeP = -85f
-                rArmP = 35f; rElbowP = 40f
-            }
-        }
-
-        spineP += (jointAngles["spine_pitch"] ?: 0f)
-        spineY += (jointAngles["spine_yaw"] ?: 0f)
-        headP += (jointAngles["head_pitch"] ?: 0f)
-        headY += (jointAngles["head_yaw"] ?: 0f)
-
-        lArmP += (jointAngles["l_arm_pitch"] ?: 0f)
-        lArmY += (jointAngles["l_arm_yaw"] ?: 0f)
-        lElbowP += (jointAngles["l_elbow"] ?: 0f)
-
-        rArmP += (jointAngles["r_arm_pitch"] ?: 0f)
-        rArmY += (jointAngles["r_arm_yaw"] ?: 0f)
-        rElbowP += (jointAngles["r_elbow"] ?: 0f)
-
-        lThighP += (jointAngles["l_thigh_pitch"] ?: 0f)
-        lThighY += (jointAngles["l_thigh_yaw"] ?: 0f)
-        lKneeP -= (jointAngles["l_knee"] ?: 0f)
-
-        rThighP += (jointAngles["r_thigh_pitch"] ?: 0f)
-        rThighY += (jointAngles["r_thigh_yaw"] ?: 0f)
-        rKneeP -= (jointAngles["r_knee"] ?: 0f)
-
-        addJoint(listOf("head", "Head"), headP, headY, 0f)
-        addJoint(listOf("spine", "spine_01", "Spine"), spineP, spineY, 0f)
-        addJoint(listOf("chest", "spine_02", "Chest", "UpperChest"), spineP * 0.5f, spineY * 0.5f, 0f)
-
-        addJoint(listOf("leftUpperArm", "upperarm.l", "LeftArm", "LeftUpperArm"), lArmP, lArmY, lArmRoll)
-        addJoint(listOf("leftLowerArm", "lowerarm.l", "LeftForeArm", "LeftLowerArm"), lElbowP, 0f, 0f)
-
-        addJoint(listOf("rightUpperArm", "upperarm.r", "RightArm", "RightUpperArm"), rArmP, rArmY, rArmRoll)
-        addJoint(listOf("rightLowerArm", "lowerarm.r", "RightForeArm", "RightLowerArm"), rElbowP, 0f, 0f)
-
-        addJoint(listOf("leftUpperLeg", "thigh.l", "LeftUpLeg", "LeftUpperLeg", "LeftThigh"), lThighP, lThighY, 0f)
-        addJoint(listOf("leftLowerLeg", "calf.l", "LeftLeg", "LeftLowerLeg", "LeftShin"), lKneeP, 0f, 0f)
-
-        addJoint(listOf("rightUpperLeg", "thigh.r", "RightUpLeg", "RightUpperLeg", "RightThigh"), rThighP, rThighY, 0f)
-        addJoint(listOf("rightLowerLeg", "calf.r", "RightLeg", "RightLowerLeg", "RightShin"), rKneeP, 0f, 0f)
-    }
-
-    // 通用骨骼直接旋转支持 (支持任意 GLB / VRM / PMX 骨骼名称)
-    for ((key, value) in jointAngles) {
-        val (boneName, axis) = when {
-            key.endsWith("_p") -> Pair(key.removeSuffix("_p"), 0)
-            key.endsWith("_pitch") -> Pair(key.removeSuffix("_pitch"), 0)
-            key.endsWith("_y") -> Pair(key.removeSuffix("_y"), 1)
-            key.endsWith("_yaw") -> Pair(key.removeSuffix("_yaw"), 1)
-            key.endsWith("_r") -> Pair(key.removeSuffix("_r"), 2)
-            key.endsWith("_roll") -> Pair(key.removeSuffix("_roll"), 2)
-            else -> continue
-        }
-        val existing = map[boneName]
-        if (existing != null) {
-            existing[axis] += value
-        } else {
-            val arr = FloatArray(3)
-            arr[axis] = value
-            map[boneName] = arr
-        }
-    }
-
-    return map
+    return result
 }
 
 /**
- * 获取或构造 3D 网格对象
+ * 逐帧渲染专用: 复用顶点缓冲, 命中上一次状态时直接返回 (静止的 3D 图层叠加绘制零开销)。
+ *
+ * 返回的 [Mesh3D] 指向可复用缓冲, 只允许"画完即弃", 不要持有到下一帧之后。
  */
-internal fun PaintViewModel.getMeshForState(state: Model3DState): Mesh3D {
-    val anglesKey = if (state.jointAngles.isEmpty()) "" else state.jointAngles.entries.sortedBy { it.key }.joinToString(",") { "${it.key}:${it.value}" }
+internal fun PaintViewModel.getInteractiveDeformed(state: Model3DState): Deformed3D {
+    if (interactiveSlots.size > 16) interactiveSlots.clear()
+    val slot = interactiveSlots.getOrPut(state.layerId) { InteractiveSlot() }
+    val cachedState = slot.state
+    if (cachedState != null && slot.result != null && (cachedState === state || cachedState == state)) {
+        return slot.result!!
+    }
+
+    val skinned = getSkinnedModelForState(state)
+    val vertexCount = skinned?.baseMesh?.vertexCount ?: 0
+    val jointCount = skinned?.skeleton?.count ?: 0
+    var buffer = slot.buffer
+    if (buffer == null || buffer.vertexCount != vertexCount) {
+        buffer = if (vertexCount > 0) DeformBuffer(vertexCount, jointCount) else null
+        slot.buffer = buffer
+    }
+
+    val result = deformState(state, buffer)
+    slot.state = state
+    slot.result = result
+    return result
+}
+
+/**
+ * 获取 3D 网格对象 (兼容入口)
+ */
+internal fun PaintViewModel.getMeshForState(state: Model3DState): Mesh3D = getDeformedForState(state).mesh
+
+/**
+ * 后台预热模型解析: 首次绘制时在 UI 线程解析 276KB~600KB 的 GLB 会造成明显掉帧
+ */
+internal fun PaintViewModel.prewarm3DModel(state: Model3DState) {
+    val key = state.modelType
+    if (skinnedModelCache.containsKey(key) || meshCache.containsKey(key)) return
+    viewModelScope.launch(Dispatchers.IO) {
+        try {
+            getSkinnedModelForState(state)
+        } catch (e: Exception) {
+            Log.w("RP_3D", "Prewarm 3D model failed: $key", e)
+        }
+    }
+}
+
+/**
+ * 构造非蒙皮模型的静态网格 (内置几何体 / OBJ 导入 / 素模兜底)
+ */
+private fun PaintViewModel.buildStaticMesh(state: Model3DState): Mesh3D {
+    val anglesKey = if (state.jointAngles.isEmpty()) "" else {
+        state.jointAngles.entries.sortedBy { it.key }.joinToString(",") { "${it.key}:${it.value}" }
+    }
     val key = "${state.modelType}#${state.posePreset}#$anglesKey"
     meshCache[key]?.let { return it }
 
-    val skinned = getSkinnedModelForState(state)
-    val mesh = if (skinned != null) {
-        active3DSkeleton = skinned.skeleton
-        val isCat = state.modelType.equals("cat", ignoreCase = true)
-        val eulerMap = buildEulerMap(state.posePreset, state.jointAngles, isCat)
-        val jointCount = skinned.skeleton?.count ?: 0
-        val outJointPositions = if (jointCount > 0) FloatArray(jointCount * 3) else null
-        var deformed = skinned.createDeformedMesh(eulerMap, outJointPositions)
-        val poseDy = if (isCat) catPoseOffsetY(state.posePreset) else 0f
-        if (poseDy != 0f) {
-            deformed = deformed.translated(0f, poseDy, 0f)
-            outJointPositions?.let { for (i in 1 until it.size step 3) it[i] += poseDy }
+    val builtin = BuiltinModel3D.fromId(state.modelType)
+    val mesh = when (builtin) {
+        BuiltinModel3D.ANIME_BOY, BuiltinModel3D.BODY_MANNEQUIN ->
+            Mesh3D.createAnimeMannequin(isFemale = false, posePreset = state.posePreset, angles = state.jointAngles)
+        BuiltinModel3D.ANIME_GIRL ->
+            Mesh3D.createAnimeMannequin(isFemale = true, posePreset = state.posePreset, angles = state.jointAngles)
+        BuiltinModel3D.CAT -> Mesh3D.createCatModel(posePreset = state.posePreset, angles = state.jointAngles)
+        BuiltinModel3D.BODY_SIT ->
+            Mesh3D.createAnimeMannequin(isFemale = false, posePreset = "sit", angles = state.jointAngles)
+        BuiltinModel3D.HEAD_MANNEQUIN -> {
+            try {
+                appContext.assets.open("3d_models/head_planar.glb").use { s -> GlbParser.parse(s).baseMesh }
+            } catch (e: Exception) {
+                Mesh3D.createHeadMannequin()
+            }
         }
-        active3DWorldJoints = outJointPositions
-        deformed
-    } else {
-        active3DSkeleton = null
-        active3DWorldJoints = null
-        val builtin = BuiltinModel3D.fromId(state.modelType)
-        when (builtin) {
-            BuiltinModel3D.ANIME_BOY, BuiltinModel3D.BODY_MANNEQUIN -> Mesh3D.createAnimeMannequin(isFemale = false, posePreset = state.posePreset, angles = state.jointAngles)
-            BuiltinModel3D.ANIME_GIRL -> Mesh3D.createAnimeMannequin(isFemale = true, posePreset = state.posePreset, angles = state.jointAngles)
-            BuiltinModel3D.CAT -> Mesh3D.createCatModel(posePreset = state.posePreset, angles = state.jointAngles)
-            BuiltinModel3D.BODY_SIT -> Mesh3D.createAnimeMannequin(isFemale = false, posePreset = "sit", angles = state.jointAngles)
-            BuiltinModel3D.HEAD_MANNEQUIN -> {
+        BuiltinModel3D.CUBE -> Mesh3D.createCube(1.8f)
+        BuiltinModel3D.SPHERE -> Mesh3D.createSphere(1.2f, 18, 24)
+        BuiltinModel3D.CYLINDER -> Mesh3D.createCylinder(1.0f, 2.0f, 24)
+        null -> {
+            val rawKey = state.modelType
+            if (rawKey.startsWith("file:")) {
                 try {
-                    appContext.assets.open("3d_models/head_planar.glb").use { s ->
-                        GlbParser.parse(s).baseMesh
+                    val file = java.io.File(rawKey.substring(5))
+                    if (file.exists()) {
+                        file.inputStream().use { stream ->
+                            Mesh3D.parseObj(BufferedReader(InputStreamReader(stream)))
+                        }
+                    } else {
+                        Mesh3D.createCube(1.8f)
                     }
                 } catch (e: Exception) {
-                    Mesh3D.createHeadMannequin()
-                }
-            }
-            BuiltinModel3D.CUBE -> Mesh3D.createCube(1.8f)
-            BuiltinModel3D.SPHERE -> Mesh3D.createSphere(1.2f, 18, 24)
-            BuiltinModel3D.CYLINDER -> Mesh3D.createCylinder(1.0f, 2.0f, 24)
-            null -> {
-                val rawKey = state.modelType
-                if (rawKey.startsWith("file:")) {
-                    try {
-                        val file = java.io.File(rawKey.substring(5))
-                        if (file.exists()) {
-                            file.inputStream().use { stream ->
-                                Mesh3D.parseObj(BufferedReader(InputStreamReader(stream)))
-                            }
-                        } else {
-                            Mesh3D.createCube(1.8f)
-                        }
-                    } catch (e: Exception) {
-                        Log.e("RP_3D", "Failed to parse OBJ from file: $rawKey", e)
-                        Mesh3D.createCube(1.8f)
-                    }
-                } else if (rawKey.startsWith("uri:")) {
-                    try {
-                        val uri = Uri.parse(rawKey.substring(4))
-                        appContext.contentResolver.openInputStream(uri)?.use { stream ->
-                            Mesh3D.parseObj(BufferedReader(InputStreamReader(stream)))
-                        } ?: Mesh3D.createCube(1.8f)
-                    } catch (e: Exception) {
-                        Log.e("RP_3D", "Failed to parse OBJ from uri: $rawKey", e)
-                        Mesh3D.createCube(1.8f)
-                    }
-                } else {
+                    Log.e("RP_3D", "Failed to parse OBJ from file: $rawKey", e)
                     Mesh3D.createCube(1.8f)
                 }
+            } else if (rawKey.startsWith("uri:")) {
+                try {
+                    val uri = Uri.parse(rawKey.substring(4))
+                    appContext.contentResolver.openInputStream(uri)?.use { stream ->
+                        Mesh3D.parseObj(BufferedReader(InputStreamReader(stream)))
+                    } ?: Mesh3D.createCube(1.8f)
+                } catch (e: Exception) {
+                    Log.e("RP_3D", "Failed to parse OBJ from uri: $rawKey", e)
+                    Mesh3D.createCube(1.8f)
+                }
+            } else {
+                Mesh3D.createCube(1.8f)
             }
         }
     }
 
-    if (meshCache.size > 40) {
+    if (meshCache.size > 24) {
         meshCache.clear()
     }
     meshCache[key] = mesh
@@ -492,6 +391,8 @@ internal fun PaintViewModel.create3DLayer(
             )
             active3DLayers = active3DLayers + (layer.id to initialState)
             ensure3DLayerClearedInCore(layer.id)
+            prewarm3DModel(initialState)
+            active3DSelectedJointName = null
             showActionToast(R.string.toast_3d_layer_created, R.drawable.ic_eye)
         }
     }) {
@@ -573,6 +474,7 @@ internal fun PaintViewModel.create3DLayerFromFile(
             )
             active3DLayers = active3DLayers + (layer.id to initialState)
             ensure3DLayerClearedInCore(layer.id)
+            active3DSelectedJointName = null
             showActionToast(R.string.toast_3d_layer_created, R.drawable.ic_eye)
         }
     }) {
@@ -597,6 +499,11 @@ internal fun PaintViewModel.ensure3DLayerClearedInCore(layerId: Long) {
 
 /**
  * 处理单指拖拽 3D 手势变换
+ *
+ * 骨骼模式下的轴向/符号来自 [Skeleton3D] 的绑定姿态几何:
+ * - 垂直拖拽走俯仰轴, 手指向下时骨骼末端/朝向也向下;
+ * - 水平拖拽走能产生横向摆动的轴 (沿骨轴旋转 = 原地自转, 屏幕上几乎无位移, 已自动淘汰),
+ *   头/颈固定为绕骨轴转头。
  */
 internal fun PaintViewModel.handle3DGesture(deltaX: Float, deltaY: Float) {
     val state = currentLayer3DState ?: return
@@ -604,43 +511,51 @@ internal fun PaintViewModel.handle3DGesture(deltaX: Float, deltaY: Float) {
         Interaction3DMode.ROTATE -> {
             val newRotY = (state.rotY + deltaX * 0.45f) % 360f
             val newRotX = (state.rotX + deltaY * 0.45f).coerceIn(-89f, 89f)
-            val updated = state.copy(rotX = newRotX, rotY = newRotY)
-            update3DState(updated)
+            update3DState(state.copy(rotX = newRotX, rotY = newRotY))
         }
         Interaction3DMode.PAN -> {
             val factor = 0.0035f / state.zoom.coerceAtLeast(0.1f)
             val newPanX = (state.panX + deltaX * factor).coerceIn(-5.0f, 5.0f)
             val newPanY = (state.panY - deltaY * factor).coerceIn(-5.0f, 5.0f)
-            val updated = state.copy(panX = newPanX, panY = newPanY)
-            update3DState(updated)
+            update3DState(state.copy(panX = newPanX, panY = newPanY))
         }
         Interaction3DMode.LIGHT -> {
             val newYaw = (state.lightYaw + deltaX * 0.45f).coerceIn(-120f, 120f)
             val newPitch = (state.lightPitch - deltaY * 0.45f).coerceIn(-75f, 75f)
-            val updated = state.copy(lightYaw = newYaw, lightPitch = newPitch)
-            update3DState(updated)
+            update3DState(state.copy(lightYaw = newYaw, lightPitch = newPitch))
         }
         Interaction3DMode.BONE -> {
             val jointName = active3DSelectedJointName
-            if (jointName != null) {
-                val yawKey = "${jointName}_y"
-                val pitchKey = "${jointName}_p"
-                val curYaw = state.jointAngles[yawKey] ?: 0f
-                val curPitch = state.jointAngles[pitchKey] ?: 0f
-                val newYaw = (curYaw + deltaX * 0.6f) % 360f
-                val newPitch = (curPitch - deltaY * 0.6f).coerceIn(-120f, 120f)
-                val newAngles = state.jointAngles.toMutableMap()
-                newAngles[yawKey] = newYaw
-                newAngles[pitchKey] = newPitch
-                val updated = state.copy(jointAngles = newAngles)
-                update3DState(updated)
+            // 未选中关节点 (或选中的骨骼已随模型切换而失效) 时，滑动触摸空白处旋转模型整体视角
+            val skeleton = if (jointName != null) skeletonForState(state) else null
+            val jointIndex = if (jointName != null && skeleton != null) {
+                skeleton.joints.indexOfFirst { it.name == jointName }
             } else {
-                // 未选中关节点时，滑动触摸空白处旋转模型整体视角
+                -1
+            }
+            if (jointName == null || jointIndex < 0) {
                 val newRotY = (state.rotY + deltaX * 0.45f) % 360f
                 val newRotX = (state.rotX + deltaY * 0.45f).coerceIn(-89f, 89f)
-                val updated = state.copy(rotX = newRotX, rotY = newRotY)
-                update3DState(updated)
+                update3DState(state.copy(rotX = newRotX, rotY = newRotY))
+                return
             }
+            val pitchSign = skeleton!!.dragPitchSign(jointIndex)
+            val swingAxis = skeleton.dragSwingAxis(jointIndex)
+            val swingSign = skeleton.dragSwingSign(jointIndex)
+
+            val pitchKey = "${jointName}_p"
+            val swingKey = if (swingAxis == 2) "${jointName}_r" else "${jointName}_y"
+            val curPitch = state.jointAngles[pitchKey] ?: 0f
+            val curSwing = state.jointAngles[swingKey] ?: 0f
+            val newPitch = (curPitch + deltaY * 0.6f * pitchSign).coerceIn(-150f, 150f)
+            val newSwing = (curSwing + deltaX * 0.6f * swingSign) % 360f
+            if (kotlin.math.abs(newPitch - curPitch) < 0.01f && kotlin.math.abs(newSwing - curSwing) < 0.01f) {
+                return
+            }
+            val newAngles = state.jointAngles.toMutableMap()
+            newAngles[pitchKey] = newPitch
+            newAngles[swingKey] = newSwing
+            update3DState(state.copy(jointAngles = newAngles))
         }
     }
 }
@@ -651,8 +566,7 @@ internal fun PaintViewModel.handle3DGesture(deltaX: Float, deltaY: Float) {
 internal fun PaintViewModel.zoom3DModel(scaleRatio: Float) {
     val state = currentLayer3DState ?: return
     val newZoom = (state.zoom * scaleRatio).coerceIn(0.1f, 10.0f)
-    val updated = state.copy(zoom = newZoom)
-    update3DState(updated)
+    update3DState(state.copy(zoom = newZoom))
 }
 
 /**
@@ -660,8 +574,7 @@ internal fun PaintViewModel.zoom3DModel(scaleRatio: Float) {
  */
 internal fun PaintViewModel.reset3DZoom() {
     val state = currentLayer3DState ?: return
-    val updated = state.copy(zoom = 1.0f)
-    update3DState(updated)
+    update3DState(state.copy(zoom = 1.0f))
 }
 
 /**
@@ -677,17 +590,18 @@ internal fun PaintViewModel.update3DState(updated: Model3DState) {
  */
 internal fun PaintViewModel.reset3DView() {
     val state = currentLayer3DState ?: return
-    val reset = state.copy(
-        rotX = 18f,
-        rotY = -35f,
-        rotZ = 0f,
-        panX = 0f,
-        panY = 0f,
-        zoom = 1.0f,
-        lightYaw = 45f,
-        lightPitch = 35f,
+    update3DState(
+        state.copy(
+            rotX = 18f,
+            rotY = -35f,
+            rotZ = 0f,
+            panX = 0f,
+            panY = 0f,
+            zoom = 1.0f,
+            lightYaw = 45f,
+            lightPitch = 35f,
+        )
     )
-    update3DState(reset)
 }
 
 /**
@@ -695,8 +609,7 @@ internal fun PaintViewModel.reset3DView() {
  */
 internal fun PaintViewModel.set3DRenderMode(mode: RenderMode3D) {
     val state = currentLayer3DState ?: return
-    val updated = state.copy(renderMode = mode)
-    update3DState(updated)
+    update3DState(state.copy(renderMode = mode))
 }
 
 /**
@@ -707,7 +620,7 @@ internal fun PaintViewModel.commit3DLayerPixels(layerId: Long) {
     val layerIdx = layers.indexOfFirst { it.id == layerId }
     if (layerIdx < 0) return
 
-    viewModelScope.launch(kotlinx.coroutines.Dispatchers.Default) {
+    viewModelScope.launch(Dispatchers.Default) {
         val mesh = getMeshForState(state)
         val w = docWidth.coerceAtLeast(1)
         val h = docHeight.coerceAtLeast(1)
@@ -740,6 +653,8 @@ internal fun PaintViewModel.commit3DLayerPixels(layerId: Long) {
 internal fun PaintViewModel.rasterize3DLayer(layerId: Long) {
     commit3DLayerPixels(layerId)
     active3DLayers = active3DLayers - layerId
+    interactiveSlots.remove(layerId)
+    active3DSelectedJointName = null
     live3DPreviewBitmap = null
     showActionToast(R.string.toast_3d_rasterized, R.drawable.ic_layers)
 }

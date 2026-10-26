@@ -35,9 +35,24 @@ class Canvas3DDrawer {
         strokeJoin = Paint.Join.ROUND
     }
 
-    private var triangleOrder = IntArray(1024)
-    private var triangleDepths = FloatArray(1024)
+    // 深度排序: 用计数排序 (O(n + 桶数)) 取代插入排序 (9k 面时约 2x10^7 次比较, 每帧都在 UI 线程上跑)
+    private var visibleTris = IntArray(1024)
+    private var visibleDepths = FloatArray(1024)
+    private var orderedTris = IntArray(1024)
+    private val bucketCounts = IntArray(DEPTH_BUCKETS)
+    private val bucketEnds = IntArray(DEPTH_BUCKETS)
     private var triangleIsFront = BooleanArray(1024)
+
+    // 相机矩阵复用 (每帧 0 分配)
+    private val projMat = FloatArray(16)
+    private val viewMat = FloatArray(16)
+    private val modelMat = FloatArray(16)
+    private val rotationA = FloatArray(16)
+    private val rotationB = FloatArray(16)
+    private val mvMat = FloatArray(16)
+    private val mvpMat = FloatArray(16)
+    private var cachedAspect = -1f
+    private var cachedDist = Float.NaN
 
     private fun ensureCapacity(vertCount: Int, lineCount: Int, triCount: Int) {
         if (screenX.size < vertCount) {
@@ -50,12 +65,45 @@ class Canvas3DDrawer {
         if (linePts.size < neededLineFloats) {
             linePts = FloatArray(maxOf(neededLineFloats * 2, 4096))
         }
-        if (triangleOrder.size < triCount) {
+        if (visibleTris.size < triCount) {
             val newCap = maxOf(triCount * 2, 1024)
-            triangleOrder = IntArray(newCap)
-            triangleDepths = FloatArray(newCap)
+            visibleTris = IntArray(newCap)
+            visibleDepths = FloatArray(newCap)
+            orderedTris = IntArray(newCap)
             triangleIsFront = BooleanArray(newCap)
         }
+    }
+
+    /**
+     * 复用的相机矩阵: 投影 (仅宽高比变化时重算) + 视图 (仅缩放变化时重算) + 模型变换
+     */
+    private fun computeMatrices(state: Model3DState, docW: Float, docH: Float) {
+        val aspect = (docW / docH.coerceAtLeast(1f)).coerceAtLeast(0.01f)
+        if (aspect != cachedAspect) {
+            System.arraycopy(Math3D.perspective(45f, aspect, 0.1f, 100f), 0, projMat, 0, 16)
+            cachedAspect = aspect
+        }
+        val dist = 3.5f / state.zoom.coerceIn(0.1f, 10f)
+        if (dist != cachedDist) {
+            System.arraycopy(Math3D.lookAt(0f, 0f, dist, 0f, 0f, 0f, 0f, 1f, 0f), 0, viewMat, 0, 16)
+            cachedDist = dist
+        }
+
+        // model = T * Ry * Rx * Rz
+        Math3D.rotationMatrixInto(rotationA, 0, state.rotY, 0f, 1f, 0f)
+        Math3D.rotationMatrixInto(rotationB, 0, state.rotX, 1f, 0f, 0f)
+        Math3D.multiplyMMInto(modelMat, 0, rotationA, 0, rotationB, 0)
+        Math3D.rotationMatrixInto(rotationB, 0, state.rotZ, 0f, 0f, 1f)
+        Math3D.multiplyMMInto(rotationA, 0, modelMat, 0, rotationB, 0)
+        System.arraycopy(rotationA, 0, modelMat, 0, 16)
+        // 平移项在旋转矩阵里恒为 0, 直接写入第四列等价于左乘平移矩阵
+        modelMat[12] = state.panX * 2f
+        modelMat[13] = state.panY * 2f
+        modelMat[14] = 0f
+        modelMat[15] = 1f
+
+        Math3D.multiplyMMInto(mvMat, 0, viewMat, 0, modelMat, 0)
+        Math3D.multiplyMMInto(mvpMat, 0, projMat, 0, mvMat, 0)
     }
 
     /**
@@ -73,20 +121,10 @@ class Canvas3DDrawer {
         val triCount = mesh.triangleCount
         val lineCount = mesh.wireframeLineCount
         ensureCapacity(vertCount, lineCount, triCount)
+        computeMatrices(state, docW, docH)
 
-        val aspect = (docW / docH.coerceAtLeast(1f)).coerceAtLeast(0.01f)
-        val proj = Math3D.perspective(45f, aspect, 0.1f, 100f)
-        val dist = 3.5f / state.zoom.coerceIn(0.1f, 10f)
-        val view = Math3D.lookAt(0f, 0f, dist, 0f, 0f, 0f, 0f, 1f, 0f)
-
-        var model = Math3D.identity()
-        model = Math3D.translate(model, state.panX * 2f, state.panY * 2f, 0f)
-        model = Math3D.rotate(model, state.rotY, 0f, 1f, 0f)
-        model = Math3D.rotate(model, state.rotX, 1f, 0f, 0f)
-        model = Math3D.rotate(model, state.rotZ, 0f, 0f, 1f)
-
-        val mv = Math3D.multiplyMM(view, model)
-        val mvp = Math3D.multiplyMM(proj, mv)
+        val mv = mvMat
+        val mvp = mvpMat
 
         // 提取 3x3 法线旋转矩阵
         val nm0 = mv[0]; val nm1 = mv[1]; val nm2 = mv[2]
@@ -141,18 +179,18 @@ class Canvas3DDrawer {
                     val isFront = cross < 0f
                     triangleIsFront[t] = isFront
                     if (isFront) {
-                        triangleOrder[visibleCount] = t
-                        triangleDepths[visibleCount] = (depthZ[i0] + depthZ[i1] + depthZ[i2]) * 0.3333f
+                        visibleTris[visibleCount] = t
+                        visibleDepths[visibleCount] = (depthZ[i0] + depthZ[i1] + depthZ[i2]) * 0.3333f
                         visibleCount++
                     }
                 }
-                sortTriangles(visibleCount)
+                sortVisible(visibleCount)
 
                 // 1. 实心浅色底面遮挡背面杂线 (形成纯净易辨的实体参考)
                 val baseA = (255 * layerAlpha.coerceIn(0f, 1f)).toInt()
                 fillPaint.color = (baseA shl 24) or 0x00F5F6F8
                 for (k in 0 until visibleCount) {
-                    val t = triangleOrder[k]
+                    val t = orderedTris[k]
                     val i0 = indices[t * 3]
                     val i1 = indices[t * 3 + 1]
                     val i2 = indices[t * 3 + 2]
@@ -210,18 +248,18 @@ class Canvas3DDrawer {
                     // 2D 叉积背面剔除 (Backface culling)
                     val cross = (x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0)
                     if (cross < 0f) {
-                        triangleOrder[visibleCount] = t
-                        triangleDepths[visibleCount] = (depthZ[i0] + depthZ[i1] + depthZ[i2]) * 0.3333f
+                        visibleTris[visibleCount] = t
+                        visibleDepths[visibleCount] = (depthZ[i0] + depthZ[i1] + depthZ[i2]) * 0.3333f
                         visibleCount++
                     }
                 }
 
                 // 画家算法按深度排序 (远到近)
-                sortTriangles(visibleCount)
+                sortVisible(visibleCount)
 
                 // 逐三角面着色绘制
                 for (k in 0 until visibleCount) {
-                    val t = triangleOrder[k]
+                    val t = orderedTris[k]
                     val i0 = indices[t * 3]
                     val i1 = indices[t * 3 + 1]
                     val i2 = indices[t * 3 + 2]
@@ -301,36 +339,77 @@ class Canvas3DDrawer {
         }
     }
 
-    private fun sortTriangles(count: Int) {
-        // 简易快速插入排序 (面数小，几乎有序，开销极低且 0 分配)
-        for (i in 1 until count) {
-            val keyIdx = triangleOrder[i]
-            val keyDepth = triangleDepths[i]
-            var j = i - 1
-            while (j >= 0 && triangleDepths[j] < keyDepth) {
-                triangleOrder[j + 1] = triangleOrder[j]
-                triangleDepths[j + 1] = triangleDepths[j]
-                j--
-            }
-            triangleOrder[j + 1] = keyIdx
-            triangleDepths[j + 1] = keyDepth
+    /**
+     * 按三角形平均深度做"远 -> 近"排序。
+     *
+     * 旧实现是插入排序: 猫猫模型 9.5k 面时每帧约 2x10^7 次比较, 全部压在 UI 线程上。
+     * 这里改成深度分桶计数排序: O(n + 桶数), 只做一次浮点量化 + 一次整数扫描。
+     */
+    private fun sortVisible(count: Int) {
+        if (count <= 1) {
+            if (count == 1) orderedTris[0] = visibleTris[0]
+            return
+        }
+
+        var minD = Float.MAX_VALUE
+        var maxD = -Float.MAX_VALUE
+        for (i in 0 until count) {
+            val d = visibleDepths[i]
+            if (d < minD) minD = d
+            if (d > maxD) maxD = d
+        }
+
+        val range = maxD - minD
+        if (range < 1e-6f) {
+            for (i in 0 until count) orderedTris[i] = visibleTris[i]
+            return
+        }
+
+        java.util.Arrays.fill(bucketCounts, 0)
+        val scale = (DEPTH_BUCKETS - 1).toFloat() / range
+        for (i in 0 until count) {
+            val b = ((maxD - visibleDepths[i]) * scale).toInt().coerceIn(0, DEPTH_BUCKETS - 1)
+            bucketCounts[b]++
+        }
+        // 前缀和得到每个桶的结束位置 (桶 0 = 最远, 先画)
+        var acc = 0
+        for (b in 0 until DEPTH_BUCKETS) {
+            acc += bucketCounts[b]
+            bucketEnds[b] = acc
+        }
+        // 倒序回填保证同桶内相对次序稳定 (与插入排序一致)
+        for (i in count - 1 downTo 0) {
+            val b = ((maxD - visibleDepths[i]) * scale).toInt().coerceIn(0, DEPTH_BUCKETS - 1)
+            bucketEnds[b]--
+            orderedTris[bucketEnds[b]] = visibleTris[i]
         }
     }
 
-    data class ProjectedJoint(
-        val index: Int,
-        val name: String,
-        val x: Float,
-        val y: Float,
-        val depth: Float,
-    )
+    // ------------------------------------------------------------------
+    // 骨架可视化与关节拾取
+    // ------------------------------------------------------------------
 
-    val projectedJoints = ArrayList<ProjectedJoint>()
+    private var jointScreenX = FloatArray(64)
+    private var jointScreenY = FloatArray(64)
+    private var jointDepth = FloatArray(64)
+    private var jointValid = BooleanArray(64)
+    private var projectedCount = 0
+    private var projectedJointIndices = IntArray(64)
+    private var projectedJointNames: Array<String?> = arrayOfNulls(64)
+    private var projectedX = FloatArray(64)
+    private var projectedY = FloatArray(64)
+    private var projectedDepth = FloatArray(64)
 
     private val boneLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = 3.5f
         color = 0xCC5B9BD5.toInt() // Morandi cyan
+        strokeCap = Paint.Cap.ROUND
+    }
+    private val boneLineActivePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 5.0f
+        color = 0xFFE07A5F.toInt() // Morandi terracotta accent
         strokeCap = Paint.Cap.ROUND
     }
     private val jointFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -346,18 +425,54 @@ class Canvas3DDrawer {
         strokeWidth = 2.5f
         color = 0xFFE07A5F.toInt() // Morandi terracotta accent
     }
+    private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFF2A2B2D.toInt()
+        textSize = 22f
+    }
+    private val labelBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xF2F4F1DE.toInt()
+        style = Paint.Style.FILL
+    }
 
+    private fun ensureJointCapacity(n: Int) {
+        if (jointScreenX.size >= n) return
+        val cap = maxOf(n * 2, 64)
+        jointScreenX = FloatArray(cap)
+        jointScreenY = FloatArray(cap)
+        jointDepth = FloatArray(cap)
+        jointValid = BooleanArray(cap)
+        projectedJointIndices = IntArray(cap)
+        projectedJointNames = arrayOfNulls(cap)
+        projectedX = FloatArray(cap)
+        projectedY = FloatArray(cap)
+        projectedDepth = FloatArray(cap)
+    }
+
+    /**
+     * 按屏幕距离拾取关节; 距离接近时优先选择离相机更近 (深度更小) 的关节,
+     * 避免多个关节重叠时总是选中先遍历到的那个。
+     */
     fun hitTestJoint(docX: Float, docY: Float, maxDist: Float = 36f): String? {
-        var closestDist = maxDist
-        var hitJoint: String? = null
-        for (pj in projectedJoints) {
-            val d = hypot(docX - pj.x, docY - pj.y)
-            if (d < closestDist) {
-                closestDist = d
-                hitJoint = pj.name
+        var bestIdx = -1
+        var bestDist = maxDist
+        var bestDepth = Float.MAX_VALUE
+        for (k in 0 until projectedCount) {
+            val d = hypot(docX - projectedX[k], docY - projectedY[k])
+            if (d > maxDist) continue
+            val depth = projectedDepth[k]
+            val better = when {
+                bestIdx < 0 -> true
+                d < bestDist - 3f -> true
+                abs(d - bestDist) <= 3f && depth < bestDepth -> true
+                else -> false
+            }
+            if (better) {
+                bestIdx = k
+                bestDist = d
+                bestDepth = depth
             }
         }
-        return hitJoint
+        return if (bestIdx >= 0) projectedJointNames[bestIdx] else null
     }
 
     /**
@@ -372,29 +487,18 @@ class Canvas3DDrawer {
         docH: Float,
         state: Model3DState,
     ) {
-        projectedJoints.clear()
+        projectedCount = 0
         if (skeleton == null || worldJoints == null || skeleton.count == 0) return
+        if (worldJoints.size < skeleton.count * 3) return
 
-        val aspect = (docW / docH.coerceAtLeast(1f)).coerceAtLeast(0.01f)
-        val proj = Math3D.perspective(45f, aspect, 0.1f, 100f)
-        val dist = 3.5f / state.zoom.coerceIn(0.1f, 10f)
-        val view = Math3D.lookAt(0f, 0f, dist, 0f, 0f, 0f, 0f, 1f, 0f)
-
-        var model = Math3D.identity()
-        model = Math3D.translate(model, state.panX * 2f, state.panY * 2f, 0f)
-        model = Math3D.rotate(model, state.rotY, 0f, 1f, 0f)
-        model = Math3D.rotate(model, state.rotX, 1f, 0f, 0f)
-        model = Math3D.rotate(model, state.rotZ, 0f, 0f, 1f)
-
-        val mvp = Math3D.multiplyMM(proj, Math3D.multiplyMM(view, model))
+        computeMatrices(state, docW, docH)
+        val mvp = mvpMat
         val halfW = docW * 0.5f
         val halfH = docH * 0.5f
-
         val jointCount = skeleton.count
-        val pX = FloatArray(jointCount)
-        val pY = FloatArray(jointCount)
-        val valid = BooleanArray(jointCount)
+        ensureJointCapacity(jointCount)
 
+        var selectedIndex = -1
         for (j in 0 until jointCount) {
             val wx = worldJoints[j * 3]
             val wy = worldJoints[j * 3 + 1]
@@ -406,47 +510,88 @@ class Canvas3DDrawer {
             val cw = mvp[3] * wx + mvp[7] * wy + mvp[11] * wz + mvp[15]
 
             val jointName = skeleton.joints[j].name
+            jointValid[j] = false
             if (jointName.equals("neutral_bone", ignoreCase = true) || jointName.startsWith("neutral", ignoreCase = true)) {
                 continue
             }
-
             if (cw > 0.05f) {
-                val sx = (cx / cw) * halfW
-                val sy = (-cy / cw) * halfH
-                pX[j] = sx
-                pY[j] = sy
-                valid[j] = true
-                projectedJoints.add(ProjectedJoint(j, jointName, sx, sy, cz / cw))
+                jointScreenX[j] = (cx / cw) * halfW
+                jointScreenY[j] = (-cy / cw) * halfH
+                jointDepth[j] = cz / cw
+                jointValid[j] = true
+                projectedJointIndices[projectedCount] = j
+                projectedJointNames[projectedCount] = jointName
+                projectedX[projectedCount] = jointScreenX[j]
+                projectedY[projectedCount] = jointScreenY[j]
+                projectedDepth[projectedCount] = jointDepth[j]
+                projectedCount++
+                if (selectedIndex < 0 && selectedJointName != null &&
+                    jointName.equals(selectedJointName, ignoreCase = true)
+                ) {
+                    selectedIndex = j
+                }
             }
         }
 
-        // 1. 绘制骨架连接线
+        // 1. 绘制骨架连接线 (选中关节的父子链高亮)
         for (j in 0 until jointCount) {
-            val joint = skeleton.joints[j]
-            if (joint.name.equals("neutral_bone", ignoreCase = true) || joint.name.startsWith("neutral", ignoreCase = true)) {
-                continue
-            }
-            val pIdx = joint.parentIndex
-            if (pIdx >= 0 && pIdx < jointCount && valid[j] && valid[pIdx]) {
-                canvas.drawLine(pX[pIdx], pY[pIdx], pX[j], pY[j], boneLinePaint)
+            if (!jointValid[j]) continue
+            val pIdx = skeleton.joints[j].parentIndex
+            if (pIdx in 0 until jointCount && jointValid[pIdx]) {
+                val active = selectedIndex >= 0 && (j == selectedIndex || pIdx == selectedIndex)
+                canvas.drawLine(
+                    jointScreenX[pIdx], jointScreenY[pIdx],
+                    jointScreenX[j], jointScreenY[j],
+                    if (active) boneLineActivePaint else boneLinePaint,
+                )
             }
         }
 
         // 2. 绘制关节点交互圆圈
-        for (pj in projectedJoints) {
-            val isSelected = selectedJointName != null && pj.name.equals(selectedJointName, ignoreCase = true)
-            val radius = if (isSelected) 10.0f else 7.0f
+        val selectedRadius = 10.0f
+        for (k in 0 until projectedCount) {
+            val j = projectedJointIndices[k]
+            val x = projectedX[k]
+            val y = projectedY[k]
+            val isSelected = j == selectedIndex
 
             if (isSelected) {
-                // 绘制选中高亮 3D 旋转控制环 (Gizmo Ring)
-                canvas.drawCircle(pj.x, pj.y, 26.0f, gizmoRingPaint)
+                canvas.drawCircle(x, y, 26.0f, gizmoRingPaint)
                 jointFillPaint.color = 0xFFE07A5F.toInt() // Accent
             } else {
                 jointFillPaint.color = 0xFFF4F1DE.toInt() // Morandi warm white
             }
-
-            canvas.drawCircle(pj.x, pj.y, radius, jointFillPaint)
-            canvas.drawCircle(pj.x, pj.y, radius, jointStrokePaint)
+            val radius = if (isSelected) selectedRadius else 7.0f
+            canvas.drawCircle(x, y, radius, jointFillPaint)
+            canvas.drawCircle(x, y, radius, jointStrokePaint)
         }
+
+        // 3. 选中关节的骨骼名标签 (便于确认正在调节哪根骨头)
+        if (selectedIndex >= 0 && selectedIndex < jointCount) {
+            val name = skeleton.joints[selectedIndex].name
+            if (name.isNotEmpty()) {
+                labelPaint.textSize = (docW * 0.016f).coerceIn(18f, 40f)
+                val textW = labelPaint.measureText(name)
+                val x = jointScreenX[selectedIndex]
+                val y = jointScreenY[selectedIndex] - 34f
+                val padH = labelPaint.textSize * 0.4f
+                val padV = labelPaint.textSize * 0.22f
+                canvas.drawRoundRect(
+                    x - textW * 0.5f - padH,
+                    y - labelPaint.textSize - padV,
+                    x + textW * 0.5f + padH,
+                    y + padV,
+                    padV * 2.2f,
+                    padV * 2.2f,
+                    labelBgPaint,
+                )
+                canvas.drawText(name, x - textW * 0.5f, y - padV * 0.6f, labelPaint)
+            }
+        }
+    }
+
+    private companion object {
+        /** 深度分桶数量: 1k 桶 = 深度精度 ~0.2% 视深差, 画面上完全不可分辨 */
+        const val DEPTH_BUCKETS = 1024
     }
 }

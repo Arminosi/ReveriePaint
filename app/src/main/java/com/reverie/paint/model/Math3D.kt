@@ -43,6 +43,75 @@ object Math3D {
     }
 
     /**
+     * 4x4 矩阵相乘并写入调用方提供的缓冲: out[outOff..] = a[aOff..] * b[bOff..]
+     *
+     * 与 [multiplyMM] 结果完全一致, 但零分配 —— 骨骼 FK 每帧要调用 (2 * 关节数) 次,
+     * 热路径禁止产生临时矩阵 (见 AGENTS.md §4)。
+     */
+    fun multiplyMMInto(
+        out: FloatArray,
+        outOff: Int,
+        a: FloatArray,
+        aOff: Int,
+        b: FloatArray,
+        bOff: Int,
+    ) {
+        for (i in 0..3) {
+            val r0 = a[aOff + i]
+            val r1 = a[aOff + i + 4]
+            val r2 = a[aOff + i + 8]
+            val r3 = a[aOff + i + 12]
+
+            out[outOff + i] = r0 * b[bOff] + r1 * b[bOff + 1] + r2 * b[bOff + 2] + r3 * b[bOff + 3]
+            out[outOff + i + 4] = r0 * b[bOff + 4] + r1 * b[bOff + 5] + r2 * b[bOff + 6] + r3 * b[bOff + 7]
+            out[outOff + i + 8] = r0 * b[bOff + 8] + r1 * b[bOff + 9] + r2 * b[bOff + 10] + r3 * b[bOff + 11]
+            out[outOff + i + 12] = r0 * b[bOff + 12] + r1 * b[bOff + 13] + r2 * b[bOff + 14] + r3 * b[bOff + 15]
+        }
+    }
+
+    /**
+     * 绕任意轴旋转矩阵写入 out (列主序, 零分配)
+     */
+    fun rotationMatrixInto(
+        out: FloatArray,
+        outOff: Int,
+        angleDegrees: Float,
+        x: Float,
+        y: Float,
+        z: Float,
+    ) {
+        val rad = Math.toRadians(angleDegrees.toDouble()).toFloat()
+        val c = cos(rad)
+        val s = sin(rad)
+        val len = hypot(hypot(x, y), z).coerceAtLeast(1e-6f)
+        val invLen = 1f / len
+        val nx = x * invLen
+        val ny = y * invLen
+        val nz = z * invLen
+        val nc = 1.0f - c
+
+        out[outOff] = nx * nx * nc + c
+        out[outOff + 1] = ny * nx * nc + nz * s
+        out[outOff + 2] = nz * nx * nc - ny * s
+        out[outOff + 3] = 0f
+
+        out[outOff + 4] = nx * ny * nc - nz * s
+        out[outOff + 5] = ny * ny * nc + c
+        out[outOff + 6] = nz * ny * nc + nx * s
+        out[outOff + 7] = 0f
+
+        out[outOff + 8] = nx * nz * nc + ny * s
+        out[outOff + 9] = ny * nz * nc - nx * s
+        out[outOff + 10] = nz * nz * nc + c
+        out[outOff + 11] = 0f
+
+        out[outOff + 12] = 0f
+        out[outOff + 13] = 0f
+        out[outOff + 14] = 0f
+        out[outOff + 15] = 1f
+    }
+
+    /**
      * 透视投影矩阵
      * @param fovyDegrees 垂直视场角
      * @param aspect 宽高比 (width / height)

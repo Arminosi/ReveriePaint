@@ -537,6 +537,10 @@ internal fun PaintViewModel.loadProject(p: com.reverie.paint.model.Project) {
                 for (layerId in map.keys) {
                     ensure3DLayerClearedInCore(layerId)
                 }
+                // 后台预热模型解析, 避免打开工程后第一帧在主线程解析 GLB 卡顿
+                for (st in map.values) {
+                    prewarm3DModel(st)
+                }
             } else {
                 active3DLayers = emptyMap()
             }

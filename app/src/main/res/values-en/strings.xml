@@ -1858,6 +1858,8 @@
     <string name="stylus_eraser_cursor_desc">Cursor display policy when erasing or hovering</string>
     <string name="stylus_cursor_style">Cursor Style</string>
     <string name="stylus_cursor_style_desc">Crosshair, circle ring, or system pointer</string>
+    <string name="stylus_cursor_outline_actual_size">Outline reflects actual size</string>
+    <string name="stylus_cursor_outline_actual_size_desc">Circle and brush outlines follow pressure live; turn off to keep the maximum brush size so the ring stops resizing mid-stroke</string>
     <string name="stylus_sound_title">Realistic Writing Haptics</string>
     <string name="stylus_sound_paper">Paper Friction Sound</string>
     <string name="stylus_sound_paper_desc">Simulate realistic paper friction acoustics that dynamically vary with stroke speed</string>

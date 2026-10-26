@@ -15,6 +15,7 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.unit.dp
 import com.reverie.paint.core.PaintViewModel
+import com.reverie.paint.model.CursorOutlineGeometry
 import com.reverie.paint.model.Tool
 
 /**
@@ -56,7 +57,9 @@ internal fun BrushCursorOverlay(
             val scale = (zoom * fitScale).coerceAtLeast(0.001f)
             val pressureScale = if (isCursorTouching.value) livePressure.value.coerceIn(0.08f, 1f) else 1f
             val cursorBrushSize = if (tool == Tool.LIQUIFY) liquifyBrushSize else vm.brushSize.toFloat()
-            val brushRadiusScreen = (cursorBrushSize * scale * 0.5f * pressureScale).toFloat().coerceAtLeast(2f)
+            val brushRadiusScreen = CursorOutlineGeometry.outlineRadius(
+                cursorBrushSize, scale, pressureScale, vm.cursorOutlineReflectsActualSize,
+            )
 
             when (vm.cursorStyleMode) {
                 0 -> { // 圆形 (Brush Outline Ring - Krita dual-contrast circle)

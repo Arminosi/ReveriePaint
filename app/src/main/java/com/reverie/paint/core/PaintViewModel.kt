@@ -1919,6 +1919,9 @@ class PaintViewModel : ViewModel() {
     var brushCursorMode by mutableIntStateOf(3) // 0: 不显示, 1: 绘画时显示, 2: 悬空显示, 3: 绘画和悬空显示
     var eraserCursorMode by mutableIntStateOf(3)
     var cursorStyleMode by mutableIntStateOf(5) // 0: 圆形, 1: 十字准星, 2: 点, 3: 无, 4: 系统指针, 5: 圆+十字准星, 6: 笔刷轮廓
+    // 轮廓反映实际大小 (Krita「使用有效轮廓大小」反选): 关掉后圆环/笔刷轮廓固定按满号笔刷直径画,
+    // 运笔途中不再随压感忽大忽小
+    var cursorOutlineReflectsActualSize by mutableStateOf(true)
     var quickShapeEnabled by mutableStateOf(false) // 驻停线条成形，默认关闭
     var quickShapeQuadrilateralEnabled by mutableStateOf(false)
     var quickShapeConversionsEnabled by mutableStateOf(false)
@@ -2858,6 +2861,17 @@ class PaintViewModel : ViewModel() {
                 .getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
                 .edit()
                 .putInt("cursorStyleMode", mode)
+                .apply()
+        }
+    }
+
+    fun updateCursorOutlineReflectsActualSize(enabled: Boolean) {
+        cursorOutlineReflectsActualSize = enabled
+        if (::appContext.isInitialized) {
+            appContext
+                .getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean("cursorOutlineReflectsActualSize", enabled)
                 .apply()
         }
     }
@@ -4116,6 +4130,7 @@ class PaintViewModel : ViewModel() {
             brushCursorMode = prefs.getInt("brushCursorMode", 3)
             eraserCursorMode = prefs.getInt("eraserCursorMode", 3)
             cursorStyleMode = prefs.getInt("cursorStyleMode", 5)
+            cursorOutlineReflectsActualSize = prefs.getBoolean("cursorOutlineReflectsActualSize", true)
             quickShapeEnabled = prefs.getBoolean("quickShapeEnabledV2", false)
             quickShapeQuadrilateralEnabled = prefs.getBoolean("quickShapeQuadrilateralEnabled", false)
             quickShapeConversionsEnabled = prefs.getBoolean("quickShapeConversionsEnabled", false)

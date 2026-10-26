@@ -1858,6 +1858,8 @@
     <string name="stylus_eraser_cursor_desc">橡皮擦悬浮或擦除时的光标显示策略</string>
     <string name="stylus_cursor_style">光标样式</string>
     <string name="stylus_cursor_style_desc">准星形态、单点圆环或系统光标</string>
+    <string name="stylus_cursor_outline_actual_size">轮廓反映实际大小</string>
+    <string name="stylus_cursor_outline_actual_size_desc">圆形与笔刷轮廓随压感实时缩放，关闭后固定在满号笔刷大小，运笔时不再忽大忽小</string>
     <string name="stylus_sound_title">真实书写音效</string>
     <string name="stylus_sound_paper">纸张微摩擦音效</string>
     <string name="stylus_sound_paper_desc">落笔与运笔时模拟真实笔尖在纸张上的微摩擦发声，随笔速变化，营造沉浸式触感体验</string>

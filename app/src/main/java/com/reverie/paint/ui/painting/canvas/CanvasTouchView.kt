@@ -3269,7 +3269,9 @@ class CanvasTouchView(context: Context) : View(context) {
                 smoothedCursorPressure = -1f
                 1f
             }
-            val brushRadiusScreen = (cursorBrushSize * scale * 0.5f * pressureFraction).coerceAtLeast(2f)
+            val brushRadiusScreen = CursorOutlineGeometry.outlineRadius(
+                cursorBrushSize, scale, pressureFraction, v.cursorOutlineReflectsActualSize,
+            )
             // 按住期间这段 EMA 归前缓冲光标 (noteHoldCursor) 独占: 窗口因孔洞/UI 裁剪重画时不能
             // 再推进一次, 否则前缓冲光标半径会随窗口重画频率变化。
             if (realInk.held) smoothedCursorPressure = holdEmaSnapshot
@@ -4024,7 +4026,9 @@ class CanvasTouchView(context: Context) : View(context) {
         val sample = if (pressure.isFinite()) pressure.coerceIn(0f, 1f) else 1f
         smoothedCursorPressure =
             if (smoothedCursorPressure < 0f) sample else smoothedCursorPressure * 0.65f + sample * 0.35f
-        realInk.cursorR = (size * scale * 0.5f * pressureFractionCached(smoothedCursorPressure)).coerceAtLeast(2f)
+        realInk.cursorR = CursorOutlineGeometry.outlineRadius(
+            size, scale, pressureFractionCached(smoothedCursorPressure), v.cursorOutlineReflectsActualSize,
+        )
 
         // 记入对称镜像分支光标位置 (由前缓冲随墨一起在 GL 线程直出)
         if (v.drawingGuide.mode == GuideMode.SYMMETRY && v.drawingGuide.assistedDrawing) {

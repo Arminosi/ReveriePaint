@@ -24,6 +24,7 @@ import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Brush
 import androidx.compose.material.icons.rounded.ControlCamera
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.RadioButtonUnchecked
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Timeline
 import androidx.compose.material3.Text
@@ -142,13 +143,14 @@ internal fun StylusSettingsSubPage(
             // 2. 光标与准星指示
             SettingCategoryTitle(stringResource(R.string.stylus_category_cursor))
             SettingGroup {
+                val cursorTotal = 4
                 SettingDropdownGroupItem(
                     icon = Icons.Rounded.Brush,
                     title = stringResource(R.string.stylus_brush_cursor),
                     summary = stringResource(R.string.stylus_brush_cursor_desc),
                     currentText = cursorModeOptions.getOrElse(vm.brushCursorMode) { cursorModeOptions[0] },
                     options = cursorModeOptions,
-                    shape = settingGroupShape(0, 3),
+                    shape = settingGroupShape(0, cursorTotal),
                     onSelect = { vm.updateBrushCursorMode(it) },
                 )
                 SettingDropdownGroupItem(
@@ -157,7 +159,7 @@ internal fun StylusSettingsSubPage(
                     summary = stringResource(R.string.stylus_eraser_cursor_desc),
                     currentText = cursorModeOptions.getOrElse(vm.eraserCursorMode) { cursorModeOptions.last() },
                     options = cursorModeOptions,
-                    shape = settingGroupShape(1, 3),
+                    shape = settingGroupShape(1, cursorTotal),
                     onSelect = { vm.updateEraserCursorMode(it) },
                 )
                 SettingDropdownGroupItem(
@@ -166,8 +168,16 @@ internal fun StylusSettingsSubPage(
                     summary = stringResource(R.string.stylus_cursor_style_desc),
                     currentText = cursorStyleOptions.getOrElse(vm.cursorStyleMode) { cursorStyleOptions[0] },
                     options = cursorStyleOptions,
-                    shape = settingGroupShape(2, 3),
+                    shape = settingGroupShape(2, cursorTotal),
                     onSelect = { vm.updateCursorStyleMode(it) },
+                )
+                SettingSwitchGroupItem(
+                    icon = Icons.Rounded.RadioButtonUnchecked,
+                    title = stringResource(R.string.stylus_cursor_outline_actual_size),
+                    summary = stringResource(R.string.stylus_cursor_outline_actual_size_desc),
+                    checked = vm.cursorOutlineReflectsActualSize,
+                    shape = settingGroupShape(3, cursorTotal),
+                    onCheckedChange = { vm.updateCursorOutlineReflectsActualSize(it) },
                 )
             }
 

@@ -3288,7 +3288,12 @@ class CanvasTouchView(context: Context) : View(context) {
     private fun holeOtherOverlayActive(v: PaintViewModel): Boolean {
         val t = effTool()
         if (t != Tool.BRUSH && t != Tool.ERASER && t != Tool.SMUDGE) return true
-        return FrontBufferHolePolicy.snapForcesNormal(snapGuidePossible(v), FrontBufferFeatureFlags.snapHold)
+        val composePossible = realInk.pose?.let { composeApplies(v, it) } == true
+        return FrontBufferHolePolicy.snapForcesNormal(
+            snapPossible = snapGuidePossible(v),
+            snapHoldEnabled = FrontBufferFeatureFlags.snapHold,
+            isCompose = composePossible,
+        )
     }
 
     /**
@@ -3298,8 +3303,13 @@ class CanvasTouchView(context: Context) : View(context) {
     private fun composeApplies(v: PaintViewModel, pose: CanvasPose): Boolean {
         val t = effTool()
         val other = t != Tool.BRUSH && t != Tool.ERASER && t != Tool.SMUDGE
-        return FrontBufferHolePolicy.composeEligible(FrontBufferFeatureFlags.holeMode, antsVisible(v),
-            FrontBufferCompose.isAxisAligned(pose), other)
+        return FrontBufferHolePolicy.composeEligible(
+            FrontBufferFeatureFlags.holeMode,
+            antsVisible(v),
+            FrontBufferCompose.isAxisAligned(pose),
+            other,
+            FrontBufferFeatureFlags.composeAnts,
+        )
     }
 
     /** 选区蚂蚁线此刻是否可见 (与 [FrontBufferDecorRecorder] 同一判据; 运笔时不可能正在框选)。 */
@@ -3314,8 +3324,11 @@ class CanvasTouchView(context: Context) : View(context) {
     /** compose 的静态覆盖层: 状态没变就用已录的那份 (几次引用比较), 变了才重录。 */
     private fun composeDecorFor(v: PaintViewModel, pose: CanvasPose): FrontBufferDecor? {
         val tr = tool == Tool.TRANSFORM
+        val antsPhase = if (antsVisible(v)) {
+            (SystemClock.uptimeMillis() % 1200L).toFloat() / 1200f
+        } else 0f
         if (composeDecorRecorder.isStale(v, pose, tr)) {
-            composeDecor = composeDecorRecorder.record(v, pose, tr, forMask = false)
+            composeDecor = composeDecorRecorder.record(v, pose, tr, forMask = false, antsPhase = antsPhase)
         }
         return composeDecor
     }

@@ -7,10 +7,8 @@ package com.reverie.paint.model
 import com.reverie.paint.model.FrontBufferHolePolicy.ARM_NORMAL
 import com.reverie.paint.model.FrontBufferHolePolicy.ARM_NO_HOLES
 import com.reverie.paint.model.FrontBufferHolePolicy.ARM_WITH_MASK
-import com.reverie.paint.model.FrontBufferHolePolicy.MODE_E
 import com.reverie.paint.model.FrontBufferHolePolicy.MODE_HMIN
 import com.reverie.paint.model.FrontBufferHolePolicy.MODE_OFF
-import com.reverie.paint.model.FrontBufferHolePolicy.PACKET_HANDBACK
 import com.reverie.paint.model.FrontBufferHolePolicy.PACKET_HOLE_REDRAW
 import com.reverie.paint.model.FrontBufferHolePolicy.PACKET_PLAIN
 import org.junit.Assert.assertEquals
@@ -27,7 +25,7 @@ class FrontBufferHolePolicyTest {
         assertEquals(MODE_HMIN, FrontBufferHolePolicy.parseMode(1, " HMIN "))
         assertEquals(FrontBufferHolePolicy.MODE_COMPOSE, FrontBufferHolePolicy.parseMode(1, ""))
         assertEquals(FrontBufferHolePolicy.MODE_COMPOSE, FrontBufferHolePolicy.parseMode(1, "compose"))
-        assertEquals(MODE_E, FrontBufferHolePolicy.parseMode(1, " E "))
+        assertEquals(FrontBufferHolePolicy.MODE_COMPOSE, FrontBufferHolePolicy.parseMode(1, " E "))
         assertEquals(MODE_OFF, FrontBufferHolePolicy.parseMode(1, "off"))
     }
 
@@ -44,15 +42,13 @@ class FrontBufferHolePolicyTest {
         assertEquals(ARM_NORMAL, d(other = true))
         assertEquals(ARM_NORMAL, d(vis = false, other = true))
         assertEquals(ARM_NO_HOLES, d(mode = MODE_OFF, ready = false, other = true))
-        assertEquals(ARM_WITH_MASK, d(mode = MODE_E))
     }
 
     @Test
     fun packetDecisionNonHitIsPlain() {
-        for (m in intArrayOf(MODE_OFF, MODE_HMIN, MODE_E)) assertEquals(PACKET_PLAIN, FrontBufferHolePolicy.decidePacket(m, false))
+        for (m in intArrayOf(MODE_OFF, MODE_HMIN)) assertEquals(PACKET_PLAIN, FrontBufferHolePolicy.decidePacket(m, false))
         assertEquals(PACKET_PLAIN, FrontBufferHolePolicy.decidePacket(MODE_OFF, true))
         assertEquals(PACKET_HOLE_REDRAW, FrontBufferHolePolicy.decidePacket(MODE_HMIN, true))
-        assertEquals(PACKET_HANDBACK, FrontBufferHolePolicy.decidePacket(MODE_E, true))
     }
 
     @Test
@@ -84,15 +80,17 @@ class FrontBufferHolePolicyTest {
 
     @Test
     fun snapHoldDefaultOffForcesNormalPath() {
-        // 开关关 (默认): 可能出现吸附线 -> 常规路径, 不为导引线维护备份层
-        assertTrue(FrontBufferHolePolicy.snapForcesNormal(snapPossible = true, snapHoldEnabled = false))
+        // 开关关: 可能出现吸附线 -> 常规路径 (非 compose 时)
+        assertTrue(FrontBufferHolePolicy.snapForcesNormal(snapPossible = true, snapHoldEnabled = false, isCompose = false))
+        assertFalse(FrontBufferHolePolicy.snapForcesNormal(snapPossible = true, snapHoldEnabled = false, isCompose = true))
         assertFalse(FrontBufferHolePolicy.snapNeedsExtras(snapPossible = true, snapHoldEnabled = false))
-        // 开关开 (A/B): 按住, 从首帧维护备份层
-        assertFalse(FrontBufferHolePolicy.snapForcesNormal(snapPossible = true, snapHoldEnabled = true))
+        // 开关开: 按住, 从首帧维护备份层
+        assertFalse(FrontBufferHolePolicy.snapForcesNormal(snapPossible = true, snapHoldEnabled = true, isCompose = false))
         assertTrue(FrontBufferHolePolicy.snapNeedsExtras(snapPossible = true, snapHoldEnabled = true))
         // 没有吸附线: 与开关无关
         for (on in listOf(false, true)) {
-            assertFalse(FrontBufferHolePolicy.snapForcesNormal(false, on))
+            assertFalse(FrontBufferHolePolicy.snapForcesNormal(false, on, false))
+            assertFalse(FrontBufferHolePolicy.snapForcesNormal(false, on, true))
             assertFalse(FrontBufferHolePolicy.snapNeedsExtras(false, on))
         }
         // 经 decideArm: 吸附线算作"其他覆盖层" -> ARM_NORMAL
@@ -122,7 +120,7 @@ class FrontBufferHolePolicyTest {
 
     @Test
     fun frontGuideClearTriggersWindowRedrawOnlyAfterRelease() {
-        // E 交还 / 抬笔后前缓冲擦掉导引线 -> 窗口补画完整导引线
+        // 抬笔后前缓冲擦掉导引线 -> 窗口补画完整导引线
         assertTrue(FrontBufferHolePolicy.guideClearedNeedsRedraw(wasOnScreen = true, nowOnScreen = false, held = false))
         // 按住期间每包擦旧画新: 窗口不必额外重画
         assertFalse(FrontBufferHolePolicy.guideClearedNeedsRedraw(true, false, held = true))
@@ -135,10 +133,11 @@ class FrontBufferHolePolicyTest {
     fun composeEligibilityAndFallbackMode() {
         val c = FrontBufferHolePolicy.MODE_COMPOSE
         assertTrue(FrontBufferHolePolicy.composeEligible(c, antsVisible = false, axisAligned = true, otherOverlayActive = false))
-        assertFalse(FrontBufferHolePolicy.composeEligible(c, true, true, false))
+        assertFalse(FrontBufferHolePolicy.composeEligible(c, true, true, false, composeAnts = false))
+        assertTrue(FrontBufferHolePolicy.composeEligible(c, antsVisible = true, axisAligned = true, otherOverlayActive = false, composeAnts = true))
         assertFalse(FrontBufferHolePolicy.composeEligible(c, false, false, false))
         assertFalse(FrontBufferHolePolicy.composeEligible(c, false, true, true))
-        for (m in intArrayOf(MODE_OFF, MODE_HMIN, MODE_E)) {
+        for (m in intArrayOf(MODE_OFF, MODE_HMIN)) {
             assertFalse(FrontBufferHolePolicy.composeEligible(m, false, true, false))
             assertEquals(m, FrontBufferHolePolicy.holeModeFor(m))
         }

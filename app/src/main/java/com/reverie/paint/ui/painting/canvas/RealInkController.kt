@@ -411,17 +411,6 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
         symCursorCount = 0
     }
 
-    /**
-     * E 模式命中孔洞 (任一线程): 松开按住, 窗口全量重画接管这一笔剩余部分; 前缓冲上若已有墨,
-     * 等窗口追平那一帧提交后再清 (与抬笔同一机制)。
-     */
-    private fun handBack() {
-        FbGeomLog.holeStrokeEnd(strokeSeq)
-        release()
-        if (view.frontBufferOverlay?.hasInk == true) finishFrame(false)
-        view.postInvalidate()
-    }
-
     /** 前缓冲上的导引线已擦掉 (GL/任一线程): 窗口补画一帧完整导引线, 见 [FrontBufferHolePolicy.windowGuideHolesOnly]。 */
     fun onFrontGuideCleared() {
         view.postInvalidateOnAnimation()
@@ -781,12 +770,6 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
             val decision = FrontBufferHolePolicy.decidePacket(holeMode, holeHitBits != 0)
             FbGeomLog.holePacket(seq, baked, Integer.bitCount(holeHitBits), hitArea,
                 if (t0 != 0L) System.nanoTime() - t0 else 0L, decision)
-            if (decision == FrontBufferHolePolicy.PACKET_HANDBACK) {
-                // E: 这一包不贴, 整笔交还常规路径 (窗口全量重画, 前缓冲旧墨待追平后清)。
-                // 本帧快照已经在显示瓦片里, 主画布重画即包含它, 不必归还积压。
-                handBack()
-                return false
-            }
         }
         var minL = Int.MAX_VALUE
         var minT = Int.MAX_VALUE
@@ -970,7 +953,7 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
         val decor = composeDecor
         if (decor != null && decor.pose != p && !final) {
             // 落笔录的静态覆盖层与当前 pose 不一致 (笔画中视图变了): 宁可交还窗口也不画错位。
-            handBack()
+            releaseAndCatchUp()
             return false
         }
         val gen = overlay.frontGeneration
@@ -1381,6 +1364,27 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
             val b = slot.bitmap ?: continue
             if (shouldShrinkSlot(held = false, isBusy = false, width = b.width, height = b.height, threshold = threshold)) {
                 slot.bitmap = null
+            }
+        }
+    }
+
+    override fun trimMemory() {
+        val vm = view.vm
+        if (vm != null) {
+            vm.runCore(render = false) {
+                if (!held && !catchUpArmed) {
+                    shrinkSlotsWhenIdle()
+                    view.post {
+                        if (!held && !catchUpArmed) {
+                            view.frontBufferOverlay?.trimStrokeLayer()
+                        }
+                    }
+                }
+            }
+        } else {
+            if (!held && !catchUpArmed) {
+                shrinkSlotsWhenIdle()
+                view.frontBufferOverlay?.trimStrokeLayer()
             }
         }
     }

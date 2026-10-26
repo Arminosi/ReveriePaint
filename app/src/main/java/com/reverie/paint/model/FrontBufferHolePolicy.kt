@@ -18,7 +18,6 @@ package com.reverie.paint.model
 object FrontBufferHolePolicy {
     const val MODE_OFF = 0
     const val MODE_HMIN = 1
-    const val MODE_E = 2
     const val MODE_COMPOSE = 3
 
     /** 落笔判定结果。 */
@@ -30,12 +29,10 @@ object FrontBufferHolePolicy {
     /** 每包判定结果。 */
     const val PACKET_PLAIN = 0 // 未命中: 与无孔洞时完全相同, 零额外工作
     const val PACKET_HOLE_REDRAW = 1 // H-min 命中: 照常贴墨, 孔洞清 0, 窗口重画命中区
-    const val PACKET_HANDBACK = 2 // E 命中: 不贴这包, 释放按住, 窗口接管
 
     fun parseMode(holesProp: Int, modeProp: String?): Int {
         if (holesProp == 0) return MODE_OFF
         return when (modeProp?.trim()?.lowercase()) {
-            "e" -> MODE_E
             "off" -> MODE_OFF
             "hmin" -> MODE_HMIN
             else -> MODE_COMPOSE
@@ -75,8 +72,16 @@ object FrontBufferHolePolicy {
      *    与贴图逐像素对齐;
      *  - [otherOverlayActive]: 其他工具自绘覆盖层 (形状/文字/变换手柄…), 这里不重画它们。
      */
-    fun composeEligible(mode: Int, antsVisible: Boolean, axisAligned: Boolean, otherOverlayActive: Boolean): Boolean =
-        mode == MODE_COMPOSE && !antsVisible && axisAligned && !otherOverlayActive
+    fun composeEligible(
+        mode: Int,
+        antsVisible: Boolean,
+        axisAligned: Boolean,
+        otherOverlayActive: Boolean,
+        composeAnts: Boolean = true,
+    ): Boolean {
+        val antsBlocked = antsVisible && !composeAnts
+        return mode == MODE_COMPOSE && !antsBlocked && axisAligned && !otherOverlayActive
+    }
 
     /** compose 不可用时用于 [decideArm] 的模式 (compose 退回 H-min)。 */
     fun holeModeFor(mode: Int): Int = if (mode == MODE_COMPOSE) MODE_HMIN else mode
@@ -93,8 +98,8 @@ object FrontBufferHolePolicy {
      * 1a 开关 (`debug.reverie.fb_snap_hold`, 默认关): 关时可能出现吸附线的笔画一律走常规路径
      * (严格同一性); 开时按住, 前缓冲孔外画导引线 (A/B 用, 有两表面不同步的残留风险)。
      */
-    fun snapForcesNormal(snapPossible: Boolean, snapHoldEnabled: Boolean): Boolean =
-        snapPossible && !snapHoldEnabled
+    fun snapForcesNormal(snapPossible: Boolean, snapHoldEnabled: Boolean, isCompose: Boolean = false): Boolean =
+        if (isCompose) false else snapPossible && !snapHoldEnabled
 
     /** 只有真按住画导引线 (开关开) 时, 才为导引线从首帧维护备份层。 */
     fun snapNeedsExtras(snapPossible: Boolean, snapHoldEnabled: Boolean): Boolean =
@@ -125,7 +130,6 @@ object FrontBufferHolePolicy {
 
     fun decidePacket(mode: Int, hit: Boolean): Int = when {
         !hit || mode == MODE_OFF -> PACKET_PLAIN
-        mode == MODE_E -> PACKET_HANDBACK
         else -> PACKET_HOLE_REDRAW
     }
 

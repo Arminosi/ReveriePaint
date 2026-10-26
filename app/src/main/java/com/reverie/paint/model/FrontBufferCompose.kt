@@ -41,7 +41,7 @@ object FrontBufferCompose {
         val rot = p.rotation % 360f
         val rotMod = if (rot < 0f) rot + 360f else rot
         if (rotMod > 0.05f && rotMod < 359.95f) return false
-        return p.signX > 0f && p.signY > 0f
+        return p.signX != 0f && p.signY != 0f
     }
 
     /**
@@ -49,10 +49,10 @@ object FrontBufferCompose {
      * 空返回 false。
      */
     fun docInnerRect(p: CanvasPose, viewW: Int, viewH: Int, out: IntArray): Boolean {
-        val x0 = p.centerX - p.halfW * p.scale
-        val y0 = p.centerY - p.halfH * p.scale
-        val x1 = p.centerX + (p.bmpW - p.halfW) * p.scale
-        val y1 = p.centerY + (p.bmpH - p.halfH) * p.scale
+        val x0 = p.centerX + (0f - p.halfW) * p.scale * p.signX
+        val y0 = p.centerY + (0f - p.halfH) * p.scale * p.signY
+        val x1 = p.centerX + (p.bmpW.toFloat() - p.halfW) * p.scale * p.signX
+        val y1 = p.centerY + (p.bmpH.toFloat() - p.halfH) * p.scale * p.signY
         val l = ceil(min(x0, x1) - EPS).toInt().coerceAtLeast(0)
         val t = ceil(min(y0, y1) - EPS).toInt().coerceAtLeast(0)
         val r = floor(max(x0, x1) + EPS).toInt().coerceAtMost(viewW)
@@ -67,14 +67,22 @@ object FrontBufferCompose {
      */
     fun screenToBmpRect(p: CanvasPose, l: Int, t: Int, r: Int, b: Int, out: IntArray): Boolean {
         val s = p.scale
-        if (!(s > 0f)) {
+        if (!(s > 0f) || p.signX == 0f || p.signY == 0f) {
             out[0] = 0; out[1] = 0; out[2] = 0; out[3] = 0
             return false
         }
-        val bl = floor((l - p.centerX) / s + p.halfW).toInt().coerceIn(0, p.bmpW)
-        val bt = floor((t - p.centerY) / s + p.halfH).toInt().coerceIn(0, p.bmpH)
-        val br = ceil((r - p.centerX) / s + p.halfW).toInt().coerceIn(0, p.bmpW)
-        val bb = ceil((b - p.centerY) / s + p.halfH).toInt().coerceIn(0, p.bmpH)
+        val bx0 = (l - p.centerX) / (s * p.signX) + p.halfW
+        val bx1 = (r - p.centerX) / (s * p.signX) + p.halfW
+        val by0 = (t - p.centerY) / (s * p.signY) + p.halfH
+        val by1 = (b - p.centerY) / (s * p.signY) + p.halfH
+        val minBx = min(bx0, bx1)
+        val maxBx = max(bx0, bx1)
+        val minBy = min(by0, by1)
+        val maxBy = max(by0, by1)
+        val bl = floor(minBx).toInt().coerceIn(0, p.bmpW)
+        val bt = floor(minBy).toInt().coerceIn(0, p.bmpH)
+        val br = ceil(maxBx).toInt().coerceIn(0, p.bmpW)
+        val bb = ceil(maxBy).toInt().coerceIn(0, p.bmpH)
         if (br <= bl || bb <= bt) {
             out[0] = 0; out[1] = 0; out[2] = 0; out[3] = 0
             return false

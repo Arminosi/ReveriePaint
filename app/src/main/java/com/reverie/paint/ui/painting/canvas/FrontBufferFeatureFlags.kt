@@ -51,11 +51,12 @@ internal object FrontBufferFeatureFlags {
     val clearDelayFrames: Int by lazy { PerfTrace.debugPropInt("debug.reverie.fb_clear_delay", 0).coerceIn(0, 8) }
 
     /**
-     * 1a: 吸附导引线笔画按住 (前缓冲孔外画导引线)。默认关: 两个表面无法原子同步, 抬笔/E 交还/笔画中
-     * 导引线跨孔边界可能有 1 帧错位, 且前缓冲经 SurfaceFlinger 叠加的半透明导引线与窗口直接混合有
-     * ±1 舍入差, 不能保证逐像素同图。
+     * 1a: 吸附导引线笔画按住 (前缓冲孔外画导引线)。默认 1 开 (用户倾向)。
      */
-    val snapHold: Boolean by lazy { PerfTrace.debugPropInt("debug.reverie.fb_snap_hold", 0) != 0 }
+    val snapHold: Boolean by lazy { PerfTrace.debugPropInt("debug.reverie.fb_snap_hold", 1) != 0 }
+
+    /** 蚂蚁线进 compose (默认 1 开)。 */
+    val composeAnts: Boolean by lazy { PerfTrace.debugPropInt("debug.reverie.fb_compose_ants", 1) != 0 }
 
     /** D3: 运笔中渐进刷新已落定瓦片的节流间隔 (ms), 默认 100, 0=关闭。 */
     val midStrokeRefreshMs: Long by lazy {

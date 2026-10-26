@@ -88,6 +88,7 @@ internal fun PaintViewModel.releaseReclaimableCaches(aggressive: Boolean) {
     if (aggressive) {
         clearLayerThumbs()
     }
+    realInkSink?.trimMemory()
 }
 
 /** 把内存压力回调挂到 application context 上 (幂等) */

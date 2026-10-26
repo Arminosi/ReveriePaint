@@ -1259,12 +1259,7 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
         return holeInkPaint
     }
 
-    private fun isAxisAligned(pose: CanvasPose): Boolean {
-        val rot = pose.rotation % 360f
-        val rotMod = if (rot < 0f) rot + 360f else rot
-        if (rotMod > 0.05f && rotMod < 359.95f) return false
-        return pose.signX > 0f && pose.signY > 0f
-    }
+    private fun isAxisAligned(pose: CanvasPose): Boolean = FrontBufferCompose.isAxisAligned(pose)
 
     /**
      * 第 [s]/4 块屏幕矩形夹进「画布在屏幕上的包围盒」与「本帧烤过的槽位范围」, 结果写进
@@ -1412,6 +1407,16 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
         strokeLayerDirty.setEmpty()
         invalidatePrevOverlay()
         return created
+    }
+
+    /** 内存告警时释放备份层 (不在运笔/追赶时)。 */
+    fun trimStrokeLayer() {
+        if (realInk?.held == true || realInk?.catchUpPending == true) return
+        strokeLayer?.recycle()
+        strokeLayer = null
+        strokeCanvas = null
+        strokeLayerDirty.setEmpty()
+        invalidatePrevOverlay()
     }
 
     private fun clearStrokeLayerDirty() {

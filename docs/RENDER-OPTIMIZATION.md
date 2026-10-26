@@ -941,3 +941,114 @@ Krita 继续负责最终正确性(形变 / 采样 / 像素 / 事务 / 撤销 / �
 - [ ] 真机(取数): 大画布连续绘制一段, 记录 `脏比 / 重传 MB/帧 / draw p95` 与 logcat 窗口行
 - [ ] 真机(取数): 保存一次大项目, 记录 `save 总/快照/编码/写盘` 与 `PNG→体积`
 
+
+## 12. 保存性能 (.revp)
+
+### 链路
+
+- 引擎线程: 元数据 -> 预览合成 -> 逐层瓦片克隆并投递 -> 选区掩码 -> 资产/录制
+- 工作线程池: 按 bounds 转换 + PNG 编码 (在飞上限 = 池线程数 x 2)
+- 写盘线程: 严格按条目顺序写入 `.tmp`, 末尾 EOCD 校验 + fsync + 原子 rename
+- 实现: `ReverieCoreIO.cpp` 的 `RevpSavePipeline`, 同步与异步保存共用
+
+### 不得回退的既有优化
+
+- `renderMergedQImage()` 不再 `.copy()` 整幅
+- 稀疏图层只转换 `exactBounds()` 与画布的交集, 容器内仍是整幅尺寸 PNG
+- `preview.png` 长边默认上限 2048 (`debug.reverie.previewmax`), 自愈分支会把降采样预览放大回画布尺寸
+- 条目名与顺序是兼容性契约, 不得改动
+
+### 增量保存
+
+- 开关 `debug.reverie.saveincr` (**默认开启**, 按次读属性; `setprop ... 0` 可整轮退回全量编码), 自检 `debug.reverie.saveverify`
+- 判据: node 指针 + 图层名 + `KisPaintDevice::sequenceNumber()` + 旧文件 size/mtime
+- 只复用 `layer_*.png`, 描边层 / `frame_*` / 预览 / 缩略图每次重编码
+- 缓存最多 4 个路径, `newDocument` / `closeDocument` / `loadRevp` 时清空
+- 任一条件不满足即退回全量编码, 保存不会因缓存失败
+
+### sequenceNumber 写点审计结论
+
+- `writeBytes` / `fill` / `clear` / `fastBitBlt` / `convertFromQImage` 在 Krita 内部都会 `cache()->invalidate()`, 序号自动递增
+- 唯一绕过的是迭代器直写 (`ReverieCoreFilterPlugins.cpp` 的卷积, `ReverieMaskingBrushRenderer.cpp`), 其调用方均随后 `setDirty`
+- `moveTo` 的调用点 (`ReverieCoreSelectionTools.cpp`) 均随后 `setDirty`
+
+### 默认开启的覆盖面 (2026-10-26)
+
+- 已真机跑过: 画笔/橡皮/填充/变换/液化/撤销 + 图层新建/可见性, 每次 `saveverify` 均 0 处 MISMATCH;
+  单层改动后只有该层 PNG 变化 (预览/缩略图随之重编码, 其余图层条目逐字节复用), 保存后杀进程重开逐层一致
+- 已验证默认行为: 属性清空后冷启动首次保存 688ms (缓存冷) -> 第二次 143ms (复用 4 条目 554KB);
+  `setprop debug.reverie.saveincr 0` 时该次保存退回全量编码 (626ms, reused=0), 回退路径可用
+- 尚未覆盖 (复用逻辑不会因此出错, 但这些路径的 `sequenceNumber` 正确性没被真机验证过):
+  滤镜图层 / 调整图层 / 存储选区条目 / 动画关键帧 / 3D 参考层 / KRA·PSD 导入后的图层。
+  其中 `frame_*`(关键帧) 与 `selections/*` 每次全量重编码, 不参与复用, 风险只在 `layer_*.png`。
+- 若后续在这些路径上遇到"画面已变但保存下来没变", 先 `debug.reverie.saveverify 1` 复现,
+  日志里会出现 `saveverify MISMATCH <条目名>` 定位到漏 `setDirty()` 的写入点
+
+### 取图转换: 绕开 Krita 的逐像素 QColor 回退 (2026-10-26)
+
+**根因**: 文档色彩空间是 `rgb8()` = `KoRgbU8ColorSpace` (unmanaged RGBA), 它继承
+`KoSimpleColorSpace`, 而该类的 `convertPixelsTo` 是**逐像素** `toQColor` + `fromQColor`
+实现 —— 每个像素都要构造一次 `QVector<float>`。`KisPaintDevice::convertToQImage` 正是走
+`convertToQImage(data, ...)` → `convertPixelsTo`, 于是 4096×4096 幅面固定要 1555ms,
+而其中真正的像素拷贝只要 21ms (实测, 见下表)。
+
+**改法**: `ReverieCoreInternal.h` 新增 `reverieDeviceToQImage()`。KoRgbU8 的内存序是
+`B,G,R,A` 非预乘, 与 `QImage::Format_ARGB32` 逐字节一致, 所以可以直接
+`QImage(w, h, Format_ARGB32)` + `readBytes(img.bits(), ...)` 完成转换; 其它色彩空间
+(导入的 LAB / 16bit / CMYK 文档) 自动回退到 Krita 的转换。调用点: `renderMergedQImage`
+(保存预览/导出 PNG/JPG/KRA 共用) / 图层与关键帧 PNG 快照 / 图层缩略图 /
+`renderKeyframeFull` 与自动中割的两帧取图。
+
+**实测** (平板 4096×4096, 4 图层, `debug.reverie.savelog 1`)
+
+| 阶段 | 改前 | 改后 |
+|---|---|---|
+| 取图转换 (projection → QImage) | 1555ms | 21ms (readBytes) |
+| 保存 composite 段 (含预览降采样) | 1584ms | 77ms |
+| 全量保存 (改 1 层也要重编码全部) | 4226ms | 810ms |
+| 增量保存 (未改动, 复用 4 条目) | 1674ms | 147ms |
+
+**正确性验证**: 用旧版本(1.6.0 产物)的 `未命名作品 10.revp` 做 A/B —— 新版本打开后另存,
+`layer_000.png` / `layer_001.png` / `preview.png` / `thumbnail.png` 全部 **md5 一致**
+(同一 PNG 编码器 + 同一 q70 档位, 逐字节相同即像素相同); 条目名与顺序不变。
+
+**推论**: 之前读数是"合成占 1.46s, 下一步该缓存预览合成", 根因其实是转换而不是合成;
+缓存合成只能去掉 77ms, 因此**不再做**预览合成缓存。剩余大头转到 PNG deflate
+(全量保存 png 段合计 ≈2.0s, 4 线程并行后墙钟 ≈0.5s), 对应实施方案的 Phase 3.1 (libpng A/B)。
+
+### PNG 编码器: 默认改走 libpng 直写 (2026-10-26, Phase 3.1)
+
+**依据**: 取图快路径落地后, 全量保存里 PNG 段合计 ≈1.9s (4 线程并行墙钟 ≈0.5s), 成为唯一大头。
+Qt 的 PNG 写出固定走"逐行试 5 种 filter"的启发式, 再按 quality 反推 zlib 档位 (q70 -> level 2);
+绘画内容整行平坦/全透明极多, 启发式在这里基本是纯开销。
+
+**改法**: `encodePngBytes()` 增加 libpng 直写分支 (默认启用), `QImage::Format_ARGB32` 的内存序是
+`B,G,R,A`, 用 `png_set_bgr` 直接喂行指针, 省掉一次整幅 RGBA 重排; 灰度掩码
+(`Format_Grayscale8`, 存储选区条目) 保持 1 字节/像素写 grayscale PNG。
+
+**实测** (平板 4096×4096, 4 图层, 同一工程连续保存)
+
+| 编码器 | 保存总时长 | PNG 段合计 | 产物体积 |
+|---|---|---|---|
+| Qt (`pngenc=qt`) | 756–843ms | 1904–2096ms | 1.33MB |
+| libpng level 3 / filter none | 253ms | 390ms | 1.36MB |
+| libpng level 6 / filter sub | 507–523ms | 1295–1315ms | 0.41MB |
+| libpng level 9 / filter none | 631ms | 1466ms | 0.36MB |
+| **libpng level 6 / filter none (默认)** | **607–620ms** | **1459ms** | **0.36MB** |
+
+- 增量保存 (未改动, 复用 4 条目) 从 147ms 降到 125ms, 复用量 1.25MB -> 0.31MB。
+- zlib 档位在 3 -> 4 之间有断崖: level<=3 走 fast deflate (体积 ≈ Qt), level>=4 体积降到 1/3.7。
+- 默认取 level 6 / filter none: 比 Qt 快约 20%, 体积小 3.7x; 想要更快可 `pnglevel 3`, 想更小可 `pnglevel 9`。
+
+**正确性**: 同一工程分别用 Qt 与 libpng 保存, 6 个 PNG 条目 (4 图层 + preview + thumbnail)
+解码后逐像素一致 (md5 相同); 应用自读自写 (杀进程重开) 正常。灰度分支另用宿主 libpng 复刻
+同样的调用序列验证 (999x7 非 4 倍数宽度, 解码为 mode L 且像素逐点一致)。
+
+**开关**: `debug.reverie.pngenc=qt|libpng` (默认 libpng) / `debug.reverie.pnglevel=<1..9>` /
+`debug.reverie.pngfilter=none|sub|all`。
+
+### 兼容性回环 (2026-10-26)
+
+- 旧版本(1.6.0 tag 单独构建的 APK)打开新版本产出的 `.revp`: 4 图层 / 笔画完整, `loadRevp returned true`,
+  无自愈分支 (`isHealed=false`)。
+- 反方向 (1.6.0 产物 → 新版本打开另存) 见上一节: 逐字节一致。

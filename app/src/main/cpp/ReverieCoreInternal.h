@@ -11,6 +11,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QBuffer>
 #include <QElapsedTimer>
 #include <QJsonDocument>
@@ -48,6 +49,7 @@
 #include <KoPattern.h>
 #include <QMutex>
 #include <QImage>
+#include <png.h>
 
 class QThreadPool;
 
@@ -101,6 +103,7 @@ inline bool rpDebugFlag(const char *propName, const char *envName, bool defVal)
  *  上限 4 线程 (移动端 4 大核已能打满 zlib/warp 吞吐, 更多只增功耗与发热)。
  *  定义于 ReverieCoreDocument.cpp。 */
 QThreadPool *reverieBackgroundPool();
+void revpClearSaveCache();
 #include <algorithm>
 #include <queue>
 #include <kis_clone_layer.h>
@@ -174,6 +177,31 @@ QThreadPool *reverieBackgroundPool();
 #include <KoBgrColorSpaceTraits.h>
 #include <compositeops/KoCompositeOps.h>
 #include <QThread>
+
+// ---------------------------------------------------------------------------
+// 设备 -> QImage 的快路径 (保存/导出/缩略图/关键帧渲染共用)。
+//
+// 本工程文档固定使用 KoRgbU8 ("RGBA", 内存序 B,G,R,A, 非预乘), 与
+// QImage::Format_ARGB32 的字节布局逐字节一致, 所以"设备 -> QImage"可以退化成
+// 一次 readBytes 行拷贝 (4096x4096 实测 21ms)。
+// Krita 的 KoSimpleColorSpace::convertPixelsTo 走逐像素 QColor + QVector<float>
+// 往返 (每像素一次堆分配), 同一幅面实测 1555ms —— 保存/导出/缩略图的主要开销
+// 就是它。非该色彩空间 (导入的 LAB / 16bit / CMYK 文档) 自动回退到 Krita 转换,
+// 行为与逐像素路径一致。
+// ---------------------------------------------------------------------------
+inline QImage reverieDeviceToQImage(const KisPaintDeviceSP &dev, int x, int y, int w, int h)
+{
+    if (!dev || w <= 0 || h <= 0) return QImage();
+    const KoColorSpace *cs = dev->colorSpace();
+    if (cs && cs->pixelSize() == 4 && cs->id() == QLatin1String("RGBA")) {
+        QImage img(w, h, QImage::Format_ARGB32);
+        if (!img.isNull()) {
+            dev->readBytes(img.bits(), x, y, w, h);
+            return img;
+        }
+    }
+    return dev->convertToQImage(nullptr, x, y, w, h);
+}
 
 // ---------------------------------------------------------------------------
 // 图层像素加载流水线 (loadRevp 平铺路径 / .kra 树 / layers.xml 树共用)。

@@ -369,9 +369,26 @@ class PaintViewModel : ViewModel() {
     internal fun pollSaveStats() {
         if (!PerfTrace.enabled) return
         val s = ReverieCoreBridge.revpSaveStats() ?: return
-        if (s.size < 8) return
-        if (s[0] <= 0L) return // 还没保存过
-        PerfTrace.saveStats(s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7] != 0L)
+        val profile = SaveProfile.fromStats(s) ?: return
+        PerfTrace.saveStats(
+            totalMs = profile.totalMs,
+            snapshotMs = profile.snapshotMs,
+            encodeMs = profile.encodeMs,
+            writeMs = profile.writeMs,
+            pngCount = profile.pngCount,
+            pngBytes = profile.pngBytes,
+            fileBytes = profile.fileBytes,
+            wasAsync = profile.wasAsync,
+            compositeMs = profile.compositeMs,
+            layerCloneMs = profile.layerCloneMs,
+            selMaskMs = profile.selMaskMs,
+            convertMs = profile.convertMs,
+            pngDeflateMs = profile.pngDeflateMs,
+            zipWriteMs = profile.zipWriteMs,
+            closeMs = profile.closeMs,
+            reusedEntries = profile.reusedEntries,
+            reusedBytes = profile.reusedBytes,
+        )
     }
 
     /**

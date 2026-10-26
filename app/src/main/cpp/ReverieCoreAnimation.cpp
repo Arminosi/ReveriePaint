@@ -964,7 +964,7 @@ bool ReverieCore::renderKeyframeFull(
     KisPaintDeviceSP tmp = new KisPaintDevice(cs);
     channel->writeToDevice(time, tmp);
 
-    const QImage img = tmp->convertToQImage(nullptr, 0, 0, m_docWidth, m_docHeight);
+    const QImage img = reverieDeviceToQImage(tmp, 0, 0, m_docWidth, m_docHeight);
     if (img.isNull()) return false;
 
     QImage scaled = (img.width() == dstW && img.height() == dstH)
@@ -1085,11 +1085,11 @@ bool ReverieCore::generateInbetween(int layerIndex, int timeA, int timeB, int ta
     // 提取两帧内容转换为 QImage
     KisPaintDeviceSP devA = new KisPaintDevice(cs);
     channel->writeToDevice(timeA, devA);
-    const QImage imgA = devA->convertToQImage(nullptr, 0, 0, m_docWidth, m_docHeight);
+    const QImage imgA = reverieDeviceToQImage(devA, 0, 0, m_docWidth, m_docHeight);
 
     KisPaintDeviceSP devB = new KisPaintDevice(cs);
     channel->writeToDevice(timeB, devB);
-    const QImage imgB = devB->convertToQImage(nullptr, 0, 0, m_docWidth, m_docHeight);
+    const QImage imgB = reverieDeviceToQImage(devB, 0, 0, m_docWidth, m_docHeight);
 
     if (imgA.isNull() || imgB.isNull()) return false;
 

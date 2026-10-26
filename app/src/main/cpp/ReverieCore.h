@@ -961,8 +961,29 @@ public:
     bool saveRevp(const QString &path, const QString &extraMetaJson = QString(),                  const QByteArray &recordingBlob = QByteArray());
     bool saveRevpAsync(const QString &path, const QString &extraMetaJson = QString(),                       const QByteArray &recordingBlob = QByteArray());
 
+    enum RevpStat {
+        StatTotal = 0,   // 整个 saveRevp 的墙钟 (ms)
+        StatSnapshot,    // 引擎线程: 快照总耗时 (ms)
+        StatEncode,      // 工作线程: 编码总耗时 (ms)
+        StatWrite,       // 写盘: zip 写入总耗时 (ms)
+        StatPngCount,    // PNG 条目数
+        StatPngBytes,    // PNG 字节总量
+        StatFileBytes,   // 最终 .revp 体积
+        StatAsync,       // 1 = 异步保存
+        StatComposite,   // 合成/预览转换 (ms)
+        StatLayerClone,  // 图层 COW 克隆 + 关键帧 writeToDevice (ms)
+        StatSelMask,     // 选区掩码读取 (ms)
+        StatConvert,     // readBytes + 色彩转换 (ms)
+        StatPngDeflate,  // QImage→PNG (ms)
+        StatZipWrite,    // zip 写入，含资产/录制 (ms)
+        StatClose,       // zip finalize + fsync + rename (ms)
+        StatReusedEntries, // 复用条目数
+        StatReusedBytes,   // 复用字节数
+        RevpStatCount
+    };
+
     /** 上一次 .revp 保存的阶段耗时(ms)与产物体积, 供 UI 侧性能标尺显示。
-     *  out 至少 8 个 qint64: [total, snapshot, encode, write, pngCount, pngBytes, fileBytes, async]。 */
+     *  out 至少 RevpStatCount 个 qint64。 */
     void revpSaveStats(qint64 *out);
     bool loadRevp(const QString &path);
     bool isLastLoadHealed() const { return m_lastLoadHealed; }

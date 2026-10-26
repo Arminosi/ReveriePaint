@@ -260,11 +260,19 @@ internal object PerfHud {
     fun SettingsSection(vm: PaintViewModel) {
         SettingCategoryTitle(stringResource(R.string.settings_diagnostics))
         SettingGroup {
+            // 属性强制打开时开关显示为开: 只看偏好会出现"开关关着, 标尺却在画"的错配。
+            // 点掉它会撤掉属性强制状态 (见 PaintViewModel.updatePerfHudEnabled);
+            // 用 vm 上的状态镜像而不是直接读 PerfTrace, 否则关掉后这一行不会重组。
+            val forcedByProp = vm.perfHudForcedByProp
             SettingSwitchGroupItem(
                 icon = Icons.Rounded.Schedule,
                 title = stringResource(R.string.settings_perf_hud),
-                summary = stringResource(R.string.settings_perf_hud_sub),
-                checked = vm.perfHudEnabled,
+                summary = if (forcedByProp) {
+                    stringResource(R.string.settings_perf_hud_forced_by_prop)
+                } else {
+                    stringResource(R.string.settings_perf_hud_sub)
+                },
+                checked = vm.perfHudEnabled || forcedByProp,
                 shape = settingGroupShape(0, 4),
                 onCheckedChange = { vm.updatePerfHudEnabled(it) },
             )

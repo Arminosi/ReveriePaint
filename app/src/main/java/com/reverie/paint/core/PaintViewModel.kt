@@ -272,12 +272,26 @@ class PaintViewModel : ViewModel() {
 
     /**
      * 性能标尺 (画布左上角实时显示渲染路径/纹理重传/保存阶段耗时)。见 [PerfTrace]。
-     * 与 `setprop debug.reverie.perf 1` 任一为真即为开 (后者方便现场量测, 不写偏好)。
+     * 与 `setprop debug.reverie.perf 1` 任一为真即为开 (后者方便现场量测, 不写偏好);
+     * 设置页显式关闭会撤掉"属性强制"状态, 否则属性残留时开关点了不生效 (= 关不掉)。
      */
     var perfHudEnabled by mutableStateOf(false)
 
+    /**
+     * 标尺是否被 `setprop debug.reverie.perf 1` 强制打开 (见 [PerfTrace.isEnabledByProp])。
+     *
+     * 为什么在这里镜像一份: [PerfTrace.isEnabledByProp] 是普通 `@Volatile` 字段, 读它不会
+     * 触发重组 —— 设置页那一行会停在"已被属性强制打开"的旧文本上。真正的热路径只看
+     * [PerfTrace.enabled], 这个镜像只在启动同步与开关切换时写入。
+     */
+    var perfHudForcedByProp by mutableStateOf(false)
+
     fun updatePerfHudEnabled(on: Boolean) {
         perfHudEnabled = on
+        // 属性只在启动时打开一次 (PerfTrace.refreshFromSystemProp), 之后单方面为真;
+        // 用户在这里显式关闭时必须能压过它, 否则表现为"标尺关不掉"。下次启动仍按属性打开。
+        if (!on) PerfTrace.isEnabledByProp = false
+        perfHudForcedByProp = PerfTrace.isEnabledByProp
         PerfTrace.enabled = on || PerfTrace.isEnabledByProp
         if (::appContext.isInitialized) {
             appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
@@ -3956,6 +3970,7 @@ class PaintViewModel : ViewModel() {
             // 性能标尺: 设置项(仅 debug 构建有该入口, 见 PerfHud)或 setprop 任一为真即为开。
             // 用 PerfHud.readPref 而不是直接读偏好 —— 正式版恒 false, 避免残留偏好默默开着标尺。
             perfHudEnabled = PerfHud.readPref(prefs)
+            perfHudForcedByProp = PerfTrace.isEnabledByProp
             PerfTrace.enabled = perfHudEnabled || PerfTrace.isEnabledByProp
             // Phase 3B / 实验 A 的应用内档位(仅 debug 有入口; release 读取器恒返回默认值)
             liquifyProxyPercent = PerfHud.readLiquifyProxyPercent(prefs)

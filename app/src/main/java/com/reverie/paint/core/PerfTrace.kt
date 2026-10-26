@@ -51,8 +51,9 @@ object PerfTrace {
     var enabled: Boolean = false
 
     /**
-     * 是否由系统属性 (`debug.reverie.perf`) 打开。设置页关闭标尺时不影响它 ——
-     * 现场量测(adb 可用)与日常开关(设置页)是两条独立开关, 任一为真即为开。
+     * 是否由系统属性 (`debug.reverie.perf`) 打开。设置页**打开**标尺时不动它; 但用户显式
+     * **关闭**标尺会把它清掉 —— 否则属性残留时开关点了不生效 (表现为"标尺关不掉")。
+     * 下次启动仍按属性打开 (见 [refreshFromSystemProp])。
      */
     @Volatile
     var isEnabledByProp: Boolean = false

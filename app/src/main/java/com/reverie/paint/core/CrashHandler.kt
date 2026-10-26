@@ -68,7 +68,73 @@ object CrashHandler : Thread.UncaughtExceptionHandler {
             Log.w(TAG, "Native crash handler init deferred or failed: ${t.message}")
         }
 
+        // 前缓冲原生路径隔离判定 (必须在任何画布挂载之前完成)
+        evaluateFrontBufferQuarantine(context, logDir)
+        // 原生崩溃报告本身没有设备信息, 这里把环境写进它的状态快照
+        seedNativeStateSnapshot(context)
+
         cleanupStaleSwapFiles(context)
+    }
+
+    /**
+     * 前缓冲 (androidx.graphics 的 `libgraphics-core.so`) 崩过一次就按"本次安装"隔离。
+     *
+     * 该崩溃发生在系统 libgui 的事务完成回调线程上 (fault addr 0x0), Kotlin 侧无法捕获, 只能在
+     * 下次启动时把前缓冲入口关掉, 让笔画退回主画布软件预览。隔离与 `PackageManager.lastUpdateTime`
+     * 绑定: 发新版本 (或升级 graphics-core) 后旧日志失效, 自动重试一次。
+     */
+    private fun evaluateFrontBufferQuarantine(context: Context, logDir: File) {
+        val hit = hasGraphicsCoreCrashSinceInstall(context, logDir)
+        com.reverie.paint.core.stylus.FrontBufferProbe.setCrashQuarantined(hit)
+        if (hit) {
+            Log.w(TAG, "Front buffer quarantined: previous native crash stack referenced libgraphics-core.so")
+            Breadcrumbs.record("FrontBuffer", "quarantined after libgraphics-core.so native crash")
+        }
+    }
+
+    /** 最近的原生崩溃日志里是否出现前缓冲库 (只读少量小文件, 启动期一次性开销)。 */
+    private fun hasGraphicsCoreCrashSinceInstall(context: Context, logDir: File): Boolean {
+        val installedAt = runCatching {
+            context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime
+        }.getOrDefault(0L)
+        val logs = logDir.listFiles { f ->
+            f.isFile && f.name.startsWith("crash_native_") && f.name.endsWith(".log")
+        } ?: return false
+        return logs.asSequence()
+            .filter { it.lastModified() >= installedAt }
+            .sortedByDescending { it.lastModified() }
+            .take(3)
+            .any { file -> runCatching { file.readText().contains("libgraphics-core.so") }.getOrDefault(false) }
+    }
+
+    /**
+     * 把设备/系统/前缓冲开关状态写进 Native 崩溃报告的状态快照。
+     * 原生信号处理器拿不到 `android.os.Build`, 只能由 Kotlin 侧提前灌进去。
+     */
+    private fun seedNativeStateSnapshot(context: Context) {
+        val prefs = context.getSharedPreferences("paint_prefs", Context.MODE_PRIVATE)
+        val predictionPref = prefs.getBoolean(
+            "frontBufferPredictionEnabled",
+            prefs.getBoolean("stylusFrontBufferPreviewEnabled", false),
+        )
+        val sb = StringBuilder()
+        sb.append("App: ").append(BuildConfig.VERSION_NAME)
+            .append(" (").append(BuildConfig.VERSION_CODE).append(")\n")
+        sb.append("Device: ").append(Build.MANUFACTURER).append('/').append(Build.BRAND)
+            .append(' ').append(Build.MODEL).append(" (").append(Build.DEVICE).append(")\n")
+        sb.append("Android: ").append(Build.VERSION.RELEASE)
+            .append(" (SDK ").append(Build.VERSION.SDK_INT).append(")\n")
+        sb.append("Fingerprint: ").append(Build.FINGERPRINT).append('\n')
+        val harmony = detectHarmonyOsVersion()
+        if (harmony.isNotEmpty()) sb.append("HarmonyOS/EMUI: ").append(harmony).append('\n')
+        sb.append("FrontBuffer: pref=").append(predictionPref)
+            .append(" graphicsCore=").append(BuildConfig.GRAPHICS_CORE_VERSION)
+            .append(" supported=")
+            .append(runCatching { com.reverie.paint.core.stylus.FrontBufferProbe.isSupported() }.getOrDefault(false))
+            .append(" quarantined=")
+            .append(com.reverie.paint.core.stylus.FrontBufferProbe.isCrashQuarantined())
+            .append('\n')
+        Breadcrumbs.updateState(sb.toString())
     }
 
     private fun cleanupStaleSwapFiles(context: Context) {

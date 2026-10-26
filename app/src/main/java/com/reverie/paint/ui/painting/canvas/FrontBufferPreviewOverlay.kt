@@ -501,7 +501,11 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
 
             frontRenderer = CanvasFrontBufferedRenderer(this, callback)
             isRendererInitialized = true
-            Log.d(TAG, "CanvasFrontBufferedRenderer initialized successfully")
+            Log.d(
+                TAG,
+                "CanvasFrontBufferedRenderer initialized successfully " +
+                    "(graphics-core ${com.reverie.paint.BuildConfig.GRAPHICS_CORE_VERSION})",
+            )
         } catch (t: Throwable) {
             Log.e(TAG, "Failed to initialize CanvasFrontBufferedRenderer", t)
             frontRenderer = null

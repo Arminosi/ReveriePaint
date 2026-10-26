@@ -1,5 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+      graphics-core 1.1.0-beta01 把自己的 minSdk 抬到 24 (1.0.4 是 21), 项目 minSdk 仍是 23。
+      这里显式放行: 该库只在前缓冲低延迟路径上使用, 而那条路径被 FrontBufferProbe.isSupported()
+      (API 29+) 与 CanvasView/overlay 的挂载条件双重拦住, API 23 设备不会加载它的任何类。
+      若将来改成全局引用, 请把 minSdk 直接抬到 24。
+    -->
+    <uses-sdk tools:overrideLibrary="androidx.graphics.core" />
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />

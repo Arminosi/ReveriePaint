@@ -17,6 +17,10 @@ val prebuiltJni = rootProject.file("third_party/android-native-libs/libreverie_j
 val buildNative = project.hasProperty("buildNative")
 val usePrebuiltJni = prebuiltJni && !buildNative
 
+// 前缓冲低延迟组件的唯一版本出处: 依赖与 BuildConfig.GRAPHICS_CORE_VERSION 共用,
+// 便于在日志/崩溃报告里确认测试包到底带的哪个版本 (1.0.4 → 1.1.0-beta01 修复了拆解竞态崩溃)
+val graphicsCoreVersion = "1.1.0-beta01"
+
 val localProps = Properties()
 val localPropsFile = rootProject.file("local.properties")
 if (localPropsFile.isFile) {
@@ -56,6 +60,8 @@ android {
 
         buildConfigField("String", "AIFADIAN_API_TOKEN", "\"$aifadianApiToken\"")
         buildConfigField("String", "AIFADIAN_USER_ID", "\"$aifadianUserId\"")
+        // 前缓冲低延迟组件版本 (写进日志/崩溃状态快照, 用于确认测试包带的是哪个版本)
+        buildConfigField("String", "GRAPHICS_CORE_VERSION", "\"$graphicsCoreVersion\"")
 
         // 无 adb 真机 A/B 用的"液化实验档位": ./gradlew assembleDebug -PlqTestProfile=<n>
         //   0(默认) = 不改任何默认行为(一切照旧由 debug property 控制)
@@ -232,7 +238,12 @@ dependencies {
     implementation("dev.chrisbanes.haze:haze:1.5.3")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     // 超低延迟前缓冲渲染组件 (API 29+, 用于笔尖前沿单缓冲直出)
-    implementation("androidx.graphics:graphics-core:1.0.4")
+    // 1.1.0-beta01 (2026-10-07) 修掉了 1.0.4 会空指针崩溃的拆解竞态:
+    //   - teardown 时改在 GL 线程释放 SurfaceControl (1.0.4 在调用线程释放, 与系统事务完成回调赛跑)
+    //   - release() 后 unparent SurfaceControl 并清引用 (1.0.4 的残留引用会被系统回调打到)
+    //   - surface 重建期的冗余绘制/卡顿, 以及不保留缓冲内容设备上的显示异常
+    // 现场: 华为鸿蒙机型 SIGSEGV @ libgraphics-core.so (系统 libgui NdkDelegator 事务完成线程)
+    implementation("androidx.graphics:graphics-core:$graphicsCoreVersion")
     // Android 原生系统级运动预测库 (适用于华为、三星、通用及各家 Android 平板)
     implementation("androidx.input:input-motionprediction:1.0.0")
     // ONNX Runtime Mobile 端侧轻量神经网络推理引擎 (用于智能阴影辅助等端侧 AI 特性)

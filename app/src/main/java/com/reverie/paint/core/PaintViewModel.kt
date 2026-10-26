@@ -1966,11 +1966,15 @@ class PaintViewModel : ViewModel() {
     var stylusAudioType by mutableStateOf(StylusAudioType.PENCIL)
     var stylusStrokePredictionEnabled by mutableStateOf(false)
     /**
-     * 前缓冲预测 (本次低延迟技术的总开关, 默认开 = "APP软件算法")。
+     * 前缓冲预测 (本次低延迟技术的总开关, 默认关 = 仅 OEM 尾线)。
      * 开启时启用: 卡尔曼运动预测 + 墨迹空窗回填 + 前缓冲直出 + 光标跟随 + 悬停前瞻;
      * 关闭时回到上游原版行为 (仅"超低延迟笔迹预测"开关的 OEM 硬件尾线)。
+     *
+     * 默认关闭的原因: 前缓冲直出依赖 `androidx.graphics:graphics-core` 原生库对 SurfaceControl
+     * 的用法, 在部分 ROM (已确认华为鸿蒙机型) 上会在系统 libgui 的事务完成回调线程里空指针崩溃,
+     * Kotlin 侧无法捕获。想要更低延迟的用户可在设置里主动打开。
      */
-    var frontBufferPredictionEnabled by mutableStateOf(true)
+    var frontBufferPredictionEnabled by mutableStateOf(false)
 
     /**
      * 新建画布后，前缓冲在这段 uptime 之前不贴真墨、也不贴 #81 预览。
@@ -4034,7 +4038,8 @@ class PaintViewModel : ViewModel() {
             stylusAudioVolume = prefs.getFloat("stylusAudioVolume", 0.6f)
             stylusAudioType = StylusAudioType.fromOrdinal(prefs.getInt("stylusAudioType", StylusAudioType.PENCIL.ordinal))
             samsungSideButtonErase = prefs.getBoolean("samsungSideButtonErase", true)
-            // 首次安装 (预测开关都没存过) 默认 APP 软件算法 (前缓冲); 存过的老用户保留原选择与原默认。
+            // 首次安装 (预测开关都没存过) 默认不走 APP 前缓冲算法, 只保留用户主动打开的权利;
+            // 存过的老用户保留原选择与原默认 (不改他们已有的体验)。
             val predictionPrefSaved = prefs.contains("stylusStrokePredictionEnabled") ||
                 prefs.contains("frontBufferPredictionEnabled") ||
                 prefs.contains("stylusFrontBufferPreviewEnabled")
@@ -4042,7 +4047,7 @@ class PaintViewModel : ViewModel() {
             // 迁移: 旧版"前缓冲笔尖直出"独立开关升级为"前缓冲预测"总开关, 保留老用户选择
             frontBufferPredictionEnabled = prefs.getBoolean(
                 "frontBufferPredictionEnabled",
-                prefs.getBoolean("stylusFrontBufferPreviewEnabled", !predictionPrefSaved),
+                prefs.getBoolean("stylusFrontBufferPreviewEnabled", false),
             )
             motionPredictorEnabled = stylusStrokePredictionEnabled
             samsungSingleClickAction = prefs.getString("samsungSingleClickAction", "toggle_eraser") ?: "toggle_eraser"

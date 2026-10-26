@@ -93,3 +93,71 @@
 - 将 `CanvasTouchView` 中的 `currentRenderedFrontier` 及触控点通过纯数据结构同步至 `FrontBufferPreviewOverlay`；
 - 当前缓冲层激活时，短路现有 in-window 模拟线绘制（防双重重叠绘图）；
 - 完善手势变换（缩放/平移/旋转）坐标映射。
+
+---
+
+## 5. 事故记录：华为鸿蒙机型的 `libgraphics-core.so` 空指针崩溃 (1.6.0)
+
+### 5.1 现场
+
+用户报告（1.6.0 正式版，华为机型，系统为鸿蒙 5.0 及以上；开发者本机不复现）的 native 崩溃日志：
+
+```
+Signal: SIGSEGV (code=1)   Fault Address: 0x0
+Crashed TID: 15840 (进程名 "m.reverie.paint" → 系统创建的 native 线程)
+#04 pc …/lib/arm64/libgraphics-core.so     ← 故障帧 (与寄存器 pc 完全一致)
+#05 #06   libgraphics-core.so
+#07       /system/lib64/libandroid.so      (ASurfaceTransaction* NDK 封装)
+#08       /system/lib64/libgui.so  android::NdkDelegatorController::ThreadLoop
+Breadcrumbs: HOME → 载入笔刷 → PAINTING (刚进画布)
+```
+
+**判定**：崩在 `androidx.graphics:graphics-core` 的原生库，由系统 `libgui` 的
+`NdkDelegatorController` 线程派发「SurfaceControl 事务已上屏」回调时，对空指针做了解引用。
+与我们自己的 Krita/JNI 引擎无关；也不在 UI 或渲染线程上，Kotlin 侧无法 try/catch。
+
+**为什么开发机不复现**：该回调由系统合成器派发，各 ROM 的 `ASurfaceTransaction` 实现差异很大；
+鸿蒙的 Android 兼容层（日志里 `/apex/com.android.art` 说明确有完整 ART 在跑）是最接近"非常规实现"的一类。
+
+**排障过程中发现的两处日志缺陷（已修）**：
+1. `ReverieCrashHandler` 只在 `dladdr` 拿到符号名时才打印偏移，stripped 库（如 libgraphics-core.so）
+   只剩裸地址，无法符号化；
+2. 原生报告没有设备/系统信息，`Breadcrumbs.updateState` 从未被调用，状态快照一直是空的。
+
+### 5.2 处置
+
+| 措施 | 位置 | 说明 |
+|---|---|---|
+| 默认关闭前缓冲预测 | `PaintViewModel.frontBufferPredictionEnabled` | 新装/未存过设置 → 关；老用户已存的值不动 |
+| 崩溃后自动隔离 | `CrashHandler.evaluateFrontBufferQuarantine` + `FrontBufferProbe.setCrashQuarantined` | 上次崩溃栈里出现 `libgraphics-core.so` → 本次安装关闭前缓冲；绑定 `lastUpdateTime`，发新版自动重试。逃生门 `debug.reverie.fb_force=1` |
+| 崩溃日志补环境 | `CrashHandler.seedNativeStateSnapshot` | 机型/系统/HarmonyOS 属性/前缓冲开关与库版本写入 native 报告 |
+| 升级组件 | `graphics-core:1.0.4 → 1.1.0-beta01` | 见 5.3 |
+
+### 5.3 为什么升 1.1.0-beta01
+
+上游 1.1.0-beta01（2026-10-07）的 Bug Fixes 与本次崩溃现象直接对应：
+
+- *Fixed a race condition during `GLFrameBufferRenderer` teardown by releasing `SurfaceControl` on the GL thread.*
+  → 1.0.4 在调用线程释放 SurfaceControl，与在途事务的完成回调赛跑；
+- *Fixed memory leaks by unparenting `SurfaceControl` instances and clearing references on `release()`.*
+  → 清了引用，系统回调不会再打到已释放的对象；
+- *Fixed redundant draws and render stalls when surfaces are recreated.*
+  → 对应"进出画布重建 surface"这条触发路径。
+
+接入注意：
+- 该版本把自身 `minSdk` 抬到 24（1.0.4 为 21），项目 `minSdk` 仍为 23，因此
+  `AndroidManifest.xml` 用 `<uses-sdk tools:overrideLibrary="androidx.graphics.core" />` 放行
+  —— 只有 API 29+ 才会加载这个库，API 23 设备走不到；若哪天全局引用，必须把 minSdk 抬到 24；
+- `CanvasFrontBufferedRenderer` 公开 API 与 1.0.4 一致（`renderFrontBufferedLayer` / `commit` /
+  `release` / `update` / `Callback`），`PreservedBufferContentsVerifier` 的反射目标也未变；
+- 库版本单点定义在 `app/build.gradle.kts` 的 `graphicsCoreVersion`，并注入为
+  `BuildConfig.GRAPHICS_CORE_VERSION`，日志与崩溃报告都会带上，便于确认测试包版本。
+
+### 5.4 验证与回滚
+
+- 单独出 beta 包（`com.reverie.paint.beta`，与正式版共存）验证：反复进出画布、画笔画、
+  切换工具/图层、前后台切换、多笔快速起落；
+- 通过后把 `frontBufferPredictionEnabled` 默认值改回 `true`；
+- 若 1.1.0-beta01 仍复现：先看崩溃报告状态快照里的 `graphicsCore=` 与 `HarmonyOS/EMUI=`，
+  再决定是否对鸿蒙类设备做机型级降级；隔离机制可保证不再反复崩。
+

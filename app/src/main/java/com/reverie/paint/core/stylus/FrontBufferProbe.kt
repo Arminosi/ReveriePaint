@@ -6,6 +6,7 @@ package com.reverie.paint.core.stylus
 
 import android.os.Build
 import android.util.Log
+import com.reverie.paint.core.PerfTrace
 
 /**
  * 运行时前缓冲探针与兼容性诊断工具。
@@ -18,6 +19,36 @@ object FrontBufferProbe {
     const val MIN_SUPPORTED_API = Build.VERSION_CODES.Q
 
     /**
+     * 本机是否因"上一次原生崩溃落在 libgraphics-core.so"而被隔离 (见 [setCrashQuarantined])。
+     * 由 [com.reverie.paint.core.CrashHandler] 在进程启动时判定; 未判定前按不隔离处理。
+     */
+    @Volatile
+    private var crashQuarantined = false
+
+    /** 隔离期间仍想在前缓冲上排查问题的逃生门: `adb shell setprop debug.reverie.fb_force 1`。 */
+    private val forceEnabledByProp: Boolean by lazy {
+        PerfTrace.debugPropInt("debug.reverie.fb_force", 0) != 0
+    }
+
+    /**
+     * 记录启用状态变更原因 (崩溃隔离 / 强制打开), 便于诊断时确认"为什么这台机器没走前缓冲"。
+     * 只在启动时调用一次, 不参与任何热路径。
+     */
+    fun setCrashQuarantined(quarantined: Boolean) {
+        crashQuarantined = quarantined
+        if (quarantined) {
+            Log.w(
+                TAG,
+                "front buffer disabled for this app version: previous native crash stack referenced " +
+                    "libgraphics-core.so (override with debug.reverie.fb_force=1)",
+            )
+        }
+    }
+
+    /** 崩溃隔离是否生效 (受 [forceEnabledByProp] 覆盖, 用于诊断输出)。 */
+    fun isCrashQuarantined(): Boolean = crashQuarantined && !forceEnabledByProp
+
+    /**
      * 判断当前设备是否具备运行 CanvasFrontBufferedRenderer 的基础软硬件条件。
      */
     fun isSupported(): Boolean {
@@ -26,7 +57,15 @@ object FrontBufferProbe {
             return false
         }
 
-        // 2. 探活 androidx.graphics 类库是否可正确加载
+        // 2. 本机曾在前缓冲原生路径 (androidx.graphics 的 libgraphics-core.so) 崩过:
+        //    该库 1.0.4 的 SurfaceControl 拆解竞态是空指针崩溃 (fault addr 0x0, 发生在系统
+        //    libgui NdkDelegatorController 的事务完成回调线程上), 无法在 Kotlin 侧捕获, 只能隔离。
+        //    隔离按版本号生效, 升级版本后自动重试一次 (CrashHandler 负责读写)。
+        if (isCrashQuarantined()) {
+            return false
+        }
+
+        // 3. 探活 androidx.graphics 类库是否可正确加载
         return runCatching {
             Class.forName("androidx.graphics.lowlatency.CanvasFrontBufferedRenderer")
             true
@@ -131,6 +170,7 @@ object FrontBufferProbe {
         val supported = isSupported()
         val manufacturer = Build.MANUFACTURER
         val model = Build.MODEL
-        return "FrontBuffer[supported=$supported, sdk=$sdk, device=$manufacturer $model]"
+        return "FrontBuffer[supported=$supported, sdk=$sdk, device=$manufacturer $model, " +
+            "crashQuarantined=$crashQuarantined, force=$forceEnabledByProp]"
     }
 }

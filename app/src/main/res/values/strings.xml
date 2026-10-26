@@ -3025,6 +3025,8 @@
     <string name="layer_3d_cat_walk">行走迈步</string>
     <string name="layer_3d_cat_curl">蜷缩入睡</string>
     <string name="layer_3d_cat_pounce">伏击准备</string>
+    <string name="layer_3d_cat_rear">立身伸爪</string>
+    <string name="layer_3d_cat_look">回首张望</string>
     <string name="layer_3d_cat_stretch">猫猫伸懒腰</string>
     <string name="layer_3d_joint_head_pitch">头部俯仰</string>
     <string name="layer_3d_joint_head_yaw">头部偏航转动</string>

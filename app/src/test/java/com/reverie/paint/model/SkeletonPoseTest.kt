@@ -96,7 +96,7 @@ class SkeletonPoseTest {
         val tuned = mapOf(
             PosePresets.STAND to 0f,
             PosePresets.LOAF to -0.60f,
-            PosePresets.CURL to -0.60f,
+            PosePresets.CURL to -0.45f,
             PosePresets.STRETCH to -0.10f,
         )
         for ((preset, want) in tuned) {

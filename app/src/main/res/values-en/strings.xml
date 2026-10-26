@@ -3025,6 +3025,8 @@
     <string name="layer_3d_cat_walk">Walking</string>
     <string name="layer_3d_cat_curl">Curled Up</string>
     <string name="layer_3d_cat_pounce">Pounce Ready</string>
+    <string name="layer_3d_cat_rear">Rearing Up</string>
+    <string name="layer_3d_cat_look">Looking Back</string>
     <string name="layer_3d_cat_stretch">Stretching</string>
     <string name="layer_3d_joint_head_pitch">Head Pitch</string>
     <string name="layer_3d_joint_head_yaw">Head Yaw</string>

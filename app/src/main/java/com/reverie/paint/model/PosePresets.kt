@@ -26,6 +26,8 @@ object PosePresets {
     const val WALK = "walk"
     const val CURL = "curl"
     const val POUNCE = "pounce"
+    const val REAR = "rear"
+    const val LOOK = "look"
 
     /** 姿态面板里由语义分支消费的键: 兜底解析必须跳过, 否则同一角度会被施加两次 */
     private val CAT_SEMANTIC_KEYS = setOf(
@@ -54,8 +56,8 @@ object PosePresets {
         "cat" to mapOf(
             // 端坐: 之前 -0.50 会把整只猫压到地面线以下 (前腿陷进地下), 交回几何贴地
             LOAF to -0.60f,
-            // 蜷缩/伏卧: 四肢收在身下, 需要把身体压到贴地才有"卧"的观感 (与农民揣同一档)
-            CURL to -0.60f,
+            // 蜷缩/伏卧: 需要把身体压到贴地才有"卧"的观感, 但压太狠会让口鼻埋进地面, 比农民揣浅一档
+            CURL to -0.45f,
             STRETCH to -0.10f,
         ),
     )
@@ -163,9 +165,9 @@ object PosePresets {
                 hrLeg = -10f; hrShank = 10f
                 tailP = 25f; tailSide = 12f
             }
-            // 蜷缩入睡: 农民揣的伏卧底盘 + 头低下巴贴胸 + 尾巴绕体
+            // 蜷缩入睡: 后躯收拢下沉 + 脊柱向前弯成 C + 头埋进胸口 + 尾巴绕体
             CURL -> {
-                hipP = -12f; spineArch = 4f; chestP = 8f; neckP = 12f; headP = 18f
+                hipP = -18f; spineArch = 16f; chestP = 6f; neckP = 8f; headP = 16f
                 flSh = 42f; frSh = 42f; flLeg = -68f; frLeg = -68f; flPaw = 26f; frPaw = 26f
                 hlLeg = -52f; hrLeg = -52f
                 hlShank = 70f; hrShank = 70f
@@ -181,6 +183,19 @@ object PosePresets {
                 hlFoot = -10f; hrFoot = -10f
                 tailP = 10f; tailSide = 18f
             }
+            // 立身伸爪: 前肢抬起前探, 后肢蹬地, 上身立起抬头
+            REAR -> {
+                hipP = -20f; spineArch = -8f; chestP = -10f; neckP = -6f; headP = -12f
+                flSh = -55f; frSh = -55f; flLeg = -35f; frLeg = -35f; flPaw = -10f; frPaw = -10f
+                hlLeg = 10f; hrLeg = 10f
+                hlShank = -10f; hrShank = -10f
+                tailP = -20f; tailSide = 10f
+            }
+            // 回首张望: 头转向侧面, 脊柱轻微反向, 尾巴甩向另一侧
+            LOOK -> {
+                hipP = -4f; spineArch = -4f; chestP = -2f; neckP = 4f
+                tailP = 20f; tailSide = 30f
+            }
             // 伸懒腰: 前肢伸展, 胸口低伏压低, 后躯高翘, 头抬起, 尾巴翘卷
             STRETCH -> {
                 hipP = 10f; spineArch = -8f; chestP = -18f; neckP = -5f; headP = 18f
@@ -193,7 +208,7 @@ object PosePresets {
         }
 
         headP += (jointAngles["cat_head_pitch"] ?: 0f)
-        val headY = (jointAngles["cat_head_yaw"] ?: 0f)
+        var headY = (jointAngles["cat_head_yaw"] ?: 0f)
         spineArch += (jointAngles["cat_spine_arch"] ?: 0f)
         flLeg += (jointAngles["cat_fl_leg"] ?: 0f)
         frLeg += (jointAngles["cat_fr_leg"] ?: 0f)
@@ -206,6 +221,7 @@ object PosePresets {
         b.joint("Spine", "spine", spineArch, 0f, 0f)
         b.joint("Chest", "chest", chestP, 0f, 0f)
         b.joint("Neck", "neck", neckP, 0f, 0f)
+        if (posePreset.equals(LOOK, ignoreCase = true)) headY = 45f
         b.joint("Head", "head", headP, headY, 0f)
         b.joint("l_front_shoulder", "frontleg", flSh, 0f, 0f)
         b.joint("r_front_shoulder", "R_frontleg", frSh, 0f, 0f)

@@ -149,8 +149,16 @@ def pose_map(preset):
         hlLeg=12; hlShank=-8
         hrLeg=-10; hrShank=10
         tailP=25; tailSide=12
+    elif preset=='rear':
+        hipP=-20; spineArch=-8; chestP=-10; neckP=-6; headP=-12
+        flSh=-55; frSh=-55; flLeg=-35; frLeg=-35; flPaw=-10; frPaw=-10
+        hlLeg=10; hrLeg=10; hlShank=-10; hrShank=-10
+        tailP=-20; tailSide=10
+    elif preset=='look':
+        hipP=-4; spineArch=-4; chestP=-2; neckP=4
+        tailP=20; tailSide=30
     elif preset=='curl':
-        hipP=-12; spineArch=4; chestP=8; neckP=12; headP=18
+        hipP=-18; spineArch=16; chestP=6; neckP=8; headP=16
         flSh=42; frSh=42; flLeg=-68; frLeg=-68; flPaw=26; frPaw=26
         hlLeg=-52; hrLeg=-52; hlShank=70; hrShank=70; hlFoot=-22; hrFoot=-22
         tailP=-18; tailSide=50
@@ -326,10 +334,10 @@ def main():
     print('rest minY =', round(rest_min, 4))
 
     exported = []
-    for preset in ['stand', 'sit', 'loaf', 'stretch', 'walk', 'curl', 'pounce']:
+    for preset in ['sit', 'curl', 'rear', 'look', 'walk', 'pounce']:
         raw, _ = fk_and_skin(preset, 0.0)
         auto = rest_min - bbox_min(raw)
-        tuned = {'stand': 0.0, 'loaf': -0.60, 'curl': -0.60, 'stretch': -0.10}.get(preset, auto)
+        tuned = {'stand': 0.0, 'loaf': -0.60, 'curl': -0.45, 'stretch': -0.10}.get(preset, auto)
         for label, shift in (('app', tuned), ('auto', auto)):
             verts, _ = fk_and_skin(preset, shift)
             name = '{}_{}'.format(preset, label)

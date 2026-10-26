@@ -90,6 +90,8 @@ fun PoseAdjustmentPanel(
                 "walk" to R.string.layer_3d_cat_walk,
                 "curl" to R.string.layer_3d_cat_curl,
                 "pounce" to R.string.layer_3d_cat_pounce,
+                "rear" to R.string.layer_3d_cat_rear,
+                "look" to R.string.layer_3d_cat_look,
             )
         } else {
             listOf(

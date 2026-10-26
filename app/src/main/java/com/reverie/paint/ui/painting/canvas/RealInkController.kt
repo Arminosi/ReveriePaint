@@ -123,6 +123,15 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
     var composeDecor: FrontBufferDecor? = null
         private set
 
+    /** 当前已上屏真墨的屏幕外接矩形（不可变，单一 @Volatile 引用，UI 与渲染线程共享）。arm 时置空。 */
+    @Volatile
+    var publishedInkBounds: ClipRect? = null
+        private set
+
+    /** #81 预览清屏挡板：为 true 时禁止提交 #81 预览包清屏，防止抹除前缓冲真墨。抬笔或下一次落笔时复位。 */
+    @Volatile
+    var blockPreviewClear: Boolean = false
+
     fun setStrokeCompose(on: Boolean, decor: FrontBufferDecor?) {
         composeDecor = if (on) decor else null
         composeStroke = on
@@ -263,6 +272,8 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
         }
         FbGeomLog.strokeBegin(seq, hold, view.width, view.height, pose)
         guideSnapshot.clear()
+        publishedInkBounds = null
+        blockPreviewClear = false
         if (!hold) {
             held = false
             strokeHoles = null
@@ -287,8 +298,43 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
         if (held) uiClips = clips
     }
 
+    /** 笔画中途 UI 槽位变化且与已画墨相交时, 更新裁剪快照并在原层把相交差集重新烘焙 (UI 线程). */
+    fun updateClipsAndRebake(snapshot: UiClipSnapshot, deltaRects: List<ClipRect>) {
+        if (!held) return
+        uiClips = snapshot
+        val bounds = publishedInkBounds ?: return
+        val p = pose ?: return
+        var anyIntersect = false
+        val bmpScratch = IntArray(4)
+        for (d in deltaRects) {
+            val inter = d.intersect(bounds) ?: continue
+            if (inter.isEmpty) continue
+            val l = kotlin.math.floor(inter.left).toInt()
+            val t = kotlin.math.floor(inter.top).toInt()
+            val r = kotlin.math.ceil(inter.right).toInt()
+            val b = kotlin.math.ceil(inter.bottom).toInt()
+            if (FrontBufferCompose.screenToBmpRect(p, l, t, r, b, bmpScratch)) {
+                synchronized(pendingLock) {
+                    pendingCount = RealInkPresent.appendDiscrete(
+                        pendingRects,
+                        pendingCount,
+                        bmpScratch[0],
+                        bmpScratch[1],
+                        bmpScratch[2],
+                        bmpScratch[3],
+                    )
+                }
+                anyIntersect = true
+            }
+        }
+        if (anyIntersect) {
+            view.vm?.scheduleRender()
+        }
+    }
+
     /** 松开前缓冲 (抬笔、取消、让位给变换等)。任一线程可调。 */
     fun release() {
+        blockPreviewClear = true
         held = false
         uiClips = UiClipSnapshot.EMPTY
         cursorR = 0f
@@ -641,8 +687,44 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
             returnPending(snapCount, seq)
             return false
         }
-        if (!held || seq != strokeSeq) {
+        if (seq != strokeSeq) {
             slot.busy.set(false)
+            return false
+        }
+        if (!held) {
+            val canSubmit = overlay.canRenderPreview && overlay.bufferGeometryMatches(view)
+            if (canSubmit) {
+                val shown =
+                    overlay.renderInkScreenRegions(
+                        slotBitmap, screenRects, bmpRects, baked, p,
+                        cursorX, cursorY, cursorR, cursorStyle, strokeWantsOverlayExtras,
+                        clipsSnapshot, slot.busy, minL, minT, canvasBounds,
+                        symCursorX, symCursorY, symCursorCount,
+                        holes, holeHitBits,
+                        if (FrontBufferHolePolicy.frontDrawsGuide(FrontBufferFeatureFlags.snapHold)) {
+                            guideSnapshot.read(guideReadSeg)
+                        } else {
+                            DynamicGuidePainter.KIND_NONE
+                        },
+                        guideReadSeg,
+                    )
+                if (shown) {
+                    if (baked > 0) {
+                        val pad = cursorR.coerceAtLeast(0.75f)
+                        val packRect = ClipRect(
+                            minL.toFloat() - pad,
+                            minT.toFloat() - pad,
+                            maxR.toFloat() + pad,
+                            maxB.toFloat() + pad,
+                        )
+                        val oldBounds = publishedInkBounds
+                        publishedInkBounds = if (oldBounds == null) packRect else oldBounds.union(packRect)
+                    }
+                    return true
+                }
+            }
+            slot.busy.set(false)
+            returnPending(snapCount, seq)
             return false
         }
         val shown =
@@ -663,6 +745,17 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
             slot.busy.set(false)
             returnPending(snapCount, seq)
             return false
+        }
+        if (baked > 0) {
+            val pad = cursorR.coerceAtLeast(0.75f)
+            val packRect = ClipRect(
+                minL.toFloat() - pad,
+                minT.toFloat() - pad,
+                maxR.toFloat() + pad,
+                maxB.toFloat() + pad,
+            )
+            val oldBounds = publishedInkBounds
+            publishedInkBounds = if (oldBounds == null) packRect else oldBounds.union(packRect)
         }
         if (RealInkHoldPolicy.shouldBumpEpoch(shown)) {
             synchronized(epochLock) { epoch += 1 }
@@ -896,8 +989,39 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
             returnPending(snapCount, seq)
             return false
         }
-        if (!held || seq != strokeSeq) {
+        if (seq != strokeSeq) {
             slot.busy.set(false)
+            return false
+        }
+        if (!held) {
+            val canSubmit = overlay.canRenderPreview && overlay.bufferGeometryMatches(view)
+            if (canSubmit) {
+                val ok = overlay.renderComposeRegions(
+                    slotBitmap, screenRects, bmpRects, packXY, baked, n, p,
+                    next.x, next.y, if (next.cursorOn) next.r else 0f, next.style,
+                    next.symX, next.symY, if (next.cursorOn) next.symCount else 0,
+                    next.guideKind, next.seg,
+                    clipsSnapshot, slot.busy, canvasBounds, docInner, decor?.takeIf { it.pose == p },
+                )
+                if (ok) {
+                    baseState.copyFrom(shownState)
+                    shownState.copyFrom(next)
+                    if (baked > 0) {
+                        val pad = if (next.cursorOn) next.r.coerceAtLeast(0.75f) else 1f
+                        val packRect = ClipRect(
+                            minL.toFloat() - pad,
+                            minT.toFloat() - pad,
+                            maxR.toFloat() + pad,
+                            maxB.toFloat() + pad,
+                        )
+                        val oldBounds = publishedInkBounds
+                        publishedInkBounds = if (oldBounds == null) packRect else oldBounds.union(packRect)
+                    }
+                    return true
+                }
+            }
+            slot.busy.set(false)
+            returnPending(snapCount, seq)
             return false
         }
         val ok = overlay.renderComposeRegions(
@@ -914,6 +1038,17 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
         }
         baseState.copyFrom(shownState)
         shownState.copyFrom(next)
+        if (baked > 0) {
+            val pad = if (next.cursorOn) next.r.coerceAtLeast(0.75f) else 1f
+            val packRect = ClipRect(
+                minL.toFloat() - pad,
+                minT.toFloat() - pad,
+                maxR.toFloat() + pad,
+                maxB.toFloat() + pad,
+            )
+            val oldBounds = publishedInkBounds
+            publishedInkBounds = if (oldBounds == null) packRect else oldBounds.union(packRect)
+        }
         FbGeomLog.holePacket(seq, n, 0, 0L, 0L, FrontBufferHolePolicy.PACKET_PLAIN)
         if (t0 != 0L) {
             FbGeomLog.composePacket(seq, n - baked, bakePx, slotBitmap.width.toLong() * slotBitmap.height,
@@ -1088,11 +1223,10 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
 
     private fun ensureSlotBitmap(slot: InkSlot, reqW: Int, reqH: Int, maxW: Int, maxH: Int): Bitmap {
         val existing = slot.bitmap
+        // 增量只增不减 (grow-only): 笔画中 (held) 禁止缩小重分配, 只要尺寸足够直接复用 (plan 四.7)
         if (existing != null && !existing.isRecycled &&
             existing.width >= reqW && existing.height >= reqH &&
-            existing.width <= maxW && existing.height <= maxH &&
-            (existing.width <= SLOT_SHRINK_PX || reqW > SLOT_MIN_PX) &&
-            (existing.height <= SLOT_SHRINK_PX || reqH > SLOT_MIN_PX)
+            existing.width <= maxW && existing.height <= maxH
         ) {
             return existing
         }
@@ -1104,11 +1238,29 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
         return created
     }
 
-    private companion object {
+    fun onSurfaceChanged(w: Int, h: Int) {
+        if (!held) {
+            preallocateSlots(SLOT_MIN_PX, SLOT_MIN_PX)
+        }
+    }
+
+    fun preallocateSlots(targetW: Int, targetH: Int) {
+        val w = ((targetW + 255) and -256).coerceAtLeast(SLOT_MIN_PX)
+        val h = ((targetH + 255) and -256).coerceAtLeast(SLOT_MIN_PX)
+        for (slot in slots) {
+            val existing = slot.bitmap
+            if (existing == null || existing.isRecycled || existing.width < w || existing.height < h) {
+                try {
+                    slot.bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                } catch (_: OutOfMemoryError) {
+                    break
+                }
+            }
+        }
+    }
+
+    companion object {
         const val SLOT_COUNT = 4
         const val SLOT_MIN_PX = 512
-
-        // 大笔画过之后小笔画会把超过这个尺寸的槽位图换回小图, 不长期占着大块内存。
-        const val SLOT_SHRINK_PX = 768
     }
 }

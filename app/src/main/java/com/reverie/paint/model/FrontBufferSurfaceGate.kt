@@ -64,8 +64,8 @@ internal object FrontBufferSurfaceGate {
         return oldW != newW || oldH != newH
     }
 
-    /** 按住期间画布 pose 变化: 必须松开 (首次发布 pose 不算变化)。 */
+    /** 按住期间画布 pose 变化: 必须松开 (首次发布 pose 不算变化; 屏幕四角位移 >= 0.5px 或尺寸变化)。 */
     @JvmStatic
     fun poseChangeReleases(held: Boolean, oldPose: CanvasPose?, newPose: CanvasPose): Boolean =
-        held && oldPose != null && oldPose != newPose
+        held && oldPose != null && com.reverie.paint.ui.painting.canvas.poseNeedsRelease(oldPose, newPose)
 }

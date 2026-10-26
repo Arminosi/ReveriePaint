@@ -411,6 +411,21 @@ internal object FbGeomLog {
         }
     }
 
+    fun clipRebuild(seq: Long, version: Int, deltaCount: Int, hasInkBounds: Boolean, rebake: Boolean) {
+        if (!PerfTrace.enabled) return
+        Log.i(TAG, "ev=clip_rebuild seq=$seq ver=$version deltas=$deltaCount inkBounds=$hasInkBounds rebake=$rebake")
+    }
+
+    fun poseRelease(reason: String, seq: Long, uptimeMs: Long) {
+        if (!PerfTrace.enabled) return
+        Log.i(TAG, "ev=pose_release reason=$reason seq=$seq uptimeMs=$uptimeMs")
+    }
+
+    fun previewBlocked(seq: Long, blockPreviewClear: Boolean) {
+        if (!PerfTrace.enabled) return
+        Log.i(TAG, "ev=preview_blocked seq=$seq blockClear=$blockPreviewClear")
+    }
+
     private fun avg(sum: Long, n: Long): Long = if (n > 0) sum / n else 0L
     private fun us(ns: Long): String = String.format(java.util.Locale.US, "%.1f", ns / 1000f)
     private fun ms(ns: Long): String = String.format(java.util.Locale.US, "%.2f", ns / 1_000_000f)

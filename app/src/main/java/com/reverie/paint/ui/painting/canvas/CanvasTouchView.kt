@@ -28,6 +28,7 @@ import com.reverie.paint.model.*
 import com.reverie.paint.ui.theme.parseColor
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffColorFilter
+import com.reverie.paint.perf.FbGeomLog
 import com.reverie.paint.perf.PerfHud
 import com.reverie.paint.ui.painting.brush.BrushTipDecoder
 import kotlin.math.PI
@@ -485,6 +486,7 @@ class CanvasTouchView(context: Context) : View(context) {
                 v.quickShapeCapture = null
                 quickShapeCandidate = null
                 realInk.release()
+                realInk.blockPreviewClear = false
                 v.touchCancel()
                 resetMirrorBranches()
                 safeEndSymmetryUndoMacro()
@@ -1142,9 +1144,30 @@ class CanvasTouchView(context: Context) : View(context) {
             }
         }
         if (realInk.held) {
-            if (snapshot != realInk.uiClips) {
-                // 笔画中途裁剪集合变化: 前缓冲已有像素无法回擦, 交给主画布重新合成。
-                realInk.releaseAndCatchUp()
+            val oldClips = realInk.uiClips
+            if (snapshot != oldClips) {
+                val delta = clipDelta(oldClips, snapshot)
+                val inkBounds = realInk.publishedInkBounds
+                val headDoc = Offset(v.smoothedStrokeX, v.smoothedStrokeY)
+                val headScreen = docToScreen(headDoc)
+                val headRadius = effectiveBrushScreenRadius(v, v.smoothedStrokePressure.toFloat())
+                val headRect = ClipRect(
+                    headScreen.x - headRadius,
+                    headScreen.y - headRadius,
+                    headScreen.x + headRadius,
+                    headScreen.y + headRadius,
+                )
+                val action = clipChangeAction(delta, inkBounds, headRect)
+                FbGeomLog.clipRebuild(realInk.currentStrokeSeq, version, delta.size, inkBounds != null, action == ClipChangeAction.REBAKE)
+                when (action) {
+                    ClipChangeAction.KEEP_UPDATE -> {
+                        realInk.updateActiveUiClips(snapshot)
+                    }
+                    ClipChangeAction.REBAKE -> {
+                        // 相交重烤: 保持按住, 把差集区域与已画墨的相交部分在原层按新 clips 重新烘焙 (plan 四.2/四.3)
+                        realInk.updateClipsAndRebake(snapshot, delta)
+                    }
+                }
             } else {
                 realInk.updateActiveUiClips(snapshot)
             }
@@ -3689,6 +3712,7 @@ class CanvasTouchView(context: Context) : View(context) {
     }
 
     private fun armRealInkHold(v: PaintViewModel, hasSymmetry: Boolean, x: Float, y: Float, pressure: Float) {
+        realInk.blockPreviewClear = false
         // 透光台对位模式: 前缓冲置顶会盖住 ShiftTraceOverlay, 统一不按住真墨,
         // 走 #81 前沿预览 + 主画布实时刷新。透明/不透明画布行为一致。
         if (v.anim.shiftTraceActive) {
@@ -4088,9 +4112,13 @@ class CanvasTouchView(context: Context) : View(context) {
         )
         val old = realInk.pose
         if (pose != old) {
-            // 按住期间 pose 变了 (如 Compose 的 viewW/viewH/翻转在运笔中写进来): 前缓冲上已有的增量墨
-            // 是按旧 pose 烤的, 不能再混入新 pose 的包。松开并登记追赶, 窗口按新 pose 画整笔后清前缓冲。
-            if (FrontBufferSurfaceGate.poseChangeReleases(realInk.held, old, pose)) realInk.releaseAndCatchUp()
+            // 按住期间 pose 变了 (如 Compose 的 viewW/viewH/翻转在运笔中写进来): 四角屏幕位移 >= 0.5px 或尺寸变化才释放 (plan 四.4).
+            // 放开前先在 UI 线程写 blockPreviewClear=true 挡住 #81 预览清屏, 避免抹除前缓冲真墨.
+            if (poseNeedsRelease(old, pose, viewW, viewH) && realInk.held) {
+                realInk.blockPreviewClear = true
+                FbGeomLog.poseRelease("pose_changed", realInk.currentStrokeSeq, android.os.SystemClock.uptimeMillis())
+                realInk.releaseAndCatchUp()
+            }
             realInk.pose = pose
         }
     }
@@ -5432,7 +5460,9 @@ class CanvasTouchView(context: Context) : View(context) {
                         initialDistance = distance
                         initialAngle = angle
                         touchDownTimeMs = nowMs
-                        onTransform?.invoke(canvasZoom, canvasRotation, canvasPanX, canvasPanY)
+                        // NOTE: 纯两指落笔尚未产生任何变换位移, 不在此触发 onTransform,
+                        // 避免将两指轻点撤销误识别为捏合手势并唤醒 HUD (plan 四.6).
+                        // 实际变换位移在后续分支产生 delta 后触发 onTransform.
                     }
                     isContinuousUndoing = false
                     prevCentroid = centroid
@@ -6800,7 +6830,8 @@ class CanvasTouchView(context: Context) : View(context) {
 
                     // 真墨按住期间前缓冲上是引擎真墨 (渲染线程呈现), 不再叠 #81 的前沿段假线;
                     // 光标与预测笔尖在本分支末尾记下快照, 由前缓冲随墨一起画。
-                    if (!realInk.held && strokeFbReady &&
+                    // 门控: 按住期间或 blockPreviewClear 被置位时禁止提交 #81 预览 (plan 四.1/四.4).
+                    if (previewSubmitAllowed(realInk.held, realInk.blockPreviewClear) && strokeFbReady &&
                         frontBufferOverlay?.canRenderPreview == true &&
                         pointerIndex in 0 until event.pointerCount
                     ) {
@@ -7751,6 +7782,7 @@ class CanvasTouchView(context: Context) : View(context) {
                 assistLockedRay = null
                 clearPredictionState(triggerInvalidate = true)
                 currentStrokeDocPos = Offset.Zero
+                realInk.blockPreviewClear = false
             }
             Tool.LIQUIFY -> {
                 if (strokeStarted) {

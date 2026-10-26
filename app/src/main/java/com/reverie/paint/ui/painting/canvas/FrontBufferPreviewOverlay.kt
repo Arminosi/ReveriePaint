@@ -368,6 +368,9 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
             ctl.release()
             targetTouchView?.postInvalidate()
         }
+        if (valid && ctl != null && w > 0 && h > 0) {
+            ctl.onSurfaceChanged(w, h)
+        }
     }
 
     /**
@@ -430,10 +433,13 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
                             }
                             param.ink -> drawInkPacket(canvas, bufferWidth, bufferHeight, param)
                             else -> {
-                                // #81 预览: 单缓冲清屏, 只画当前最新的前沿段。
-                                canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
-                                invalidatePrevOverlay()
-                                drawPreviewPacket(canvas, param)
+                                // #81 预览: 若已有真墨在屏上 (hasInkContent==true), 跳过整屏 CLEAR 与预览包,
+                                // 避免在主画布追赶完成前抹掉已上屏的真墨 (H3/plan 四.5)。
+                                if (!hasInkContent) {
+                                    canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+                                    invalidatePrevOverlay()
+                                    drawPreviewPacket(canvas, param)
+                                }
                             }
                         }
                     } finally {

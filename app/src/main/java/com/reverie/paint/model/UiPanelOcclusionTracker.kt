@@ -343,7 +343,9 @@ class UiPanelOcclusionTracker {
         if (n == 0) return UiClipSnapshot.EMPTY
 
         val out = FloatArray(n * 4)
+        val slots = IntArray(n)
         var w = 0
+        var slotIdx = 0
         for (ordinal in SLOTS.indices) {
             if (currentTokens[ordinal] == 0) continue
             val i = ordinal * 4
@@ -351,9 +353,10 @@ class UiPanelOcclusionTracker {
             out[w + 1] = slotClipBounds[i + 1]
             out[w + 2] = slotClipBounds[i + 2]
             out[w + 3] = slotClipBounds[i + 3]
+            slots[slotIdx++] = ordinal
             w += 4
         }
-        return UiClipSnapshot.fromOwned(out, n)
+        return UiClipSnapshot.fromOwned(out, n, slots)
     }
 
     /** 点是否命中任一激活槽位的本体 bounds。 */

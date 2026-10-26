@@ -707,18 +707,32 @@ internal fun PaintViewModel.commitAllActive3DLayersSync() {
 }
 
 /**
- * 提取当前 3D 图层的轮廓线稿，在新图层中创建线稿层
+ * 提取当前 3D 图层的轮廓线稿, 在新图层中创建线稿层
+ *
+ * 只抽轮廓线 (silhouette) 与折角线 (crease) 并做隐藏线剔除, 画在**透明**底图上;
+ * 旧实现走 GL 线框模式: 全三角剖分边 (~1 万条) + 一层不透明白底, 结果是"网格白模"而不是线稿。
  */
 internal fun PaintViewModel.extract3DOutlines(layerId: Long) {
     val state = active3DLayers[layerId] ?: return
-    val mesh = getMeshForState(state)
-    val wireState = state.copy(renderMode = RenderMode3D.WIREFRAME, wireframeColor = 0xFF1A1A1AL)
-
+    val deformed = getDeformedForState(state)
     val w = docWidth.coerceAtLeast(1)
     val h = docHeight.coerceAtLeast(1)
-    val rendered = gl3dRenderer.renderToBitmap(mesh, wireState, w, h) ?: return
-    val stampBmp = ImageImportHelper.swapRedAndBlueForStamp(rendered)
 
+    val segments = Outline3D.extractScreenSegments(deformed.mesh, state, w.toFloat(), h.toFloat())
+    if (segments.isEmpty()) return
+
+    val lineBitmap = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(lineBitmap)
+    val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        style = android.graphics.Paint.Style.STROKE
+        strokeWidth = (w * 0.0016f).coerceIn(1.6f, 4f)
+        color = 0xFF1A1A1A.toInt()
+        strokeCap = android.graphics.Paint.Cap.ROUND
+        strokeJoin = android.graphics.Paint.Join.ROUND
+    }
+    canvas.drawLines(segments, 0, segments.size, paint)
+
+    val stampBmp = ImageImportHelper.swapRedAndBlueForStamp(lineBitmap)
     val outlineLayerName = getString(R.string.layer_3d_extract_outline)
     runCore(render = true, after = {
         syncLayersFromNative()
@@ -727,8 +741,8 @@ internal fun PaintViewModel.extract3DOutlines(layerId: Long) {
         ReverieCoreBridge.addLayer(outlineLayerName)
         ReverieCoreBridge.stampBitmap(0, 0, stampBmp)
         stampBmp.recycle()
-        if (rendered !== stampBmp && !rendered.isRecycled) {
-            rendered.recycle()
+        if (lineBitmap !== stampBmp && !lineBitmap.isRecycled) {
+            lineBitmap.recycle()
         }
     }
 }

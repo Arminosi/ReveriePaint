@@ -540,6 +540,8 @@ internal fun PaintViewModel.loadProject(p: com.reverie.paint.model.Project) {
                 // 后台预热模型解析, 避免打开工程后第一帧在主线程解析 GLB 卡顿
                 for (st in map.values) {
                     prewarm3DModel(st)
+                    // 打开工程后让 3D 图层尽快回到正常的图层顺序 (可被上层遮挡)
+                    schedule3DBake(st.layerId)
                 }
             } else {
                 active3DLayers = emptyMap()

@@ -69,4 +69,21 @@ class FrontBufferProbeTest {
             }
         }
     }
+
+    @Test
+    fun `resolveHoldAllowed decision table`() {
+        // 1. 探针已跑完: 无论有无缓存，均以实际探针结果为准
+        assertTrue(FrontBufferProbe.resolveHoldAllowed(cached = null, probeDone = true, probeResult = true))
+        assertFalse(FrontBufferProbe.resolveHoldAllowed(cached = null, probeDone = true, probeResult = false))
+        assertTrue(FrontBufferProbe.resolveHoldAllowed(cached = false, probeDone = true, probeResult = true))
+        assertFalse(FrontBufferProbe.resolveHoldAllowed(cached = true, probeDone = true, probeResult = false))
+
+        // 2. 探针未跑完但有缓存: 立即采纳缓存值，无需等待后台探针
+        assertTrue(FrontBufferProbe.resolveHoldAllowed(cached = true, probeDone = false, probeResult = false))
+        assertFalse(FrontBufferProbe.resolveHoldAllowed(cached = false, probeDone = false, probeResult = true))
+
+        // 3. 探针未跑完且无缓存: 保守拦截
+        assertFalse(FrontBufferProbe.resolveHoldAllowed(cached = null, probeDone = false, probeResult = false))
+        assertFalse(FrontBufferProbe.resolveHoldAllowed(cached = null, probeDone = false, probeResult = true))
+    }
 }

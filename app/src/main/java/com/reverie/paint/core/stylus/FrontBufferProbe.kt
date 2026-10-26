@@ -39,8 +39,32 @@ object FrontBufferProbe {
     // ---- 前缓冲内容保留能力 (真墨按住的前提) ----
 
     private const val SOURCE_PROBE = "probe"
+    private const val SOURCE_CACHE = "cache"
     private const val SOURCE_PROBE_FAILED = "probe_failed"
     private const val SOURCE_NOT_PROBED = "not_probed"
+
+    /**
+     * 纯函数缓存决策:
+     * - 若探针已跑完, 以探针实际结果为准;
+     * - 若探针未跑完但有缓存, 立即返回缓存值;
+     * - 既无缓存又未探完, 返回 false。
+     */
+    fun resolveHoldAllowed(cached: Boolean?, probeDone: Boolean, probeResult: Boolean): Boolean = when {
+        probeDone -> probeResult
+        cached != null -> cached
+        else -> false
+    }
+
+    @Volatile
+    private var cachedResult: Boolean? = null
+
+    @Volatile
+    private var probeFinished = false
+
+    private fun getCacheKey(): String {
+        val fp = try { Build.FINGERPRINT ?: "unknown" } catch (_: Throwable) { "unknown" }
+        return "fb_probe_v1_${fp.hashCode().toString(16)}"
+    }
 
     /**
      * 设备是否保留前缓冲上已绘制的内容。`CanvasFrontBufferedRenderer` 按设备能力二选一:
@@ -63,27 +87,46 @@ object FrontBufferProbe {
     /**
      * 后台预热能力探测 (验证器要建 HardwareRenderer 并回读像素, 十毫秒级, 不能放主线程)。
      * 应用启动时调一次; API < 29 直接跳过 (前缓冲本来就不可用)。
+     * 先同步读取基于设备指纹的持久化缓存, 后台探针跑完后若不同则覆写更新。
      */
-    fun warmUpPreservedContentCheck() {
+    fun warmUpPreservedContentCheck(context: android.content.Context? = null) {
         if (Build.VERSION.SDK_INT < MIN_SUPPORTED_API) return
-        if (preservedContent != null) return
-        Thread({ probePreservedContent() }, "fb-preserve-probe").apply { isDaemon = true }.start()
+        if (probeFinished) return
+
+        val ctx = context ?: com.reverie.paint.core.FontManager.appContext
+        val prefs = try {
+            ctx?.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+        } catch (_: Throwable) { null }
+
+        if (prefs != null) {
+            val key = getCacheKey()
+            if (prefs.contains(key)) {
+                val cached = prefs.getBoolean(key, false)
+                cachedResult = cached
+                preservedContent = cached
+                probeSource = SOURCE_CACHE
+            }
+        }
+
+        Thread({ probePreservedContent(prefs) }, "fb-preserve-probe").apply { isDaemon = true }.start()
     }
 
     /**
      * 运笔落笔时读: 这台设备能不能把真墨留在前缓冲上。不阻塞。
-     * 尚未探完 (启动后极短的窗口) 时返回 false, 这一笔先走主画布。
+     * 结合缓存与探针完成状态进行决策。
      */
     fun realInkHoldAllowed(): Boolean {
-        val v = preservedContent ?: return false
-        return v && probeSource == SOURCE_PROBE
+        return resolveHoldAllowed(
+            cached = cachedResult,
+            probeDone = probeFinished,
+            probeResult = (preservedContent == true && probeSource == SOURCE_PROBE),
+        )
     }
 
     /** 诊断用: `<结论>/<来源>`。 */
     fun preservedContentState(): String = "${preservedContent}/$probeSource"
 
-    private fun probePreservedContent() {
-        if (preservedContent != null) return
+    private fun probePreservedContent(prefs: android.content.SharedPreferences? = null) {
         val result =
             runCatching { reflectPreservedContentSupport() }
                 .getOrElse { e ->
@@ -93,7 +136,15 @@ object FrontBufferProbe {
                 }
         if (probeSource != SOURCE_PROBE_FAILED) probeSource = SOURCE_PROBE
         preservedContent = result
+        probeFinished = true
         Log.i(TAG, "preserve_probe supported=$result source=$probeSource sdk=${Build.VERSION.SDK_INT}")
+
+        if (prefs != null && probeSource == SOURCE_PROBE) {
+            val key = getCacheKey()
+            if (!prefs.contains(key) || prefs.getBoolean(key, !result) != result) {
+                prefs.edit().putBoolean(key, result).apply()
+            }
+        }
     }
 
     private fun reflectPreservedContentSupport(): Boolean {

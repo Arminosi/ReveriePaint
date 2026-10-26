@@ -5029,6 +5029,13 @@ class PaintViewModel : ViewModel() {
     @Volatile
     internal var realInkSink: RealInkSink? = null
 
+    /**
+     * 瓦片/整图渲染修订号 (单调递增, 永不归零)。
+     * 每次主画布发布新瓦片或整图帧前自增, UI 线程绘制前读取, 用于抬笔追赶门控。
+     */
+    @Volatile
+    var tileRevision: Long = 0L
+
     var stylusDriver: com.reverie.paint.core.stylus.StylusDriver? = null
 
     /** 应用是否处于前台 (由 MainActivity 的 onResume/onPause 维护)。 */
@@ -6138,7 +6145,9 @@ class PaintViewModel : ViewModel() {
         // 否则 (光标/预测笔迹/旋转/大脏区等) 自动回退为整屏重绘。
         // Compose 观察者只在回放页或参考窗口打开时通知。整图帧与瓦片帧共用这一出口。
         // 整图路径不呈现真墨, 但要回报"这一帧没留在前缓冲上", 抬笔后的追赶清除才不会悬着。
+        tileRevision++
         realInkSink?.finishFrame(false)
+        realInkSink?.onTileFrameEnd(tileRevision)
         notifyCanvasFramePublished()
     }
 

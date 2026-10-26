@@ -13,12 +13,6 @@ class RealInkHoldPolicyTest {
     }
 
     @Test
-    fun `epoch bumps only after the overlay accepts the frame`() {
-        assertTrue(RealInkHoldPolicy.shouldBumpEpoch(shown = true))
-        assertFalse(RealInkHoldPolicy.shouldBumpEpoch(shown = false))
-    }
-
-    @Test
     fun `drawing guide panel chrome alone does not block real-ink hold`() {
         // 辅助面板是悬浮设置窗, 不是全屏模态: 开着时仍应能按住前缓冲 (靠 UiPanelSlot 挖孔露面板)。
         assertFalse(

@@ -16,6 +16,7 @@ import android.os.Build
 import com.reverie.paint.core.PaintViewModel
 import com.reverie.paint.core.PublishedTiles
 import com.reverie.paint.core.RealInkSink
+import com.reverie.paint.core.ReverieCoreBridge
 import com.reverie.paint.model.CanvasPose
 import com.reverie.paint.model.FrontBufferCompose
 import com.reverie.paint.model.FrontBufferHolePolicy
@@ -213,11 +214,12 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
     var uiClips: UiClipSnapshot = UiClipSnapshot.EMPTY
         private set
 
-    // ---- 追赶清除: 抬笔后主画布画完同一帧才清前缓冲 ----
-    private val epochLock = Any()
-    private var epoch = 0
-    private var clearEpoch = -1
-    private var needsCatchUp = false
+    // ---- 抬笔追赶: 单调递增修订号门控 ----
+    @Volatile var catchUpArmed = false
+    @Volatile var catchUpTargetRev = Long.MAX_VALUE
+
+    val catchUpPending: Boolean get() = catchUpArmed
+    override val holding: Boolean get() = held
 
     // ---- 待贴离散脏区 (位图坐标 l, t, r, b) ----
     // 渲染线程追加/消费, UI 线程落笔时清空, 故加锁。贴不上就留到下一帧, 脏区不丢。
@@ -270,6 +272,32 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
     /** 最近一次 [arm] 分配的笔画序号 (UI 线程读, 日志对齐用)。 */
     val currentStrokeSeq: Long get() = strokeSeq
 
+    fun armCatchUp() {
+        if (view.frontBufferOverlay?.hasInk == true) {
+            catchUpArmed = true
+            catchUpTargetRev = Long.MAX_VALUE
+            view.vm?.scheduleRender()
+        }
+    }
+
+    fun cancelCatchUp() {
+        catchUpArmed = false
+        catchUpTargetRev = Long.MAX_VALUE
+    }
+
+    override fun onTileFrameEnd(rev: Long) {
+        if (catchUpArmed && !held && !ReverieCoreBridge.renderPendingDirty()) {
+            catchUpTargetRev = rev
+            view.vm?.invalidateCanvasFromRender()
+        }
+    }
+
+    override fun onDocumentDiscarded() {
+        release()
+        cancelCatchUp()
+        view.frontBufferOverlay?.clearInk()
+    }
+
     // ================= UI 线程 =================
 
     /**
@@ -301,9 +329,7 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
             cursorR = 0f
             tipWidth = 0f
             symCursorCount = 0
-            if (overlay?.hasInk == true) {
-                overlay.clearInk()
-            }
+            armCatchUp()
             return false
         }
         uiClips = clips
@@ -311,7 +337,9 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
         tipWidth = 0f
         symCursorCount = 0
         overlay!!.onInkFrameDone = frameDoneCallback
-        overlay.beginStroke()
+        val preserve = catchUpArmed
+        overlay.beginStroke(preserveInk = preserve)
+        cancelCatchUp()
         held = true
         return true
     }
@@ -324,19 +352,19 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
     /** 笔画中途 UI 槽位变化且与已画墨相交时, 更新裁剪快照并在原层把相交差集重新烘焙 (UI 线程). */
     fun updateClipsAndRebake(snapshot: UiClipSnapshot, deltaRects: List<ClipRect>) {
         if (!held) return
-        uiClips = snapshot
         val bounds = publishedInkBounds ?: return
         val p = pose ?: return
         var anyIntersect = false
-        for (d in deltaRects) {
-            val inter = d.intersect(bounds) ?: continue
-            if (inter.isEmpty) continue
-            val l = kotlin.math.floor(inter.left).toInt()
-            val t = kotlin.math.floor(inter.top).toInt()
-            val r = kotlin.math.ceil(inter.right).toInt()
-            val b = kotlin.math.ceil(inter.bottom).toInt()
-            if (FrontBufferCompose.screenToBmpRect(p, l, t, r, b, rebakeBmpScratch)) {
-                synchronized(pendingLock) {
+        synchronized(pendingLock) {
+            uiClips = snapshot
+            for (d in deltaRects) {
+                val inter = d.intersect(bounds) ?: continue
+                if (inter.isEmpty) continue
+                val l = kotlin.math.floor(inter.left).toInt()
+                val t = kotlin.math.floor(inter.top).toInt()
+                val r = kotlin.math.ceil(inter.right).toInt()
+                val b = kotlin.math.ceil(inter.bottom).toInt()
+                if (FrontBufferCompose.screenToBmpRect(p, l, t, r, b, rebakeBmpScratch)) {
                     pendingCount = RealInkPresent.appendDiscrete(
                         pendingRects,
                         pendingCount,
@@ -345,12 +373,25 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
                         rebakeBmpScratch[2],
                         rebakeBmpScratch[3],
                     )
+                    anyIntersect = true
                 }
-                anyIntersect = true
+            }
+            if (anyIntersect) {
+                rebakePending = true
             }
         }
         if (anyIntersect) {
-            rebakePending = true
+            for (d in deltaRects) {
+                val inter = d.intersect(bounds) ?: continue
+                if (!inter.isEmpty) {
+                    view.invalidate(
+                        kotlin.math.floor(inter.left).toInt(),
+                        kotlin.math.floor(inter.top).toInt(),
+                        kotlin.math.ceil(inter.right).toInt(),
+                        kotlin.math.ceil(inter.bottom).toInt(),
+                    )
+                }
+            }
             view.vm?.scheduleRender()
         }
     }
@@ -385,27 +426,18 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
     fun releaseAndCatchUp() {
         release()
         if (view.frontBufferOverlay?.hasInk == true) {
-            finishFrame(false)
-            view.postInvalidate()
+            armCatchUp()
         }
     }
 
     /**
      * 视图画完一帧之后调用 (UI 线程, drawCanvas 末尾): 这一帧已经包含追赶的像素, 等它真正
-     * 提交之后再清前缓冲。纪元对不上说明渲染线程又贴了一帧, 本次作废。
+     * 提交之后再清前缓冲。drawnRev 达到或超过目标版本说明窗口已追平。
      */
-    fun clearIfViewCaughtUp() {
-        if (held) return
-        val e = synchronized(epochLock) {
-            if (!needsCatchUp || clearEpoch != epoch) {
-                -1
-            } else {
-                needsCatchUp = false
-                clearEpoch = -1
-                epoch
-            }
-        }
-        if (e < 0) return
+    fun clearIfViewCaughtUp(drawnRev: Long) {
+        if (!RealInkHoldPolicy.shouldClearAfterDraw(held, catchUpArmed, drawnRev, catchUpTargetRev)) return
+        val seq = strokeSeq
+        cancelCatchUp()
         // 前缓冲是单缓冲: 在 onDraw 录制期间立刻清, 覆盖层 <1ms 就透明了, 主画布这一帧却要等
         // 下一拍 VSYNC 才上屏, 中间漏出旧画布 (抬笔闪一下)。所以推迟到这一帧提交之后。
         val extra = FrontBufferFeatureFlags.clearDelayFrames
@@ -413,8 +445,7 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
             var commits = 0
 
             override fun run() {
-                val current = synchronized(epochLock) { epoch }
-                if (held || current != e) return
+                if (held || strokeSeq != seq) return
                 commits++
                 // H-4: 窗口帧提交之后再多等 [extra] 个 VSYNC (默认 0 = 原行为)。postOnAnimation 不依赖
                 // 视图再画一帧, 空闲时也会按时触发。
@@ -505,13 +536,9 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
     }
 
     override fun finishFrame(kept: Boolean) {
-        synchronized(epochLock) {
-            if (kept) {
-                needsCatchUp = false
-            } else if (view.frontBufferOverlay?.hasInk == true) {
-                needsCatchUp = true
-                clearEpoch = epoch
-            }
+        if (!kept && view.frontBufferOverlay?.hasInk == true) {
+            catchUpArmed = true
+            catchUpTargetRev = Long.MAX_VALUE
         }
     }
 
@@ -525,13 +552,9 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
         }
         FbGeomLog.holeStrokeEnd(this.strokeSeq)
         release()
-        shrinkSlotsWhenIdle()
-        // 收尾之后未必还有新像素的帧 (没有新脏区就不会走到 finishFrame), 而按住期间主画布一直
-        // 没失效: 这里主动登记一次追赶并失效画布, 视图画完这一帧再清前缓冲。
-        if (view.frontBufferOverlay?.hasInk == true) {
-            finishFrame(false)
-            view.postInvalidate()
-        }
+        // B3: 删 shrinkSlotsWhenIdle()
+        // 收尾之后主动登记一次追赶
+        armCatchUp()
     }
 
     /**
@@ -546,7 +569,6 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
         val overlay = view.frontBufferOverlay ?: return false
         if (!overlay.isIdleForInk()) return false
         val p = pose ?: return false
-        val clipsSnapshot = uiClips
         val grid = tiles.grid
         if (grid.width != p.bmpW || grid.height != p.bmpH) return false
         val viewW = view.width
@@ -560,7 +582,9 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
         val reclaimed = overlay.reclaimQueuedInkRegions(reclaimedRects)
         var seq = 0L
         var isRebake = false
+        var clipsSnapshot = UiClipSnapshot.EMPTY
         val snapCount = synchronized(pendingLock) {
+            clipsSnapshot = uiClips
             seq = strokeSeq
             isRebake = rebakePending
             rebakePending = false
@@ -756,7 +780,7 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
             returnPending(snapCount, seq)
             return false
         }
-        if (baked > 0) {
+        if (baked > 0 || isRebake) {
             val pad = kotlin.math.ceil(cursorR.coerceAtLeast(0.75f)).toInt()
             val packL = minL - pad
             val packT = minT - pad
@@ -767,9 +791,6 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
             if (packR > inkBoundR) inkBoundR = packR
             if (packB > inkBoundB) inkBoundB = packB
             publishedInkBoundsPacked = packInkBounds(inkBoundL, inkBoundT, inkBoundR, inkBoundB)
-        }
-        if (RealInkHoldPolicy.shouldBumpEpoch(shown)) {
-            synchronized(epochLock) { epoch += 1 }
         }
         // 孔径外的新墨已由前缓冲 4~8ms 直出；若本帧脏区侵入了面板/阴影孔径，
         // 孔径内前缓冲已被 clipOut 为全透明，必须唤醒主窗口 HWUI 在该交集区域
@@ -784,7 +805,7 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
         inv[2] = Int.MIN_VALUE
         inv[3] = Int.MIN_VALUE
         var needInvalidate = false
-        if (!clipsSnapshot.isEmpty) {
+        if (!clipsSnapshot.isEmpty && (baked > 0 || isRebake)) {
             clipOverlapBounds[0] = Int.MAX_VALUE
             clipOverlapBounds[1] = Int.MAX_VALUE
             clipOverlapBounds[2] = Int.MIN_VALUE
@@ -1029,7 +1050,7 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
         }
         baseState.copyFrom(shownState)
         shownState.copyFrom(next)
-        if (baked > 0) {
+        if (baked > 0 || rebake) {
             val pad = kotlin.math.ceil(if (next.cursorOn) next.r.coerceAtLeast(0.75f) else 1f).toInt()
             val packL = minL - pad
             val packT = minT - pad
@@ -1046,11 +1067,8 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
             FbGeomLog.composePacket(seq, n - baked, bakePx, slotBitmap.width.toLong() * slotBitmap.height,
                 System.nanoTime() - t0)
         }
-        if (RealInkHoldPolicy.shouldBumpEpoch(true)) {
-            synchronized(epochLock) { epoch += 1 }
-        }
         // 与 H-min 相同: 新墨侵入 UI 避让区 (前缓冲在那里 clipOut) 时让窗口在交集处重画。没侵入不失效。
-        if (!clipsSnapshot.isEmpty && baked > 0) {
+        if (!clipsSnapshot.isEmpty && (baked > 0 || rebake)) {
             clipOverlapBounds[0] = Int.MAX_VALUE
             clipOverlapBounds[1] = Int.MAX_VALUE
             clipOverlapBounds[2] = Int.MIN_VALUE

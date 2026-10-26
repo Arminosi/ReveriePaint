@@ -236,6 +236,7 @@ internal fun PaintViewModel.doRenderTiles(w: Int, h: Int) {
     }
 
     publishTileSnapshotIfNeeded(grid, tiles)
+    tileRevision++
     // 前缓冲真墨: 运笔按住时把本帧离散脏区从瓦片烤好贴上前缓冲, 接住了就不失效主画布。
     val sink = realInkSink
     val published = st.published
@@ -252,6 +253,7 @@ internal fun PaintViewModel.doRenderTiles(w: Int, h: Int) {
                 anyFull,
             )
     sink?.finishFrame(kept)
+    sink?.onTileFrameEnd(tileRevision)
     notifyCanvasFramePublished(keptOnFrontBuffer = kept)
     // 被撕裂的那张瓦片在前缓冲上是完整的, 但主画布的纹理可能是半张: 补一次失效让 HWUI 重传。
     if (kept && tornInPlace) invalidateCanvasFromRender()
@@ -284,6 +286,7 @@ internal fun PaintViewModel.doRenderTiles(w: Int, h: Int) {
 
 /** 瓦片路径的"这一帧没有新像素"收尾 (与整图路径保持同样的重试/液化语义)。 */
 private fun PaintViewModel.onTileRenderNoWork() {
+    realInkSink?.onTileFrameEnd(tileRevision)
     if (ReverieCoreBridge.renderPendingDirty()) {
         renderFollowUpPending = true
         renderHandler?.postDelayed({ doRender() }, 4L)
@@ -354,6 +357,7 @@ internal fun PaintViewModel.clearDisplayTileGrid() {
  * 渲染线程, 与渲染帧串行。
  */
 internal fun PaintViewModel.discardTileGridForDocumentSwitch() {
+    realInkSink?.onDocumentDiscarded()
     val st = displayTiles
     val gen = st.requestDiscard()
     val rh = renderHandler

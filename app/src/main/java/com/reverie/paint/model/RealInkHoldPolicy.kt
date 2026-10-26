@@ -17,7 +17,12 @@ package com.reverie.paint.model
 internal object RealInkHoldPolicy {
     fun shouldReleaseOnReject(held: Boolean, wantsHold: Boolean): Boolean = held && !wantsHold
 
-    fun shouldBumpEpoch(shown: Boolean): Boolean = shown
+    /**
+     * 抬笔追赶判定: 当且仅当笔已抬起、追赶已激活、目标版本号已落定且窗口已画到或超过目标版本时,
+     * 才允许清空前缓冲。
+     */
+    fun shouldClearAfterDraw(held: Boolean, armed: Boolean, drawnRev: Long, targetRev: Long): Boolean =
+        !held && armed && targetRev != Long.MAX_VALUE && drawnRev >= targetRev
 
     /** 笔刷面板: 未钉住 = 全屏遮罩 (BrushPanel.kt 未钉住分支 `noRippleClickable(onClose)`); 钉住 = PINNED_BRUSH_PANEL 孔径。 */
     fun brushPanelBlocksHold(open: Boolean, pinned: Boolean): Boolean = open && !pinned

@@ -1621,7 +1621,7 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
     }
 
     /** 落笔 (UI 线程): 新的一笔, 下一包前作废上一笔残留的光标账本。 */
-    fun beginStroke() {
+    fun beginStroke(preserveInk: Boolean = false) {
         strokeStartPending = true
     }
 
@@ -1649,6 +1649,10 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
         if (realInk?.held == true) return
         if (!isRendererInitialized) return
         if (inkOnly && !hasInkContent) return
+        if (realInk?.catchUpPending == true) {
+            // 追赶尚未完成, 保护真墨不被提前清空 (只清预览类内容)
+            if (inkOnly || hasInkContent) return
+        }
         strokeResetPending = true
         if (!hasContent) return
         val ink = hasInkContent
@@ -1666,13 +1670,13 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
                 Log.w(TAG, "clearPreview error: ${t.message}")
             }
         }
-        realInk?.shrinkSlotsWhenIdle()
     }
 
     /**
      * 释放前缓冲渲染器资源。
      */
     fun release() {
+        realInk?.cancelCatchUp()
         holder.removeCallback(surfaceGeometryCallback)
         surfaceValid = false
         surfaceW = 0

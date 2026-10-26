@@ -251,7 +251,7 @@ class CanvasTouchView(context: Context) : View(context) {
     var frontBufferOverlay: FrontBufferPreviewOverlay? = null
         set(value) {
             if (field !== value) {
-                realInk.release()
+                abortAndClearRealInk()
                 vm?.let { clearAllEvasionState(it) }
             }
             field = value
@@ -466,7 +466,7 @@ class CanvasTouchView(context: Context) : View(context) {
         v.quickShapeCapture = null
         quickShapeCandidate = null
         v.touchCancel()
-        realInk.release()
+        abortAndClearRealInk()
         clearAllEvasionState(v)
         strokeStarted = false
         strokeAbortedUntilUp = true
@@ -485,8 +485,7 @@ class CanvasTouchView(context: Context) : View(context) {
                 cachedDriver?.feedbackManager?.stopStrokeSound()
                 v.quickShapeCapture = null
                 quickShapeCandidate = null
-                realInk.release()
-                realInk.blockPreviewClear = false
+                abortAndClearRealInk()
                 v.touchCancel()
                 resetMirrorBranches()
                 safeEndSymmetryUndoMacro()
@@ -976,7 +975,7 @@ class CanvasTouchView(context: Context) : View(context) {
             // 12 条强制复位路径之一：长按吸色打断笔画。
             clearAllEvasionState(v)
             if (strokeStarted) {
-                realInk.release()
+                abortAndClearRealInk()
                 v.touchCancel()
                 strokeStarted = false
                 safeEndSymmetryUndoMacro()
@@ -1127,7 +1126,7 @@ class CanvasTouchView(context: Context) : View(context) {
                 uiClipSnapshot = UiClipSnapshot.EMPTY
                 lastUiClipVersion = -1
             }
-            if (realInk.held) realInk.release()
+            if (realInk.held) realInk.releaseAndCatchUp()
             return
         }
         val version = v.panelOcclusion.version
@@ -1304,6 +1303,13 @@ class CanvasTouchView(context: Context) : View(context) {
                 postDelayed(this, nextDelay)
             }
         }
+    }
+
+    private fun abortAndClearRealInk() {
+        realInk.release()
+        realInk.cancelCatchUp()
+        realInk.blockPreviewClear = false
+        frontBufferOverlay?.clearInk()
     }
 
     private fun clearPredictionState(triggerInvalidate: Boolean = false) {
@@ -2594,10 +2600,10 @@ class CanvasTouchView(context: Context) : View(context) {
         dismissPickerOverlay()
         longPressToken++
         if (activeTouchView == this) activeTouchView = null
-        realInk.release()
+        abortAndClearRealInk()
         vm?.let { if (it.realInkSink === realInk) it.realInkSink = null }
         if (strokeStarted) {
-            realInk.release()
+            abortAndClearRealInk()
             vm?.touchCancel()
             strokeStarted = false
         }
@@ -2850,6 +2856,8 @@ class CanvasTouchView(context: Context) : View(context) {
         // =========================================================================
         // 1:1 路径下瓦片网格是画布的唯一来源; 整图 displayBitmap 只在整图路径 (缩放回退/
         // 动画播放/超大画布) 或网格尚未建立时才画 —— 两者绝不同帧一起画。
+        // 先读修订号再读瓦片引用: drawnRev 只会偏小不会偏大, 避免误把尚未绘制的更新版本判定为已追平。
+        val drawnRev = v.tileRevision
         val tiles = v.displayTiles.drawable()
         val bmp = if (tiles != null) null else (v.displayBitmap ?: docBitmap)?.takeIf { !it.isRecycled }
         val sceneW = tiles?.grid?.width ?: (bmp?.width ?: 0)
@@ -2936,7 +2944,7 @@ class CanvasTouchView(context: Context) : View(context) {
 
             canvas.restore()
             // 画布已经画出这一帧的瓦片: 抬笔后的真墨追赶到此为止, 这一帧提交后清前缓冲。
-            realInk.clearIfViewCaughtUp()
+            realInk.clearIfViewCaughtUp(drawnRev)
             // H-1: 装饰几何变了就 (防抖) 重建孔洞掩码 —— 只做引用/数值比较, 构建在后台线程。
             // 按住运笔时窗口不重画, 这里也不会跑。
             if (!realInk.held && !localIsTouching && FrontBufferFeatureFlags.holeMode != FrontBufferHolePolicy.MODE_OFF) {
@@ -3718,7 +3726,7 @@ class CanvasTouchView(context: Context) : View(context) {
         // 透光台对位模式: 前缓冲置顶会盖住 ShiftTraceOverlay, 统一不按住真墨,
         // 走 #81 前沿预览 + 主画布实时刷新。透明/不透明画布行为一致。
         if (v.anim.shiftTraceActive) {
-            realInk.release()
+            abortAndClearRealInk()
             clearAllEvasionState(v)
             frontBufferOverlay?.clearPreview()
         }
@@ -4881,7 +4889,7 @@ class CanvasTouchView(context: Context) : View(context) {
                 if (strokeStarted) {
                     cachedDriver?.feedbackManager?.setWritingHapticsEnabled(false)
                     cachedDriver?.feedbackManager?.stopStrokeSound()
-                    realInk.release()
+                    abortAndClearRealInk()
                     v.touchCancel()
                     strokeStarted = false
                     safeEndSymmetryUndoMacro()
@@ -5316,7 +5324,7 @@ class CanvasTouchView(context: Context) : View(context) {
             // 12 条强制复位路径之一：三指编辑菜单/三指轻点重做接管。
             clearAllEvasionState(v)
             if (strokeStarted) {
-                realInk.release()
+                abortAndClearRealInk()
                 v.touchCancel()
                 strokeStarted = false
                 safeEndSymmetryUndoMacro()
@@ -5421,7 +5429,7 @@ class CanvasTouchView(context: Context) : View(context) {
             if (strokeStarted) {
                 cachedDriver?.feedbackManager?.setWritingHapticsEnabled(false)
                 cachedDriver?.feedbackManager?.stopStrokeSound()
-                realInk.release()
+                abortAndClearRealInk()
                 v.touchCancel()
                 strokeStarted = false
                 safeEndSymmetryUndoMacro()
@@ -5797,7 +5805,7 @@ class CanvasTouchView(context: Context) : View(context) {
                     if (strokeStarted) {
                         cachedDriver?.feedbackManager?.setWritingHapticsEnabled(false)
                         cachedDriver?.feedbackManager?.stopStrokeSound()
-                        realInk.release()
+                        abortAndClearRealInk()
                         clearAllEvasionState(v)
                         v.touchCancel()
                         strokeStarted = false
@@ -7718,7 +7726,7 @@ class CanvasTouchView(context: Context) : View(context) {
                     quickShapeCandidate = null
                     if (!isCancel && v.quickShapeEnabled && effTool() == Tool.BRUSH &&
                         recognized != null && capture != null && !capture.overflowed) {
-                        realInk.release()
+                        realInk.releaseAndCatchUp()
                         // 12 条强制复位路径之一：停顿进入 QuickShapeEditor。
                         clearAllEvasionState(v)
                         val started = v.beginQuickShape(recognized, capture.snapshot())
@@ -7728,7 +7736,7 @@ class CanvasTouchView(context: Context) : View(context) {
                             v.touchEnd(strokeSeq = realInk.currentStrokeSeq)
                         }
                     } else if (isCancel) {
-                        realInk.release()
+                        abortAndClearRealInk()
                         v.touchCancel()
                         resetMirrorBranches()
                         safeEndSymmetryUndoMacro()
@@ -7751,7 +7759,7 @@ class CanvasTouchView(context: Context) : View(context) {
                         v.touchEnd(render = !hasBranchesToReplay, deferOverrideRestore = hasBranchesToReplay, strokeSeq = realInk.currentStrokeSeq)
                         if (hasBranchesToReplay) {
                             // 镜像分支重放走主画布刷新, 前缓冲这一笔就此交还。
-                            realInk.release()
+                            realInk.releaseAndCatchUp()
                             isSymmetryReplaying = true
                             v.replaySymmetricBranches(
                                 mirroredSamples,

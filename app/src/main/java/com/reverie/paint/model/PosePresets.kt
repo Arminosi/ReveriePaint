@@ -64,6 +64,16 @@ object PosePresets {
 
     fun isCat(modelType: String): Boolean = modelType.equals("cat", ignoreCase = true)
 
+    /** 弯曲滑杆键: 0~100 (百分比), 与预设自带弯曲量叠加 */
+    const val CAT_CURL_KEY = "cat_curl"
+
+    /** 猫猫蜷缩弯曲量: 预设自带 + 面板滑杆, 归一到 0..1 */
+    fun catCurlBend(modelType: String, posePreset: String, jointAngles: Map<String, Float>): Float {
+        if (!isCat(modelType)) return 0f
+        val preset = if (posePreset.equals(CURL, ignoreCase = true)) 0.55f else 0f
+        return (preset + (jointAngles[CAT_CURL_KEY] ?: 0f) / 100f).coerceIn(0f, 1f)
+    }
+
     /**
      * 计算预设姿态的整体升降量 (glTF: +Y 向上)。
      *
@@ -79,7 +89,13 @@ object PosePresets {
         val key = "$modelType#$preset"
         groundShiftCache[key]?.let { return it }
         val euler = buildEulerMap(modelType, preset, emptyMap())
-        val mesh = skinned.createDeformedMesh(euler)
+        val mesh = skinned.createDeformedMesh(
+            euler,
+            null,
+            null,
+            0f,
+            catCurlBend(modelType, preset, emptyMap()),
+        )
         val shift = skinned.restMinY - skinned.minYOf(mesh)
         if (groundShiftCache.size > 64) groundShiftCache.clear()
         groundShiftCache[key] = shift

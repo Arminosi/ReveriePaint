@@ -138,7 +138,8 @@ internal fun PaintViewModel.deformState(state: Model3DState, buffer: DeformBuffe
             buffer != null && buffer.worldJoints.size >= skeleton.count * 3 -> buffer.worldJoints
             else -> FloatArray(skeleton.count * 3)
         }
-        val mesh = skinned.createDeformedMesh(euler, outJoints, buffer, shift)
+        val bend = PosePresets.catCurlBend(state.modelType, state.posePreset, state.jointAngles)
+        val mesh = skinned.createDeformedMesh(euler, outJoints, buffer, shift, bend)
         return Deformed3D(mesh, skeleton, outJoints)
     }
     // 无骨骼蒙皮但已由 glTF/GLB 解析器读出的网格 (静态道具模型): 直接用它, 不要再走 OBJ 兜底

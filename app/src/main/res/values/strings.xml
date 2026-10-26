@@ -3047,6 +3047,7 @@
     <string name="layer_3d_joint_cat_head_pitch">猫咪抬头/低头</string>
     <string name="layer_3d_joint_cat_head_yaw">猫咪转头</string>
     <string name="layer_3d_joint_cat_spine">脊背弓屈</string>
+    <string name="layer_3d_joint_cat_curl">蜷缩弯曲</string>
     <string name="layer_3d_joint_cat_fl_leg">左前爪伸展</string>
     <string name="layer_3d_joint_cat_fr_leg">右前爪伸展</string>
     <string name="layer_3d_joint_cat_hl_leg">左后肢屈伸</string>

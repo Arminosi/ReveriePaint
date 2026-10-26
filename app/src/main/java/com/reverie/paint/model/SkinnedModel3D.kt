@@ -390,6 +390,7 @@ class SkinnedMesh3D(
         outWorldJointPositions: FloatArray? = null,
         buffer: DeformBuffer? = null,
         groundShiftY: Float = 0f,
+        spineBend: Float = 0f,
     ): Mesh3D {
         if (skeleton == null || jointIndices == null || jointWeights == null || skeleton.count == 0) {
             return baseMesh
@@ -497,6 +498,25 @@ class SkinnedMesh3D(
             }
         }
 
+        // 程序化脊柱弯曲: 沿 +Z (身体前向) 把躯干卷成一段圆弧, 用来做"首尾相接"的蜷缩姿态。
+        // 骨架只有旋转、没有骨盆位移与脊柱扭转轴, 纯骨骼摆不出球形蜷缩, 这里补一个姿势空间变形。
+        if (spineBend > 1e-4f) {
+            bendSpine(defPositions, vCount, spineBend)
+            if (outWorldJointPositions != null) {
+                val jointCount = outWorldJointPositions.size / 3
+                for (j in 0 until jointCount) {
+                    val i = j * 3
+                    val bx = outWorldJointPositions[i]
+                    val by = outWorldJointPositions[i + 1]
+                    val bz = outWorldJointPositions[i + 2]
+                    outWorldJointPositions[i] = bx
+                    val r = bendPoint(bz)
+                    outWorldJointPositions[i + 1] = by * r[2] + r[1]
+                    outWorldJointPositions[i + 2] = r[0]
+                }
+            }
+        }
+
         if (outWorldJointPositions != null && dy != 0f) {
             var i = 1
             while (i < outWorldJointPositions.size) {
@@ -512,6 +532,39 @@ class SkinnedMesh3D(
             wireframeIndices = baseMesh.wireframeIndices,
             wireframeEdgeTriangles = baseMesh.wireframeEdgeTriangles,
         )
+    }
+
+    /** 弯曲基准: 以网格 +Z 最小值 (尾根) 为弧长起点, 1.0 弯曲约合 160° 卷曲 */
+    private var bendZMin = 0f
+    private var bendK = 0f
+
+    /** 弯曲: x 不变, 截面按弧长旋转 —— z' = R·sinθ, y' = y·cosθ + R·(1-cosθ) */
+    private fun bendPoint(z: Float): FloatArray {
+        val s = z - bendZMin
+        val theta = bendK * s
+        val r = 1f / bendK
+        return floatArrayOf(bendZMin + r * kotlin.math.sin(theta), r * (1f - kotlin.math.cos(theta)), kotlin.math.cos(theta))
+    }
+
+    private fun bendSpine(positions: FloatArray, vertexCount: Int, bend: Float) {
+        var zMin = Float.MAX_VALUE
+        var zMax = -Float.MAX_VALUE
+        for (v in 0 until vertexCount) {
+            val z = positions[v * 3 + 2]
+            if (z < zMin) zMin = z
+            if (z > zMax) zMax = z
+        }
+        val length = (zMax - zMin).coerceAtLeast(1e-3f)
+        val totalAngle = bend.coerceIn(0f, 1f) * 2.793f // 160°
+        bendZMin = zMin
+        bendK = totalAngle / length
+        for (v in 0 until vertexCount) {
+            val i = v * 3
+            val y = positions[i + 1]
+            val p = bendPoint(positions[i + 2])
+            positions[i + 1] = y * p[2] + p[1]
+            positions[i + 2] = p[0]
+        }
     }
 
     /** 形变后网格的最低点 (自动贴地/落地校验用) */

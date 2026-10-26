@@ -5023,6 +5023,15 @@ class PaintViewModel : ViewModel() {
     internal var realInkSink: RealInkSink? = null
 
     /**
+     * 前缓冲真墨当前是否处于按住状态 (P7 / L2)。
+     * 受 `debug.reverie.fb_powersave_exempt` (默认 1) 控制。
+     */
+    internal fun realInkHeld(): Boolean {
+        if (PerfTrace.debugPropInt("debug.reverie.fb_powersave_exempt", 1) == 0) return false
+        return realInkSink?.holding == true
+    }
+
+    /**
      * 瓦片/整图渲染修订号 (单调递增, 永不归零)。
      * 每次主画布发布新瓦片或整图帧前自增, UI 线程绘制前读取, 用于抬笔追赶门控。
      */
@@ -5254,6 +5263,13 @@ class PaintViewModel : ViewModel() {
 
         /** 真墨由前缓冲直出时的上屏延迟估计 (单缓冲, 绕过 HWUI/SF 的排队)。 */
         const val FRONT_BUFFER_PRESENT_MS = 4L
+
+        /**
+         * 笔迹渲染节流判定 (P7 / L2): 按住真墨前缓冲时 ([held]) 永远不节流 ([minIntervalMs] 视为 0),
+         * 以保证省电模式下运笔延迟与性能模式一致; 其余情况与原逻辑一致。
+         */
+        fun shouldThrottleStroke(minIntervalMs: Long, elapsed: Long, held: Boolean): Boolean =
+            !held && minIntervalMs > 0L && elapsed < minIntervalMs
         const val STROKE_BATCH_CAPACITY = 256
         const val STROKE_SAMPLE_STRIDE = 6
 
@@ -5576,7 +5592,7 @@ class PaintViewModel : ViewModel() {
             val minIntervalMs = renderScheduleMode.minRenderIntervalMs
             val nowMs = android.os.SystemClock.uptimeMillis()
             val elapsed = nowMs - lastStrokeRenderFinishUptimeMs
-            val shouldThrottle = minIntervalMs > 0L && elapsed < minIntervalMs
+            val shouldThrottle = shouldThrottleStroke(minIntervalMs, elapsed, realInkHeld())
 
             if (!shouldThrottle) {
                 if (strokeThrottleRenderScheduled) {
@@ -5949,7 +5965,7 @@ class PaintViewModel : ViewModel() {
                 doRender()
             }
         pendingRenderRunnable = r
-        val delay = if (renderScheduleMode == com.reverie.paint.model.RenderScheduleMode.POWER_SAVER) 16L else 0L
+        val delay = if (renderScheduleMode == com.reverie.paint.model.RenderScheduleMode.POWER_SAVER && !realInkHeld()) 16L else 0L
         if (delay > 0L) {
             h.postDelayed(r, delay)
         } else {

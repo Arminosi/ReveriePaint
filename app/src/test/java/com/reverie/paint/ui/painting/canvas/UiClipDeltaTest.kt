@@ -194,4 +194,188 @@ class UiClipDeltaTest {
         val head = ClipRect(550f, 550f, 560f, 560f)
         assertEquals(ClipChangeAction.REBAKE, clipChangeAction(nonIntersectDelta, ink, head))
     }
+
+    // =========================================================================
+    // 5. Barrier condition tests (has ink / no ink)
+    // =========================================================================
+
+    @Test
+    fun `barrier condition only blocks when front buffer has ink`() {
+        // No ink and no existing barrier -> false (do not block #81 preview)
+        assertFalse(shouldSetPreviewClearBarrier(existingBarrier = false, hasInkContent = false))
+
+        // Has ink -> true (barrier must be set to prevent clearing real ink)
+        assertTrue(shouldSetPreviewClearBarrier(existingBarrier = false, hasInkContent = true))
+
+        // Existing barrier retained even if current query sees no ink
+        assertTrue(shouldSetPreviewClearBarrier(existingBarrier = true, hasInkContent = false))
+        assertTrue(shouldSetPreviewClearBarrier(existingBarrier = true, hasInkContent = true))
+    }
+
+    // =========================================================================
+    // 6. !held packet is dropped (decision function)
+    // =========================================================================
+
+    @Test
+    fun `decidePresentAction drops packet when not held`() {
+        // Normal held stroke -> SUBMIT
+        assertEquals(
+            PresentAction.SUBMIT,
+            decidePresentAction(seq = 1L, strokeSeq = 1L, held = true, allBaked = true),
+        )
+
+        // When !held, baked packet must be dropped (slot freed, no ghost ink)
+        assertEquals(
+            PresentAction.DROP,
+            decidePresentAction(seq = 1L, strokeSeq = 1L, held = false, allBaked = true),
+        )
+
+        // Stale sequence -> DROP
+        assertEquals(
+            PresentAction.DROP,
+            decidePresentAction(seq = 1L, strokeSeq = 2L, held = true, allBaked = true),
+        )
+
+        // Not all baked -> RETRY
+        assertEquals(
+            PresentAction.RETRY,
+            decidePresentAction(seq = 1L, strokeSeq = 1L, held = true, allBaked = false),
+        )
+    }
+
+    // =========================================================================
+    // 7. stale-seq onStrokeCommitted does not release
+    // =========================================================================
+
+    @Test
+    fun `stale-seq onStrokeCommitted does not commit or release`() {
+        // Matching seq -> commit allowed
+        assertTrue(shouldCommitStroke(currentSeq = 42L, committedSeq = 42L))
+
+        // Stale seq (previous stroke commit arriving after new stroke armed) -> rejected!
+        assertFalse(shouldCommitStroke(currentSeq = 43L, committedSeq = 42L))
+
+        // Unspecified / default seq -> allowed for backwards compatibility
+        assertTrue(shouldCommitStroke(currentSeq = 42L, committedSeq = -1L))
+        assertTrue(shouldCommitStroke(currentSeq = 42L, committedSeq = 0L))
+    }
+
+    // =========================================================================
+    // 8. rebake-hole rect computation (packet ∩ clips)
+    // =========================================================================
+
+    @Test
+    fun `computeRebakeHoleRects finds exact intersections`() {
+        val packetRects = listOf(
+            ClipRect(10f, 10f, 100f, 100f),
+            ClipRect(200f, 200f, 300f, 300f),
+        )
+        val uiClips = listOf(
+            ClipRect(50f, 50f, 150f, 150f), // Intersects packet 1 [50, 50, 100, 100]
+            ClipRect(400f, 400f, 500f, 500f), // Disjoint
+        )
+
+        val holes = computeRebakeHoleRects(packetRects, uiClips)
+        assertEquals(1, holes.size)
+        assertEquals(ClipRect(50f, 50f, 100f, 100f), holes[0])
+
+        // Empty cases
+        assertTrue(computeRebakeHoleRects(emptyList(), uiClips).isEmpty())
+        assertTrue(computeRebakeHoleRects(packetRects, emptyList()).isEmpty())
+    }
+
+    @Test
+    fun `computeRebakeHoles zero-allocation array implementation matches`() {
+        val screenRects = intArrayOf(
+            10, 10, 100, 100,
+            200, 200, 300, 300,
+        )
+        val uiClipRects = floatArrayOf(
+            50f, 50f, 150f, 150f,
+            400f, 400f, 500f, 500f,
+        )
+        val outHoles = FloatArray(16)
+
+        val count = computeRebakeHoles(screenRects, 2, uiClipRects, 2, outHoles)
+        assertEquals(1, count)
+        assertEquals(50f, outHoles[0], 0.001f)
+        assertEquals(50f, outHoles[1], 0.001f)
+        assertEquals(100f, outHoles[2], 0.001f)
+        assertEquals(100f, outHoles[3], 0.001f)
+
+        // Non-intersecting test
+        val noInter = computeRebakeHoles(screenRects, 1, floatArrayOf(200f, 200f, 300f, 300f), 1, outHoles)
+        assertEquals(0, noInter)
+    }
+
+    // =========================================================================
+    // 9. packed-bounds encode/decode incl negative and clamped values
+    // =========================================================================
+
+    @Test
+    fun `packInkBounds and unpackInkBounds round trip standard coordinates`() {
+        val packed = packInkBounds(100, 150, 800, 600)
+        val unpacked = unpackInkBounds(packed)
+        assertEquals(ClipRect(100f, 150f, 800f, 600f), unpacked)
+    }
+
+    @Test
+    fun `packInkBounds and unpackInkBounds handle negative coordinates`() {
+        val packed = packInkBounds(-250, -500, 120, 300)
+        val unpacked = unpackInkBounds(packed)
+        assertEquals(ClipRect(-250f, -500f, 120f, 300f), unpacked)
+    }
+
+    @Test
+    fun `packInkBounds clamps out-of-range coordinates`() {
+        val packed = packInkBounds(-50000, -40000, 50000, 40000)
+        val unpacked = unpackInkBounds(packed)
+        assertEquals(ClipRect(-32768f, -32768f, 32767f, 32767f), unpacked)
+    }
+
+    @Test
+    fun `packInkBounds returns 0 and unpacks to null for empty or inverted rects`() {
+        assertEquals(0L, packInkBounds(100, 100, 50, 50)) // left >= right
+        assertEquals(0L, packInkBounds(100, 100, 100, 100)) // zero area
+        assertEquals(null, unpackInkBounds(0L))
+    }
+
+    // =========================================================================
+    // 10. idle shrink decision tests
+    // =========================================================================
+
+    @Test
+    fun `shouldShrinkSlot respects grow-only during stroke and shrinks when idle`() {
+        // While held (during stroke): grow-only! Never shrink even if large.
+        assertFalse(shouldShrinkSlot(held = true, isBusy = false, width = 2560, height = 1600))
+
+        // While busy (in baking/GL blit): never shrink.
+        assertFalse(shouldShrinkSlot(held = false, isBusy = true, width = 2560, height = 1600))
+
+        // When idle and within 2x SLOT_MIN_PX (1024): keep preallocated bitmap!
+        assertFalse(shouldShrinkSlot(held = false, isBusy = false, width = 1024, height = 1024))
+        assertFalse(shouldShrinkSlot(held = false, isBusy = false, width = 512, height = 512))
+
+        // When idle and oversized (> 1024): shrink back!
+        assertTrue(shouldShrinkSlot(held = false, isBusy = false, width = 1280, height = 800))
+        assertTrue(shouldShrinkSlot(held = false, isBusy = false, width = 2560, height = 1600))
+    }
+
+    @Test
+    fun `sensiblePreallocateSize clamps between minPx and maxThreshold with 256 alignment`() {
+        // Surface 2560x1600 -> capped at 1024x1024
+        val (w1, h1) = sensiblePreallocateSize(2560, 1600)
+        assertEquals(1024, w1)
+        assertEquals(1024, h1)
+
+        // Surface smaller than 512 -> clamped up to 512
+        val (w2, h2) = sensiblePreallocateSize(300, 300)
+        assertEquals(512, w2)
+        assertEquals(512, h2)
+
+        // Intermediate size 800x600 -> aligned to 256 boundary
+        val (w3, h3) = sensiblePreallocateSize(800, 600)
+        assertEquals(1024, w3)
+        assertEquals(768, h3)
+    }
 }

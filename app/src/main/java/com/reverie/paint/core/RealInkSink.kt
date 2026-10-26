@@ -37,5 +37,5 @@ internal interface RealInkSink {
     fun finishFrame(kept: Boolean)
 
     /** 这一笔已经交给引擎收尾 (touchStrokeEnd 之后), 松开前缓冲, 主画布追平。 */
-    fun onStrokeCommitted()
+    fun onStrokeCommitted(strokeSeq: Long = -1L)
 }

@@ -72,6 +72,7 @@ class FrontBufferPathPacket(
 ) {
     // ---- 真墨 (渲染线程 CAS 抢占后写入, GL 线程只读) ----
     var ink: Boolean = false
+    var rebake: Boolean = false
 
     /** 烤好的屏幕槽位图, 左上角对齐屏幕 `(slotOriginX, slotOriginY)`。 */
     var inkBitmap: Bitmap? = null
@@ -249,6 +250,7 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
     private val composeSrc = Rect()
     private val composeDst = RectF()
     private val composeBounds = Rect()
+    private val rebakeHolesScratch = FloatArray(FrontBufferCompose.MAX_PACKET_RECTS * MAX_UI_CLIPS * 4)
 
     private val screenInkPaint = Paint().apply {
         xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC)
@@ -746,6 +748,7 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
         holeHitBits: Int = 0,
         guideKind: Int = DynamicGuidePainter.KIND_NONE,
         guideSeg: FloatArray? = null,
+        rebake: Boolean = false,
     ): Boolean {
         if (!isRendererInitialized) return false
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
@@ -758,6 +761,7 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
         }
         try {
             packet.ink = true
+            packet.rebake = rebake
             packet.isClear = false
             packet.compose = false
             packet.decor = null
@@ -835,6 +839,7 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
         canvasBounds: IntArray,
         docInner: IntArray,
         decor: FrontBufferDecor?,
+        rebake: Boolean = false,
     ): Boolean {
         if (!isRendererInitialized) return false
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
@@ -847,6 +852,7 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
         }
         try {
             packet.ink = true
+            packet.rebake = rebake
             packet.isClear = false
             packet.compose = true
             packet.rectCount = n
@@ -1105,6 +1111,9 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
         if (bmp != null && !bmp.isRecycled) {
             val sc = strokeCanvas
             if (layer != null && sc != null) {
+                if (param.rebake) {
+                    clearRebakeHoles(sc, param)
+                }
                 blitInk(sc, param, bmp)
                 for (i in 0 until param.rectCount) {
                     val s = i * 4
@@ -1115,6 +1124,9 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
                         param.screenRects[s + 3],
                     )
                 }
+            }
+            if (param.rebake) {
+                clearRebakeHoles(canvas, param)
             }
             canvas.save()
             if (inkL <= inkR) clipOutUi(canvas, param, inkL, inkT, inkR, inkB)
@@ -1212,6 +1224,9 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
             if (sr[s + 2] > r) r = sr[s + 2]
             if (sr[s + 3] > b) b = sr[s + 3]
         }
+        if (param.rebake) {
+            clearRebakeHoles(canvas, param)
+        }
         canvas.save()
         clipOutUi(canvas, param, l.toFloat(), t.toFloat(), r.toFloat(), b.toFloat())
         for (i in 0 until n) {
@@ -1272,6 +1287,32 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
         noteGuideOnScreen(guideOn)
         if (FbGeomLog.identityCheckEnabled) {
             FbGeomLog.composeIdentityCheck(bmp, param.packXY, sr, n, param.docInner)
+        }
+    }
+
+    /**
+     * 重烤包清孔 (GL 线程, 零分配):
+     * 在 clipOutUi 与 SRC blit 之前, 对每个 (包矩形 ∩ 当前 uiClips) 执行 CLEAR 清除旧墨。
+     */
+    private fun clearRebakeHoles(canvas: Canvas, param: FrontBufferPathPacket) {
+        val holeCount = computeRebakeHoles(
+            param.screenRects,
+            param.rectCount,
+            param.uiClipRects,
+            param.uiClipCount,
+            rebakeHolesScratch,
+        )
+        for (h in 0 until holeCount) {
+            val o = h * 4
+            canvas.save()
+            canvas.clipRect(
+                rebakeHolesScratch[o],
+                rebakeHolesScratch[o + 1],
+                rebakeHolesScratch[o + 2],
+                rebakeHolesScratch[o + 3],
+            )
+            canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+            canvas.restore()
         }
     }
 
@@ -1625,6 +1666,7 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
                 Log.w(TAG, "clearPreview error: ${t.message}")
             }
         }
+        realInk?.shrinkSlotsWhenIdle()
     }
 
     /**

@@ -1148,14 +1148,16 @@ class CanvasTouchView(context: Context) : View(context) {
             if (snapshot != oldClips) {
                 val delta = clipDelta(oldClips, snapshot)
                 val inkBounds = realInk.publishedInkBounds
-                val headDoc = Offset(v.smoothedStrokeX, v.smoothedStrokeY)
-                val headScreen = docToScreen(headDoc)
+                ensureViewTransform()
+                viewTransform.docToScreen(v.smoothedStrokeX, v.smoothedStrokeY, pointScratch)
+                val headScreenX = pointScratch[0]
+                val headScreenY = pointScratch[1]
                 val headRadius = effectiveBrushScreenRadius(v, v.smoothedStrokePressure.toFloat())
                 val headRect = ClipRect(
-                    headScreen.x - headRadius,
-                    headScreen.y - headRadius,
-                    headScreen.x + headRadius,
-                    headScreen.y + headRadius,
+                    headScreenX - headRadius,
+                    headScreenY - headRadius,
+                    headScreenX + headRadius,
+                    headScreenY + headRadius,
                 )
                 val action = clipChangeAction(delta, inkBounds, headRect)
                 FbGeomLog.clipRebuild(realInk.currentStrokeSeq, version, delta.size, inkBounds != null, action == ClipChangeAction.REBAKE)
@@ -4113,13 +4115,15 @@ class CanvasTouchView(context: Context) : View(context) {
         val old = realInk.pose
         if (pose != old) {
             // 按住期间 pose 变了 (如 Compose 的 viewW/viewH/翻转在运笔中写进来): 四角屏幕位移 >= 0.5px 或尺寸变化才释放 (plan 四.4).
-            // 放开前先在 UI 线程写 blockPreviewClear=true 挡住 #81 预览清屏, 避免抹除前缓冲真墨.
-            if (poseNeedsRelease(old, pose, viewW, viewH) && realInk.held) {
-                realInk.blockPreviewClear = true
-                FbGeomLog.poseRelease("pose_changed", realInk.currentStrokeSeq, android.os.SystemClock.uptimeMillis())
-                realInk.releaseAndCatchUp()
+            if (realInk.held) {
+                if (poseNeedsRelease(old, pose)) {
+                    FbGeomLog.poseRelease("pose_changed", realInk.currentStrokeSeq, android.os.SystemClock.uptimeMillis())
+                    realInk.releaseAndCatchUp()
+                    realInk.pose = pose
+                }
+            } else {
+                realInk.pose = pose
             }
-            realInk.pose = pose
         }
     }
 
@@ -6831,7 +6835,11 @@ class CanvasTouchView(context: Context) : View(context) {
                     // 真墨按住期间前缓冲上是引擎真墨 (渲染线程呈现), 不再叠 #81 的前沿段假线;
                     // 光标与预测笔尖在本分支末尾记下快照, 由前缓冲随墨一起画。
                     // 门控: 按住期间或 blockPreviewClear 被置位时禁止提交 #81 预览 (plan 四.1/四.4).
-                    if (previewSubmitAllowed(realInk.held, realInk.blockPreviewClear) && strokeFbReady &&
+                    val previewAllowed = previewSubmitAllowed(realInk.held, realInk.blockPreviewClear)
+                    if (!previewAllowed && realInk.blockPreviewClear) {
+                        FbGeomLog.previewBlocked(realInk.currentStrokeSeq, realInk.blockPreviewClear)
+                    }
+                    if (previewAllowed && strokeFbReady &&
                         frontBufferOverlay?.canRenderPreview == true &&
                         pointerIndex in 0 until event.pointerCount
                     ) {
@@ -7717,7 +7725,7 @@ class CanvasTouchView(context: Context) : View(context) {
                         resetMirrorBranches()
                         safeEndSymmetryUndoMacro()
                         if (!started) {
-                            v.touchEnd()
+                            v.touchEnd(strokeSeq = realInk.currentStrokeSeq)
                         }
                     } else if (isCancel) {
                         realInk.release()
@@ -7740,7 +7748,7 @@ class CanvasTouchView(context: Context) : View(context) {
                             appendMirrorCatchUpAndTaper(v, event.eventTime)
                         }
                         // 仅当没有镜像分支重放时主笔才立即全量渲染且立即还原覆盖状态；有分支则在镜像分支执行完毕后统一渲染与还原
-                        v.touchEnd(render = !hasBranchesToReplay, deferOverrideRestore = hasBranchesToReplay)
+                        v.touchEnd(render = !hasBranchesToReplay, deferOverrideRestore = hasBranchesToReplay, strokeSeq = realInk.currentStrokeSeq)
                         if (hasBranchesToReplay) {
                             // 镜像分支重放走主画布刷新, 前缓冲这一笔就此交还。
                             realInk.release()

@@ -87,6 +87,9 @@ fun PoseAdjustmentPanel(
                 "sit" to R.string.layer_3d_cat_sit,
                 "loaf" to R.string.layer_3d_cat_loaf,
                 "stretch" to R.string.layer_3d_cat_stretch,
+                "walk" to R.string.layer_3d_cat_walk,
+                "curl" to R.string.layer_3d_cat_curl,
+                "pounce" to R.string.layer_3d_cat_pounce,
             )
         } else {
             listOf(

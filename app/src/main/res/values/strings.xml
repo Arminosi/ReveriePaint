@@ -2987,7 +2987,7 @@
     <string name="layer_3d_model_girl">人体标准素模 (女)</string>
     <string name="layer_3d_model_girl_sub">Blender Studio (CC0) · 优美女性体态与身形曲线</string>
     <string name="layer_3d_model_cat">3D 写实家猫</string>
-    <string name="layer_3d_model_cat_sub">精细拓扑与真实四足姿态、立耳、胡须及灵动尾巴骨骼绑定</string>
+    <string name="layer_3d_model_cat_sub">ReveriePaint · 精细拓扑重绑与真实四足姿态、立耳、胡须及灵动尾巴骨骼</string>
     <string name="layer_3d_model_body">全身人偶 (站姿)</string>
     <string name="layer_3d_model_body_sub">八头身人体比例与结构体块</string>
     <string name="layer_3d_model_body_sit">全身人偶 (坐姿)</string>
@@ -3022,6 +3022,9 @@
     <string name="layer_3d_cat_stand">站立机警</string>
     <string name="layer_3d_cat_sit">乖巧端坐</string>
     <string name="layer_3d_cat_loaf">农民揣/母鸡蹲</string>
+    <string name="layer_3d_cat_walk">行走迈步</string>
+    <string name="layer_3d_cat_curl">蜷缩入睡</string>
+    <string name="layer_3d_cat_pounce">伏击准备</string>
     <string name="layer_3d_cat_stretch">猫猫伸懒腰</string>
     <string name="layer_3d_joint_head_pitch">头部俯仰</string>
     <string name="layer_3d_joint_head_yaw">头部偏航转动</string>

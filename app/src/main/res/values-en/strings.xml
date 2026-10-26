@@ -2987,7 +2987,7 @@
     <string name="layer_3d_model_girl">Human Standard Mannequin (Female)</string>
     <string name="layer_3d_model_girl_sub">Blender Studio (CC0) · Natural female curves and proportions</string>
     <string name="layer_3d_model_cat">3D Domestic Cat</string>
-    <string name="layer_3d_model_cat_sub">Detailed feline topology with alert ears, arched spine &amp; flexible tail rig</string>
+    <string name="layer_3d_model_cat_sub">ReveriePaint · Retopologized rig with realistic quadruped poses, ears, whiskers and expressive tail</string>
     <string name="layer_3d_model_body">Full Body Mannequin (Standing)</string>
     <string name="layer_3d_model_body_sub">8-head anatomical proportions &amp; blocks</string>
     <string name="layer_3d_model_body_sit">Full Body Mannequin (Seated)</string>
@@ -3022,6 +3022,9 @@
     <string name="layer_3d_cat_stand">Standing</string>
     <string name="layer_3d_cat_sit">Sitting</string>
     <string name="layer_3d_cat_loaf">Loaf</string>
+    <string name="layer_3d_cat_walk">Walking</string>
+    <string name="layer_3d_cat_curl">Curled Up</string>
+    <string name="layer_3d_cat_pounce">Pounce Ready</string>
     <string name="layer_3d_cat_stretch">Stretching</string>
     <string name="layer_3d_joint_head_pitch">Head Pitch</string>
     <string name="layer_3d_joint_head_yaw">Head Yaw</string>

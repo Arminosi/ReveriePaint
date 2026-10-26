@@ -23,6 +23,9 @@ object PosePresets {
     const val KNEEL = "kneel"
     const val LOAF = "loaf"
     const val STRETCH = "stretch"
+    const val WALK = "walk"
+    const val CURL = "curl"
+    const val POUNCE = "pounce"
 
     /** 姿态面板里由语义分支消费的键: 兜底解析必须跳过, 否则同一角度会被施加两次 */
     private val CAT_SEMANTIC_KEYS = setOf(
@@ -148,6 +151,33 @@ object PosePresets {
                 hlShank = 70f; hrShank = 70f
                 hlFoot = -22f; hrFoot = -22f
                 tailP = -25f; tailSide = 30f
+            }
+            // 行走: 四足对角换步 (左前 + 右后 同相), 躯干轻微起伏, 尾巴平衡摆动
+            WALK -> {
+                hipP = 3f; spineArch = -3f; chestP = 3f; neckP = 2f; headP = 2f
+                flSh = -12f; flLeg = -18f; flPaw = 10f
+                frSh = 10f; frLeg = 14f; frPaw = -6f
+                hlLeg = 12f; hlShank = -8f
+                hrLeg = -10f; hrShank = 10f
+                tailP = 25f; tailSide = 12f
+            }
+            // 蜷缩入睡: 脊柱弓起, 头低下巴贴胸, 四肢收拢, 尾巴绕体
+            CURL -> {
+                hipP = 8f; spineArch = 18f; chestP = 10f; neckP = 8f; headP = 14f
+                flSh = 30f; frSh = 30f; flLeg = -55f; frLeg = -55f; flPaw = 25f; frPaw = 25f
+                hlLeg = -40f; hrLeg = -40f
+                hlShank = 60f; hrShank = 60f
+                hlFoot = -20f; hrFoot = -20f
+                tailP = -20f; tailSide = 45f
+            }
+            // 伏击准备: 前半身压低, 后躯蓄力, 前爪前探, 尾巴水平微摆
+            POUNCE -> {
+                hipP = 14f; spineArch = -6f; chestP = -10f; neckP = -6f; headP = 6f
+                flSh = -18f; frSh = -18f; flLeg = 8f; frLeg = 8f; flPaw = 8f; frPaw = 8f
+                hlLeg = -20f; hrLeg = -20f
+                hlShank = 35f; hrShank = 35f
+                hlFoot = -10f; hrFoot = -10f
+                tailP = 10f; tailSide = 18f
             }
             // 伸懒腰: 前肢伸展, 胸口低伏压低, 后躯高翘, 头抬起, 尾巴翘卷
             STRETCH -> {

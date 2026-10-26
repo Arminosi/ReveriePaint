@@ -67,6 +67,15 @@ object PosePresets {
     /** 弯曲滑杆键: 0~100 (百分比), 与预设自带弯曲量叠加 */
     const val CAT_CURL_KEY = "cat_curl"
 
+    /** 整体升降滑杆键: -100~100 -> -0.5~+0.5 (glTF +Y 向上), 用于把端坐/伏卧摆到地面 */
+    const val CAT_RISE_KEY = "cat_rise"
+
+    /** 猫猫整体升降量 (美术微调用), 与预设标定值叠加 */
+    fun catRootRise(modelType: String, jointAngles: Map<String, Float>): Float {
+        if (!isCat(modelType)) return 0f
+        return ((jointAngles[CAT_RISE_KEY] ?: 0f) / 100f).coerceIn(-0.5f, 0.5f)
+    }
+
     /** 猫猫蜷缩弯曲量: 预设自带 + 面板滑杆, 归一到 0..1 */
     fun catCurlBend(modelType: String, posePreset: String, jointAngles: Map<String, Float>): Float {
         if (!isCat(modelType)) return 0f

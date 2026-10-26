@@ -133,7 +133,8 @@ internal fun PaintViewModel.deformState(state: Model3DState, buffer: DeformBuffe
     if (skinned != null && skeleton != null && skinned.jointIndices != null && skinned.jointWeights != null) {
         val euler = PosePresets.buildEulerMap(state.modelType, state.posePreset, state.jointAngles)
         // 贴地量只由"预设"决定, 不随用户微调角度漂移
-        val shift = PosePresets.groundShiftForPreset(skinned, state.modelType, state.posePreset)
+        val shift = PosePresets.groundShiftForPreset(skinned, state.modelType, state.posePreset) +
+            PosePresets.catRootRise(state.modelType, state.jointAngles)
         val outJoints = when {
             buffer != null && buffer.worldJoints.size >= skeleton.count * 3 -> buffer.worldJoints
             else -> FloatArray(skeleton.count * 3)

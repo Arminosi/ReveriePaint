@@ -972,3 +972,35 @@ Krita 继续负责最终正确性(形变 / 采样 / 像素 / 事务 / 撤销 / �
 - 唯一绕过的是迭代器直写 (`ReverieCoreFilterPlugins.cpp` 的卷积, `ReverieMaskingBrushRenderer.cpp`), 其调用方均随后 `setDirty`
 - `moveTo` 的调用点 (`ReverieCoreSelectionTools.cpp`) 均随后 `setDirty`
 - 仍需真机 `saveverify` 全矩阵压测后才能把默认值改为开启
+
+### 取图转换: 绕开 Krita 的逐像素 QColor 回退 (2026-10-26)
+
+**根因**: 文档色彩空间是 `rgb8()` = `KoRgbU8ColorSpace` (unmanaged RGBA), 它继承
+`KoSimpleColorSpace`, 而该类的 `convertPixelsTo` 是**逐像素** `toQColor` + `fromQColor`
+实现 —— 每个像素都要构造一次 `QVector<float>`。`KisPaintDevice::convertToQImage` 正是走
+`convertToQImage(data, ...)` → `convertPixelsTo`, 于是 4096×4096 幅面固定要 1555ms,
+而其中真正的像素拷贝只要 21ms (实测, 见下表)。
+
+**改法**: `ReverieCoreInternal.h` 新增 `reverieDeviceToQImage()`。KoRgbU8 的内存序是
+`B,G,R,A` 非预乘, 与 `QImage::Format_ARGB32` 逐字节一致, 所以可以直接
+`QImage(w, h, Format_ARGB32)` + `readBytes(img.bits(), ...)` 完成转换; 其它色彩空间
+(导入的 LAB / 16bit / CMYK 文档) 自动回退到 Krita 的转换。调用点: `renderMergedQImage`
+(保存预览/导出 PNG/JPG/KRA 共用) / 图层与关键帧 PNG 快照 / 图层缩略图 /
+`renderKeyframeFull` 与自动中割的两帧取图。
+
+**实测** (平板 4096×4096, 4 图层, `debug.reverie.savelog 1`)
+
+| 阶段 | 改前 | 改后 |
+|---|---|---|
+| 取图转换 (projection → QImage) | 1555ms | 21ms (readBytes) |
+| 保存 composite 段 (含预览降采样) | 1584ms | 77ms |
+| 全量保存 (改 1 层也要重编码全部) | 4226ms | 810ms |
+| 增量保存 (未改动, 复用 4 条目) | 1674ms | 147ms |
+
+**正确性验证**: 用旧版本(1.6.0 产物)的 `未命名作品 10.revp` 做 A/B —— 新版本打开后另存,
+`layer_000.png` / `layer_001.png` / `preview.png` / `thumbnail.png` 全部 **md5 一致**
+(同一 PNG 编码器 + 同一 q70 档位, 逐字节相同即像素相同); 条目名与顺序不变。
+
+**推论**: 之前读数是"合成占 1.46s, 下一步该缓存预览合成", 根因其实是转换而不是合成;
+缓存合成只能去掉 77ms, 因此**不再做**预览合成缓存。剩余大头转到 PNG deflate
+(全量保存 png 段合计 ≈2.0s, 4 线程并行后墙钟 ≈0.5s), 对应实施方案的 Phase 3.1 (libpng A/B)。

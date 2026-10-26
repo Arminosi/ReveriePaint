@@ -10,7 +10,6 @@ import android.graphics.Paint
 import android.graphics.Path
 import com.reverie.paint.model.*
 import kotlin.math.*
-import kotlin.math.roundToInt
 
 /**
  * 极速 120Hz 原生 Canvas 3D 实时投影渲染器
@@ -427,17 +426,6 @@ class Canvas3DDrawer {
         strokeWidth = 2.5f
         color = 0xFFE07A5F.toInt() // Morandi terracotta accent
     }
-    private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0xFF2A2B2D.toInt()
-        textSize = 22f
-    }
-    private val labelBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0xF2F4F1DE.toInt()
-        style = Paint.Style.FILL
-    }
-    /** 标签文本复用, 避免每帧拼接字符串 (热路径) */
-    private val angleText = StringBuilder(32)
-
     // ---- 选中骨骼的 X/Y 旋转轴环 (gizmo), 全程零分配 ----
     private val ringPitchPts = FloatArray(RING_SEG * 2)
     private val ringYawPts = FloatArray(RING_SEG * 2)
@@ -527,8 +515,8 @@ class Canvas3DDrawer {
         val fy = sz * ax - sx * az
         val fz = sx * ay - sy * ax
 
-        // 世界半径: 屏幕上的环大小随缩放稳定
-        val r = 0.085f
+        // 世界半径: 放大到 0.14 (原 0.085 在平板上偏小, 不好点)
+        val r = 0.14f
         ringPitchVisible = buildRing(
             ox, oy, oz, ax * r, ay * r, az * r, fx * r, fy * r, fz * r,
             mvp, halfW, halfH, ringPitchPts,
@@ -771,37 +759,6 @@ class Canvas3DDrawer {
         // 3. 选中关节的 X/Y 旋转轴环: 点环锁定该轴, 拖动只改该轴
         drawAxisRings(canvas, skeleton, worldJoints, selectedIndex, mvp, halfW, halfH, lockedAxis)
 
-        // 4. 选中关节的骨骼名 + 当前角度标签 (拖动时能读到具体数值)
-        if (selectedIndex >= 0 && selectedIndex < jointCount) {
-            val name = skeleton.joints[selectedIndex].name
-            if (name.isNotEmpty()) {
-                val pitch = state.jointAngles[name + "_p"] ?: 0f
-                val yaw = state.jointAngles[name + "_y"] ?: 0f
-                val roll = state.jointAngles[name + "_r"] ?: 0f
-                angleText.setLength(0)
-                angleText.append(name)
-                if (abs(pitch) >= 0.5f) angleText.append("  ").append(pitch.roundToInt())
-                if (abs(yaw) >= 0.5f) angleText.append("  ").append(yaw.roundToInt())
-                if (abs(roll) >= 0.5f) angleText.append("  ").append(roll.roundToInt())
-                val label = angleText.toString()
-                labelPaint.textSize = (docW * 0.016f).coerceIn(18f, 40f)
-                val textW = labelPaint.measureText(label)
-                val x = jointScreenX[selectedIndex]
-                val y = jointScreenY[selectedIndex] - 34f
-                val padH = labelPaint.textSize * 0.4f
-                val padV = labelPaint.textSize * 0.22f
-                canvas.drawRoundRect(
-                    x - textW * 0.5f - padH,
-                    y - labelPaint.textSize - padV,
-                    x + textW * 0.5f + padH,
-                    y + padV,
-                    padV * 2.2f,
-                    padV * 2.2f,
-                    labelBgPaint,
-                )
-                canvas.drawText(label, x - textW * 0.5f, y - padV * 0.6f, labelPaint)
-            }
-        }
     }
 
     private companion object {

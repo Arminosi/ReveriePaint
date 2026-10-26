@@ -92,24 +92,26 @@ class SkeletonPoseTest {
     @Test
     fun `cat pose presets keep the art-tuned vertical placement`() {
         val cat = catModel()
-        // 端坐/农民揣/伸懒腰是美术标定过的构图参数: 骨架只能旋转, 骨盆没法自己落地, 只能整模型补升降
-        val expected = mapOf(
+        // 伏卧类 (loaf/curl) 与伸懒腰是美术标定过的整体升降; 端坐已改回几何贴地
+        val tuned = mapOf(
             PosePresets.STAND to 0f,
-            PosePresets.SIT to -0.50f,
             PosePresets.LOAF to -0.60f,
+            PosePresets.CURL to -0.60f,
             PosePresets.STRETCH to -0.10f,
         )
-        val shifts = LinkedHashMap<String, Float>()
-        for ((preset, want) in expected) {
+        for ((preset, want) in tuned) {
             val shift = PosePresets.groundShiftForPreset(cat, "cat", preset)
-            shifts[preset] = shift
             assertEquals("preset $preset shift", want, shift, 1e-4f)
-            val euler = PosePresets.buildEulerMap("cat", preset, emptyMap())
-            cat.createDeformedMesh(euler, null, null, shift).let { mesh ->
-                assertTrue("$preset mesh finite", cat.minYOf(mesh).isFinite())
-            }
         }
-        println("cat preset shifts = $shifts")
+        // 端坐: 必须按几何贴地, 四爪回到地面线 (旧 -0.50 会把前腿压进地下)
+        val sitShift = PosePresets.groundShiftForPreset(cat, "cat", PosePresets.SIT)
+        val sitMesh = cat.createDeformedMesh(
+            PosePresets.buildEulerMap("cat", PosePresets.SIT, emptyMap()),
+            null,
+            null,
+            sitShift,
+        )
+        assertEquals(cat.restMinY, cat.minYOf(sitMesh), 2e-3f)
     }
 
     @Test

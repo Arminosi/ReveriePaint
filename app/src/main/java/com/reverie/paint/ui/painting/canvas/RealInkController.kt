@@ -13,6 +13,7 @@ import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
 import android.os.Build
+import android.os.SystemClock
 import com.reverie.paint.core.PaintViewModel
 import com.reverie.paint.core.PublishedTiles
 import com.reverie.paint.core.RealInkSink
@@ -22,6 +23,7 @@ import com.reverie.paint.model.FrontBufferCompose
 import com.reverie.paint.model.FrontBufferHolePolicy
 import com.reverie.paint.model.RealInkHoldPolicy
 import com.reverie.paint.model.RealInkPresent
+import com.reverie.paint.model.SettledTilePolicy
 import com.reverie.paint.model.UiClipSnapshot
 import com.reverie.paint.perf.FbGeomLog
 import java.util.concurrent.atomic.AtomicBoolean
@@ -239,6 +241,15 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
     private val bakeCanvas = Canvas()
     private val bakePaint = Paint()
     private val tileDrawer = ClampedTileDrawer()
+
+    // ---- 渐进刷新已落定瓦片 (P5 / D3) ----
+    private var tileLastWriteFrame = IntArray(0)
+    private var tileRefreshedAtFrame = IntArray(0)
+    private var strokeFrameNo = 0
+    private var renderStrokeSeq = -1L
+    private var lastMidStrokeRefreshMs = 0L
+    private var settledHits = IntArray(0)
+    private var settledIndices = IntArray(0)
 
     // 屏幕槽位图四缓冲轮换: 至多两张在 GPU 光栅化、一张排队、一张供渲染线程烘焙。
     // 尺寸按本帧脏区的屏幕包围盒紧凑分配 (最小 512, 按 256 取整), 不做整屏位图。
@@ -525,8 +536,98 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
             }
         }
         val presented = presentPending(tiles)
+        if (presented) {
+            updateSettledTilesAndMaybeRefresh(
+                tiles,
+                rects,
+                count,
+                writtenLeft,
+                writtenTop,
+                writtenRight,
+                writtenBottom,
+            )
+        }
         val stillPending = synchronized(pendingLock) { pendingCount > 0 }
         return RealInkPresent.keepAfterPresent(wantsHold(), presented, stillPending)
+    }
+
+    private fun updateSettledTilesAndMaybeRefresh(
+        tiles: PublishedTiles,
+        rects: IntArray,
+        count: Int,
+        writtenLeft: Int,
+        writtenTop: Int,
+        writtenRight: Int,
+        writtenBottom: Int,
+    ) {
+        val grid = tiles.grid
+        val tileCount = grid.tileCount
+        if (tileCount <= 0) return
+        if (tileLastWriteFrame.size != tileCount) {
+            tileLastWriteFrame = IntArray(tileCount)
+            tileRefreshedAtFrame = IntArray(tileCount)
+        }
+        if (renderStrokeSeq != strokeSeq) {
+            renderStrokeSeq = strokeSeq
+            strokeFrameNo = 0
+            tileLastWriteFrame.fill(0)
+            tileRefreshedAtFrame.fill(0)
+            lastMidStrokeRefreshMs = 0L
+        }
+        strokeFrameNo++
+
+        if (settledHits.size < tileCount * 2) {
+            settledHits = IntArray(tileCount * 2)
+        }
+        for (d in 0 until count) {
+            val b = d * 4
+            val l = maxOf(rects[b], writtenLeft)
+            val t = maxOf(rects[b + 1], writtenTop)
+            val r = minOf(rects[b] + rects[b + 2], writtenRight)
+            val bt = minOf(rects[b + 1] + rects[b + 3], writtenBottom)
+            if (r > l && bt > t) {
+                val n = grid.tilesIntersecting(l, t, r, bt, settledHits)
+                for (k in 0 until n) {
+                    val tx = settledHits[k * 2]
+                    val ty = settledHits[k * 2 + 1]
+                    val idx = grid.tileIndex(tx, ty)
+                    if (idx in 0 until tileCount) {
+                        tileLastWriteFrame[idx] = strokeFrameNo
+                    }
+                }
+            }
+        }
+
+        val midRefreshMs = FrontBufferFeatureFlags.midStrokeRefreshMs
+        if (midRefreshMs > 0L) {
+            val nowMs = SystemClock.uptimeMillis()
+            if (nowMs - lastMidStrokeRefreshMs >= midRefreshMs) {
+                val tipCenterX = (writtenLeft + writtenRight) / 2
+                val tipCenterY = (writtenTop + writtenBottom) / 2
+                val tipCol = if (grid.tileSize > 0) (tipCenterX / grid.tileSize).coerceIn(0, grid.cols - 1) else 0
+                val tipRow = if (grid.tileSize > 0) (tipCenterY / grid.tileSize).coerceIn(0, grid.rows - 1) else 0
+                if (settledIndices.size < tileCount) {
+                    settledIndices = IntArray(tileCount)
+                }
+                val settledCount = SettledTilePolicy.findSettledTiles(
+                    tileLastWriteFrame,
+                    tileRefreshedAtFrame,
+                    strokeFrameNo,
+                    tipCol,
+                    tipRow,
+                    grid.cols,
+                    settledIndices,
+                )
+                if (settledCount > 0) {
+                    for (i in 0 until settledCount) {
+                        val idx = settledIndices[i]
+                        tileRefreshedAtFrame[idx] = strokeFrameNo
+                    }
+                    lastMidStrokeRefreshMs = nowMs
+                    view.vm?.invalidateCanvasFromRender()
+                }
+            }
+        }
     }
 
     override fun finishFrame(kept: Boolean) {

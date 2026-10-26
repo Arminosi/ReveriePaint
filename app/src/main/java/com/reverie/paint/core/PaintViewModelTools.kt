@@ -613,7 +613,10 @@ internal fun PaintViewModel.touchEnd(
     if (render) {
         runCore(after = {
             scheduleRender(immediate = true)
-            refreshLayerThumbs()
+            val targetIds = if (currentLayerIndex >= 0) {
+                findLayerAndAncestorIds(currentLayerIndex).takeIf { it.isNotEmpty() }
+            } else null
+            refreshLayerThumbs(onlyLayerIds = targetIds)
         }) {
             drainPendingStrokeBatchOnRenderThread()
             drainMirrorBatchesOnRenderThread()

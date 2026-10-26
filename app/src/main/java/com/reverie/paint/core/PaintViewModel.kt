@@ -6364,6 +6364,8 @@ class PaintViewModel : ViewModel() {
     /** Layer thumbnails keyed by layer index (updated on the render thread). */
     val layerThumbs: Map<Int, Bitmap> = layerThumbStates
     internal var lastThumbRefreshNs = 0L
+    internal var pendingThumbLayerIds: MutableSet<Long>? = null
+    internal var pendingThumbRefreshAll: Boolean = false
     val blendModes =
         listOf(
             "normal" to "正常",

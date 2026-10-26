@@ -212,19 +212,6 @@ fun poseNeedsRelease(
 }
 
 /**
- * #81 预览提交门控：按住期间或预览清除被阻挡期间均为 false。
- */
-fun previewSubmitAllowed(held: Boolean, blockPreviewClear: Boolean): Boolean =
-    !held && !blockPreviewClear
-
-/**
- * 释放 hold 时决定是否置位 #81 预览清屏挡板：
- * 仅当前缓冲真正有墨时才置挡板 (防抹除真墨)；无墨时不阻挡 #81 (避免延迟回退)。
- */
-fun shouldSetPreviewClearBarrier(existingBarrier: Boolean, hasInkContent: Boolean): Boolean =
-    existingBarrier || hasInkContent
-
-/**
  * 烘焙完成后的提交动作决策（纯函数）：
  * - 未能全部烘焙：重试（不提交当前帧）；
  * - 笔画序号已过期或已放开 hold：丢弃（清除 busy，不提交已烤包，防止幽灵墨残留）；

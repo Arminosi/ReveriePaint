@@ -149,25 +149,6 @@ class UiClipDeltaTest {
     }
 
     // =========================================================================
-    // 3. previewSubmitAllowed truth table
-    // =========================================================================
-
-    @Test
-    fun `previewSubmitAllowed truth table`() {
-        // !held && !blockPreviewClear -> true
-        assertTrue(previewSubmitAllowed(held = false, blockPreviewClear = false))
-
-        // blockPreviewClear = true -> false
-        assertFalse(previewSubmitAllowed(held = false, blockPreviewClear = true))
-
-        // held = true -> false
-        assertFalse(previewSubmitAllowed(held = true, blockPreviewClear = false))
-
-        // held = true && blockPreviewClear = true -> false
-        assertFalse(previewSubmitAllowed(held = true, blockPreviewClear = true))
-    }
-
-    // =========================================================================
     // 4. clipChangeAction tests
     // =========================================================================
 
@@ -193,23 +174,6 @@ class UiClipDeltaTest {
         // Delta intersects headRect -> REBAKE
         val head = ClipRect(550f, 550f, 560f, 560f)
         assertEquals(ClipChangeAction.REBAKE, clipChangeAction(nonIntersectDelta, ink, head))
-    }
-
-    // =========================================================================
-    // 5. Barrier condition tests (has ink / no ink)
-    // =========================================================================
-
-    @Test
-    fun `barrier condition only blocks when front buffer has ink`() {
-        // No ink and no existing barrier -> false (do not block #81 preview)
-        assertFalse(shouldSetPreviewClearBarrier(existingBarrier = false, hasInkContent = false))
-
-        // Has ink -> true (barrier must be set to prevent clearing real ink)
-        assertTrue(shouldSetPreviewClearBarrier(existingBarrier = false, hasInkContent = true))
-
-        // Existing barrier retained even if current query sees no ink
-        assertTrue(shouldSetPreviewClearBarrier(existingBarrier = true, hasInkContent = false))
-        assertTrue(shouldSetPreviewClearBarrier(existingBarrier = true, hasInkContent = true))
     }
 
     // =========================================================================

@@ -822,7 +822,7 @@ class CanvasTouchView(context: Context) : View(context) {
                 if (isSpaceDragging) systemGrabPointer ?: systemHandPointer else systemHandPointer ?: systemDefaultPointer
             } else {
                 val tool = this.tool
-                val hideCursor = (tool == Tool.BRUSH || tool == Tool.ERASER || tool == Tool.SMUDGE || tool == Tool.LIQUIFY) &&
+                val hideCursor = (effTool() == Tool.BRUSH || effTool() == Tool.ERASER || effTool() == Tool.SMUDGE || effTool() == Tool.LIQUIFY) &&
                     (vm?.cursorStyleMode != 4)
                 if (hideCursor && systemNullPointer != null) systemNullPointer else systemDefaultPointer
             }
@@ -1004,7 +1004,7 @@ class CanvasTouchView(context: Context) : View(context) {
         isPendingEdgeFinger = false
         val v = vm ?: return
         val canEyedrop = v.longPressEyedropperEnabled &&
-            (tool == Tool.BRUSH || tool == Tool.ERASER || tool == Tool.SMUDGE || tool == Tool.LIQUIFY)
+            (effTool() == Tool.BRUSH || effTool() == Tool.ERASER || effTool() == Tool.SMUDGE || effTool() == Tool.LIQUIFY)
         if (canEyedrop) {
             isPendingLongPress = true
             activeLongPressToken = longPressToken
@@ -1062,35 +1062,8 @@ class CanvasTouchView(context: Context) : View(context) {
     }
 
     // STAMP 笔画级位图缓存引用 (单笔笔画期间复用, 避免在 120Hz/240Hz MOVE 热路径重复查表与分配 Key)
-    private var activeStrokeStampBitmap: android.graphics.Bitmap? = null
     private var predictedPressure: Float = 1f
-    private var hasDrawnPrediction: Boolean = false
     private val tempScalarPredPoint = FloatArray(3)
-    private val previewStrokePath = android.graphics.Path()
-    private var previewStrokeWidth: Float = 0f
-    private var previewStrokeColor: Int = 0
-    private var previewTipEndX: Float = 0f
-    private var previewTipEndY: Float = 0f
-    // 本帧预览包络起点 (回填段起点, 屏幕坐标): 与 previewTipEndX/Y 共同构成
-    // UI 避让包络矩形, 由 computePreviewStrokePath 每帧刷新。
-    private var previewBackfillStartX: Float = 0f
-    private var previewBackfillStartY: Float = 0f
-
-    // ---- STAMP 分级: 真实笔尖戳印预览 (水彩/纹理与排线/绘画类) ----
-    // tip 位图缓存 (按 tip 文件+颜色), dab 点集预分配 (热路径零分配)。
-    private val stampCache by lazy { BrushTipStampCache(context) }
-    private val previewStampX = FloatArray(64)
-    private val previewStampY = FloatArray(64)
-    private val previewStampSize = FloatArray(64)
-    private val previewStampAlpha = FloatArray(64)
-    private var previewStampCount = 0
-    private var previewStampBitmap: Bitmap? = null
-    private var previewUsedStamp = false
-    private val stampPaint = Paint(Paint.FILTER_BITMAP_FLAG)
-    private val stampDstRect = android.graphics.RectF()
-    // dab 弧长排布顶点收集
-    private val stampVX = FloatArray(128)
-    private val stampVY = FloatArray(128)
 
     // ---- 前缓冲 UI 裁剪快照 (Phase 1) ----
     // 所有面板的实测 bounds 由 Compose 侧 reportUiSlot 写入 vm.panelOcclusion;
@@ -1295,7 +1268,7 @@ class CanvasTouchView(context: Context) : View(context) {
             val elapsed = now - lastPredictionUptimeMs
             if (elapsed >= 50L) {
                 isWatchdogScheduled = false
-                if (hasPredictedScreenPoint || hasDrawnPrediction) {
+                if (hasPredictedScreenPoint) {
                     clearPredictionState(triggerInvalidate = true)
                 }
             } else {
@@ -1308,7 +1281,6 @@ class CanvasTouchView(context: Context) : View(context) {
     private fun abortAndClearRealInk() {
         realInk.release()
         realInk.cancelCatchUp()
-        realInk.blockPreviewClear = false
         frontBufferOverlay?.clearInk()
     }
 
@@ -1318,16 +1290,11 @@ class CanvasTouchView(context: Context) : View(context) {
             removeCallbacks(predictionStagnationRunnable)
             isWatchdogScheduled = false
         }
-        val had = hasPredictedScreenPoint || hasDrawnPrediction
+        val had = hasPredictedScreenPoint
         clearPredictedScreenPoint()
-        hasDrawnPrediction = false
-        hasActivePredictedTip = false
-        activePredictedTipScreenX = 0f
-        activePredictedTipScreenY = 0f
         smoothedCursorPressure = -1f
         priorStrokeScreenPos = Offset.Zero
         smoothedLeadMs = 20f
-        activeStrokeStampBitmap = null
         resetTouchHistory()
         try {
             huaweiPredictor?.reset()
@@ -1339,306 +1306,6 @@ class CanvasTouchView(context: Context) : View(context) {
         if (triggerInvalidate && had) {
             postInvalidateOnAnimation()
         }
-    }
-
-    /**
-     * 计算笔尖前瞻超前预测段与历史空窗回填路径。
-     *
-     * 回填锚点 = 屏幕上真实可见的墨迹末端 (渲染前沿 - 呈现延迟); 前向段仅在预测
-     * 通过门控时追加, 预测被抑制时仍保留回填段 (避免慢速/急转时预览整体消失)。
-     * 写入 [previewStrokeWidth]、[previewStrokeColor]、[previewTipEndX]、
-     * [previewTipEndY]，并填充 [outPath]; 两段都不可用时返回 false。
-     */
-    private fun computePreviewStrokePath(curPos: Offset, outPath: android.graphics.Path): Boolean {
-        val v = vm ?: return false
-        val fidelityTier = v.effectivePredictionTier
-        if (fidelityTier == PaintViewModel.PredictionFidelityTier.NONE) return false
-        if (!localIsTouching || tool != Tool.BRUSH) return false
-
-        val scale = (canvasZoom * canvasFitScale).coerceAtLeast(0.001f)
-        val cursorBrushSize = v.brushSize.toFloat()
-        // 笔压口径: 预测可用时用预测压力 (前瞻段), 预测被抑制时退回当前实际压力,
-        // 避免用过期 predictedPressure 画出宽度突变的回填段
-        val pressureForWidth = if (hasPredictedScreenPoint) predictedPressure else localPressure
-        val pFrac = if (v.brushPressureEnabled) pressureFractionCached(pressureForWidth) else 1f
-        val actualStrokeWidth = (cursorBrushSize * scale * pFrac).coerceAtLeast(1.5f)
-
-        val screenDiag = kotlin.math.hypot(width.toFloat(), height.toFloat())
-
-        // ---- 1. 回填空窗锚点: 屏幕上真实可见的墨迹末端 ----
-        // 引擎前沿 (currentRenderedFrontier) 只是"已渲染", 还要再过一个呈现周期
-        // (presentWait + 合成尾) 才上屏; 锚到渲染前沿会在 [可见末端 → 渲染前沿]
-        // 之间留下可见断裂。锚点取 (渲染前沿时间 - 呈现延迟), 无前沿信息时退回
-        // (最新样本 - 全链路延迟) 估计; 两者都偏保守 (宁可轻微重叠, 不留缝)。
-        var backfillStartStep = 0
-        val historyCount = touchHistoryCount
-        if (historyCount > 1) {
-            var estimatedStep = 0
-            val lagWindowMs = v.effectivePipelineDelayMs.coerceIn(4L, 80L)
-            val latestIdx = (touchHistoryHead - 1 + 64) % 64
-            val targetFrontierTime = touchHistoryTime[latestIdx] - lagWindowMs
-            for (step in 1 until historyCount) {
-                val idx = (touchHistoryHead - 1 - step + 128) % 64
-                if (touchHistoryTime[idx] >= targetFrontierTime) {
-                    estimatedStep = step
-                } else {
-                    break
-                }
-            }
-            // +1: 再深一个样本, 偏向重叠而非留缝 (估计误差一律倒向"多画一点")
-            backfillStartStep = (estimatedStep + 1).coerceAtMost(historyCount - 1)
-
-            val frontier = v.currentRenderedFrontier
-            if (frontier != null && !frontier.docX.isNaN() && !frontier.docY.isNaN() && frontier.timeMs > 0L) {
-                // 误差度量 (诊断): 估计前沿 vs 引擎渲染前沿的屏幕距离
-                ensureViewTransform()
-                viewTransform.docToScreen(frontier.docX, frontier.docY, frontierPointScratch)
-                val estIdx = (touchHistoryHead - 1 - estimatedStep + 128) % 64
-                PerfTrace.recordFrontierError(
-                    kotlin.math.hypot(
-                        touchHistoryX[estIdx] - frontierPointScratch[0],
-                        touchHistoryY[estIdx] - frontierPointScratch[1]
-                    )
-                )
-
-                // 可见末端时间 = 渲染前沿时间 - 呈现延迟, 取时间上最接近的样本再深一个样本;
-                // 上限 estimatedStep + 5 防止前沿过期 (渲染线程被占) 时回填过深
-                val anchorTimeMs = frontier.timeMs - v.presentLagEstimateMs
-                var matchedStep = -1
-                var bestDt = Long.MAX_VALUE
-                for (step in 1 until historyCount) {
-                    val idx = (touchHistoryHead - 1 - step + 128) % 64
-                    val dt = kotlin.math.abs(touchHistoryTime[idx] - anchorTimeMs)
-                    if (dt < bestDt) {
-                        bestDt = dt
-                        matchedStep = step
-                    }
-                }
-                if (matchedStep > 0 && bestDt <= 30L) {
-                    backfillStartStep = (matchedStep + 1)
-                        .coerceAtMost(historyCount - 1)
-                        .coerceAtMost(estimatedStep + 5)
-                }
-            }
-        }
-
-        // ---- 2. 前向延伸段 (仅预测可用且通过门控时) ----
-        // 预测被抑制 (慢速/急转/看门狗) 时不再整段清空预览: 回填段照画, 只少画前瞻尾。
-        var endX = curPos.x
-        var endY = curPos.y
-        var hasExtension = false
-        if (hasPredictedScreenPoint) {
-            val dx = predictedScreenX - curPos.x
-            val dy = predictedScreenY - curPos.y
-            val dist = kotlin.math.hypot(dx, dy)
-            val maxAllowedDiag = if (screenDiag > 0f) screenDiag / 6f else 600f
-            // 动态上限联动笔宽：大笔刷自适应拉伸，避免出现短于笔宽的圆钝团块
-            val maxDistPx = (68f * density).coerceAtLeast(actualStrokeWidth * 1.8f).coerceAtMost(maxAllowedDiag)
-            val minDistPx = 2.0f * density
-            val wildDiag = screenDiag > 0f && dist > maxAllowedDiag
-
-            if (dist in minDistPx..(maxDistPx * 2.5f) && !wildDiag && predictedPressure > 0.05f) {
-                val prevPos = priorStrokeScreenPos
-                var angleOk = true
-                if (prevPos != Offset.Zero && prevPos != curPos) {
-                    val v1x = curPos.x - prevPos.x
-                    val v1y = curPos.y - prevPos.y
-                    val len1 = kotlin.math.hypot(v1x, v1y)
-                    if (len1 > 1.5f && dist > 1.5f) {
-                        val dot = (v1x * dx + v1y * dy) / (len1 * dist)
-                        if (dot < 0.55f) { // 急转弯或大幅变向时抑制外推
-                            angleOk = false
-                        }
-                    }
-                }
-                if (angleOk) {
-                    val clampDist = dist.coerceAtMost(maxDistPx)
-                    endX = curPos.x + (dx / dist) * clampDist
-                    endY = curPos.y + (dy / dist) * clampDist
-                    hasExtension = true
-                }
-            }
-        }
-
-        // 回填段与前向段都不可用 → 无预览
-        if (backfillStartStep <= 0 && !hasExtension) return false
-
-        val baseColor = resolveBrushColorCached(v.brushColor)
-        val baseAlpha = (v.brushOpacity * (if (v.brushFlow > 0.0) v.brushFlow else 1.0)).coerceIn(0.05, 1.0).toFloat()
-
-        // ---- 2.5 STAMP 分级: 真实笔尖戳印 (水彩/纹理与排线/绘画类) ----
-        // tip 不可解码 (如 GIH 动画笔尖) 时回落 TIER_2 发丝线, 而非直接无预览。
-        previewUsedStamp = false
-        if (fidelityTier == PaintViewModel.PredictionFidelityTier.STAMP) {
-            if (computeStampDabs(
-                    v, backfillStartStep, hasExtension, endX, endY, curPos,
-                    actualStrokeWidth, baseColor, baseAlpha
-                )
-            ) {
-                previewUsedStamp = true
-                return true
-            }
-            // 回落: 走下方 TIER_2 发丝线逻辑
-        }
-
-        // ---- 3. 样式: 预览颜色/宽度对齐真墨, 消除"颜色浅"与笔触断裂的观感差 ----
-        // TIER_1 (纯色勾线类): 全宽全透明度 —— 预览即真墨观感, 衔接处无灰边;
-        //   重叠区仅一个呈现周期 (同色叠加不加深, 半透明笔刷至多瞬时轻微加深)
-        // TIER_2 (铅笔/纹理/低流量): 发丝级导引线 —— 真机结论: 加粗/提透明会放大
-        //   与真墨的形状/颜色差异, "对不上的错误反馈"比"无预览"更伤跟手感
-        val finalAlpha: Int
-        val finalStrokeWidth: Float
-        if (fidelityTier == PaintViewModel.PredictionFidelityTier.TIER_1) {
-            finalAlpha = (baseAlpha * 255f).toInt().coerceIn(30, 255)
-            finalStrokeWidth = actualStrokeWidth
-        } else {
-            finalAlpha = (baseAlpha * 0.35f * 255f).toInt().coerceIn(20, 190)
-            finalStrokeWidth = (actualStrokeWidth * 0.35f).coerceIn(1.5f * density, 4.0f * density)
-        }
-        val finalColorWithAlpha = (baseColor and 0x00FFFFFF) or (finalAlpha shl 24)
-
-        outPath.rewind()
-        var pathStarted = false
-        // UI 避让包络起点: 默认当前点, 有回填段时取回填起点
-        var segX0 = curPos.x
-        var segY0 = curPos.y
-        if (backfillStartStep > 0) {
-            val startIdx = (touchHistoryHead - 1 - backfillStartStep + 128) % 64
-            val fx = touchHistoryX[startIdx]
-            val fy = touchHistoryY[startIdx]
-            if (kotlin.math.hypot(curPos.x - fx, curPos.y - fy) < (screenDiag / 4f)) {
-                segX0 = fx
-                segY0 = fy
-                outPath.moveTo(fx, fy)
-                for (step in (backfillStartStep - 1) downTo 0) {
-                    val idx = (touchHistoryHead - 1 - step + 128) % 64
-                    outPath.lineTo(touchHistoryX[idx], touchHistoryY[idx])
-                }
-                outPath.lineTo(curPos.x, curPos.y)
-                pathStarted = true
-            }
-        }
-        if (!pathStarted) {
-            outPath.moveTo(curPos.x, curPos.y)
-        }
-
-        if (hasExtension) {
-            val prevPos = priorStrokeScreenPos
-            if (prevPos != Offset.Zero && prevPos != curPos) {
-                val ctrlX = curPos.x + (curPos.x - prevPos.x) * 0.5f
-                val ctrlY = curPos.y + (curPos.y - prevPos.y) * 0.5f
-                outPath.quadTo(ctrlX, ctrlY, endX, endY)
-            } else {
-                outPath.lineTo(endX, endY)
-            }
-        }
-
-        previewStrokeWidth = finalStrokeWidth
-        previewStrokeColor = finalColorWithAlpha
-        previewTipEndX = endX
-        previewTipEndY = endY
-        previewBackfillStartX = segX0
-        previewBackfillStartY = segY0
-        return true
-    }
-
-    /**
-     * STAMP 分级 dab 点位计算: 沿回填段+前向段按 brushSpacing 弧长排布,
-     * 逐点盖印真实笔尖位图 (BrushTipStampCache, 已按笔刷颜色着色)。
-     *
-     * tip 不可解码 (如 GIH 动画笔尖) → false, 调用方回落 TIER_2 发丝线。
-     * 热路径零分配: 顶点与 dab 点集全部预分配数组。
-     */
-    private fun computeStampDabs(
-        v: PaintViewModel,
-        backfillStartStep: Int,
-        hasExtension: Boolean,
-        endX: Float,
-        endY: Float,
-        curPos: Offset,
-        dabDiameterPx: Float,
-        baseColor: Int,
-        baseAlpha: Float,
-    ): Boolean {
-        val tipAsset = v.brushTipAsset
-        if (tipAsset.isBlank()) return false
-        val bmp = activeStrokeStampBitmap ?: try {
-            stampCache.get(tipAsset, baseColor)?.also { activeStrokeStampBitmap = it }
-        } catch (_: Throwable) {
-            null
-        } ?: return false
-
-        // 1. 收集顶点: 回填段历史点 (旧→新) → 当前点 → 预测延伸点
-        var vc = 0
-        if (backfillStartStep > 0) {
-            var step = backfillStartStep
-            while (step >= 0 && vc < 127) {
-                val idx = (touchHistoryHead - 1 - step + 128) % 64
-                stampVX[vc] = touchHistoryX[idx]
-                stampVY[vc] = touchHistoryY[idx]
-                vc++
-                step--
-            }
-        }
-        if (vc == 0 || stampVX[vc - 1] != curPos.x || stampVY[vc - 1] != curPos.y) {
-            if (vc < 127) {
-                stampVX[vc] = curPos.x
-                stampVY[vc] = curPos.y
-                vc++
-            }
-        }
-        if (hasExtension && vc < 128) {
-            stampVX[vc] = endX
-            stampVY[vc] = endY
-            vc++
-        }
-        if (vc == 0) return false
-
-        // 2. 弧长排布 dab: 间距 = brushSpacing × 笔宽 (Krita 语义), 钳制防爆量
-        val spacingPx = (v.brushSpacing.toFloat() * dabDiameterPx)
-            .coerceIn(dabDiameterPx * 0.12f, dabDiameterPx * 1.5f)
-            .coerceAtLeast(2f)
-        var count = 0
-        // 首 dab 落在起点
-        previewStampX[0] = stampVX[0]
-        previewStampY[0] = stampVY[0]
-        previewStampSize[0] = dabDiameterPx
-        previewStampAlpha[0] = baseAlpha
-        count = 1
-        var acc = 0f
-        var i = 1
-        while (i < vc && count < 64) {
-            val ex = stampVX[i]
-            val ey = stampVY[i]
-            var sx = previewStampX[count - 1]
-            var sy = previewStampY[count - 1]
-            var segLeft = kotlin.math.hypot(ex - sx, ey - sy)
-            while (acc + segLeft >= spacingPx && count < 64) {
-                val need = spacingPx - acc
-                val t = if (segLeft > 0f) need / segLeft else 0f
-                sx += (ex - sx) * t
-                sy += (ey - sy) * t
-                previewStampX[count] = sx
-                previewStampY[count] = sy
-                previewStampSize[count] = dabDiameterPx
-                previewStampAlpha[count] = baseAlpha
-                count++
-                segLeft = kotlin.math.hypot(ex - sx, ey - sy)
-                acc = 0f
-            }
-            acc += segLeft
-            i++
-        }
-        if (count == 0) return false
-
-        previewStampBitmap = bmp
-        previewStampCount = count
-        previewTipEndX = endX
-        previewTipEndY = endY
-        previewBackfillStartX = stampVX[0]
-        previewBackfillStartY = stampVY[0]
-        previewStrokeWidth = dabDiameterPx
-        return true
     }
 
     /**
@@ -2623,7 +2290,7 @@ class CanvasTouchView(context: Context) : View(context) {
 
     override fun onResolvePointerIcon(event: MotionEvent, pointerIndex: Int): PointerIcon? {
         val v = vm ?: return super.onResolvePointerIcon(event, pointerIndex)
-        val hideCursor = (tool == Tool.BRUSH || tool == Tool.ERASER || tool == Tool.SMUDGE || tool == Tool.LIQUIFY) &&
+        val hideCursor = (effTool() == Tool.BRUSH || effTool() == Tool.ERASER || effTool() == Tool.SMUDGE || effTool() == Tool.LIQUIFY) &&
             v.cursorStyleMode != 4
         val overUi = isHoverOverUi(event.x, event.y)
         return if (!overUi && hideCursor && systemNullPointer != null) {
@@ -2991,61 +2658,9 @@ class CanvasTouchView(context: Context) : View(context) {
         // - 前缓冲预测关闭: 上游原版 OEM 硬件预测渐隐尾线 (仅 OPPO 硬件预测器有效)
         // =========================================================================
         val hasSymmetry = v.drawingGuide.mode == GuideMode.SYMMETRY && v.drawingGuide.assistedDrawing
-        var drewPrediction = if (hasSymmetry) false else hasDrawnPrediction
-        if (v.frontBufferPredictionEnabled) {
-            if (hasSymmetry) {
-                // 对称模式: C++ SymmetryMirrorLive 独立出墨 + RealInkController 前缓冲直出。
-                // 抑制单侧单笔软件回退预览线 (避免出现单边假线)。
-                drewPrediction = false
-                hasDrawnPrediction = false
-                hasActivePredictedTip = false
-            } else if (FrontBufferProbe.softwareFallbackRequired(frontBufferOverlay != null, frontBufferOverlay?.canRenderPreview == true)) {
-                val fidelityTier = v.effectivePredictionTier
-                val isDrawingTool = tool == Tool.BRUSH
-                var fallbackDrew = false
-                // 不再要求 predPt != null: 预测被抑制时回填段照画 (修断裂/慢速无预览)
-                if (fidelityTier != PaintViewModel.PredictionFidelityTier.NONE &&
-                    localIsTouching && isDrawingTool && hasLocalCursorPos) {
-                    try {
-                        // 局部非空 Offset 为内联值类, 无堆分配
-                        if (computePreviewStrokePath(Offset(localCursorX, localCursorY), previewStrokePath)) {
-                            if (previewUsedStamp && previewStampBitmap != null && previewStampCount > 0) {
-                                // STAMP 分级软件回退: onDraw 内逐 dab 盖印 (与前缓冲同数据源)
-                                val bmp = previewStampBitmap!!
-                                for (i in 0 until previewStampCount) {
-                                    val s = previewStampSize[i]
-                                    if (s <= 0f) continue
-                                    stampPaint.alpha =
-                                        (previewStampAlpha[i] * 255f).toInt().coerceIn(0, 255)
-                                    val half = s / 2f
-                                    stampDstRect.set(
-                                        previewStampX[i] - half, previewStampY[i] - half,
-                                        previewStampX[i] + half, previewStampY[i] + half
-                                    )
-                                    canvas.drawBitmap(bmp, null, stampDstRect, stampPaint)
-                                }
-                            } else {
-                                tipShaderPaint.shader = null
-                                tipShaderPaint.color = previewStrokeColor
-                                tipShaderPaint.strokeWidth = previewStrokeWidth
-                                canvas.drawPath(previewStrokePath, tipShaderPaint)
-                            }
-                            fallbackDrew = true
-                            activePredictedTipScreenX = previewTipEndX
-                            activePredictedTipScreenY = previewTipEndY
-                            hasActivePredictedTip = true
-                        }
-                    } catch (_: Throwable) {}
-                }
-                drewPrediction = fallbackDrew
-                hasDrawnPrediction = fallbackDrew
-                if (!fallbackDrew) {
-                    hasActivePredictedTip = false
-                }
-            }
-        } else if (v.stylusStrokePredictionEnabled && v.isCurrentBrushPredictionEligible) {
+        if (!v.frontBufferPredictionEnabled && v.stylusStrokePredictionEnabled && v.isCurrentBrushPredictionEligible) {
             // 上游原版: OEM 硬件预测尾线 (实时预测未来 15~20ms 笔尖切线, 微羽化渐隐)
-            val isDrawingTool = tool == Tool.BRUSH || tool == Tool.ERASER
+            val isDrawingTool = effTool() == Tool.BRUSH || effTool() == Tool.ERASER
             if (localIsTouching && isDrawingTool && hasPredictedScreenPoint && hasLocalCursorPos) {
                 try {
                     val dx = predictedScreenX - localCursorX
@@ -3258,11 +2873,7 @@ class CanvasTouchView(context: Context) : View(context) {
         lqRingValid = false
         if (shouldShow && isDrawTool && v.cursorStyleMode != 4) {
             // 绘画中且前缓冲预测生效时，光标圆心自动对齐至预测延伸笔尖 (对称模式下不使用预测笔尖)
-            val effectiveCursorPos = if (!hasSymmetry && v.frontBufferPredictionEnabled && localIsTouching && drewPrediction && hasActivePredictedTip) {
-                Offset(activePredictedTipScreenX, activePredictedTipScreenY)
-            } else {
-                pos
-            }
+            val effectiveCursorPos = pos
 
             val scale = (canvasZoom * canvasFitScale).coerceAtLeast(0.001f)
             val cursorBrushSize = when {
@@ -3274,7 +2885,7 @@ class CanvasTouchView(context: Context) : View(context) {
             val pressureFraction = if (localIsTouching) {
                 if (v.frontBufferPredictionEnabled) {
                     // 前缓冲预测: 预测压力 + EMA 阻尼 (防光标环呼吸抖动)
-                    val targetPressure = if (drewPrediction && predictedPressure.isFinite()) predictedPressure else localPressure
+                    val targetPressure = localPressure
                     smoothedCursorPressure = if (smoothedCursorPressure < 0f) {
                         targetPressure
                     } else {
@@ -3592,7 +3203,6 @@ class CanvasTouchView(context: Context) : View(context) {
     }
 
     private fun armRealInkHold(v: PaintViewModel, hasSymmetry: Boolean, x: Float, y: Float, pressure: Float) {
-        realInk.blockPreviewClear = false
         // 透光台对位模式: 前缓冲置顶会盖住 ShiftTraceOverlay, 统一不按住真墨,
         // 走 #81 前沿预览 + 主画布实时刷新。透明/不透明画布行为一致。
         if (v.anim.shiftTraceActive) {
@@ -3605,7 +3215,8 @@ class CanvasTouchView(context: Context) : View(context) {
         latchFrontBufferReady(v)
         var allowed = v.frontBufferPredictionEnabled && (!hasSymmetry || v.mirrorGate.isQueueing) &&
             v.displayTiles.drawable() != null && FrontBufferProbe.realInkHoldAllowed() &&
-            strokeFbReady && !v.anim.shiftTraceActive
+            strokeFbReady && !v.anim.shiftTraceActive &&
+            RealInkHoldPolicy.isRealInkTool(tool, effTool())
         // compose: 覆盖层 (像素网格/绘图辅助线/动态导引线/光标) 由前缓冲按窗口同一顺序画进去 ——
         // 不挖孔、不建掩码、不让窗口重画、吸附线也按住。只有蚂蚁线可见或画布旋转/镜像时这一笔退回 H-min。
         val modeFlag = FrontBufferFeatureFlags.holeMode
@@ -3712,7 +3323,7 @@ class CanvasTouchView(context: Context) : View(context) {
      */
     private fun dynamicGuideAbortsFrame(v: PaintViewModel): Boolean {
         val g = v.drawingGuide
-        val assistTool = tool == Tool.BRUSH || tool == Tool.ERASER || tool == Tool.SMUDGE
+        val assistTool = effTool() == Tool.BRUSH || effTool() == Tool.ERASER || effTool() == Tool.SMUDGE
         return g.mode == GuideMode.PERSPECTIVE && g.perspective3d && g.assistedDrawing && localIsTouching &&
             strokeStarted && assistTool
     }
@@ -3840,7 +3451,7 @@ class CanvasTouchView(context: Context) : View(context) {
 
     /** 预测笔尖圆点只给纯色高不透明的一级预测笔刷 (半透明/水彩/纹理笔刷上画点会露馅)。 */
     private fun predictedTipEligible(v: PaintViewModel): Boolean =
-        tool == Tool.BRUSH && effTool() == Tool.BRUSH &&
+        RealInkHoldPolicy.isRealInkTool(tool, effTool()) &&
             v.effectivePredictionTier == PaintViewModel.PredictionFidelityTier.TIER_1 &&
             v.brushOpacity >= 0.85 && (v.brushFlow <= 0.0 || v.brushFlow >= 0.85)
 
@@ -4056,7 +3667,7 @@ class CanvasTouchView(context: Context) : View(context) {
         val guide = v.drawingGuide
         // 注意: 不能复用上面 1.5 段那支 isDrawingTool(它不含 SMUDGE) —— 两者语义不同,
         // 合并上游 1.3.3 时曾因此产生重复声明。
-        val isGuideAssistTool = tool == Tool.BRUSH || tool == Tool.ERASER || tool == Tool.SMUDGE
+        val isGuideAssistTool = effTool() == Tool.BRUSH || effTool() == Tool.ERASER || effTool() == Tool.SMUDGE
         if (guide.mode != GuideMode.OFF && guide.assistedDrawing && localIsTouching && strokeStarted && isGuideAssistTool) {
             val maxExt = maxOf(v.docWidth, v.docHeight).toFloat() * 50f + 500_000f
             when (guide.mode) {
@@ -4461,7 +4072,7 @@ class CanvasTouchView(context: Context) : View(context) {
 
     fun onDirectHover(localX: Float, localY: Float, actionMasked: Int) {
         val v = vm ?: return
-        val hideCursor = (tool == Tool.BRUSH || tool == Tool.ERASER || tool == Tool.SMUDGE || tool == Tool.LIQUIFY) &&
+        val hideCursor = (effTool() == Tool.BRUSH || effTool() == Tool.ERASER || effTool() == Tool.SMUDGE || effTool() == Tool.LIQUIFY) &&
             v.cursorStyleMode != 4
 
         when (actionMasked) {
@@ -4526,7 +4137,7 @@ class CanvasTouchView(context: Context) : View(context) {
     // -------------------------------------------------------------
     override fun onHoverEvent(event: MotionEvent): Boolean {
         val v = vm ?: return super.onHoverEvent(event)
-        val hideCursor = (tool == Tool.BRUSH || tool == Tool.ERASER || tool == Tool.SMUDGE || tool == Tool.LIQUIFY) &&
+        val hideCursor = (effTool() == Tool.BRUSH || effTool() == Tool.ERASER || effTool() == Tool.SMUDGE || effTool() == Tool.LIQUIFY) &&
             v.cursorStyleMode != 4
 
         when (event.actionMasked) {
@@ -4637,7 +4248,7 @@ class CanvasTouchView(context: Context) : View(context) {
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                     val v = vm
-                    val hideCursor = (tool == Tool.BRUSH || tool == Tool.ERASER || tool == Tool.SMUDGE || tool == Tool.LIQUIFY) &&
+                    val hideCursor = (effTool() == Tool.BRUSH || effTool() == Tool.ERASER || effTool() == Tool.SMUDGE || effTool() == Tool.LIQUIFY) &&
                         (v?.cursorStyleMode != 4)
                     val targetIcon = if (v?.isSpacePanning == true) {
                         if (isSpaceDragging) systemGrabPointer ?: systemHandPointer else systemHandPointer ?: systemDefaultPointer
@@ -4993,7 +4604,7 @@ class CanvasTouchView(context: Context) : View(context) {
             // 240Hz 的 ACTION_MOVE 上只在 tracker.version 变化时重建。
             if (isDown) rebuildUiExclusionSnapshot()
 
-            val hideCursor = (tool == Tool.BRUSH || tool == Tool.ERASER || tool == Tool.SMUDGE || tool == Tool.LIQUIFY) &&
+            val hideCursor = (effTool() == Tool.BRUSH || effTool() == Tool.ERASER || effTool() == Tool.SMUDGE || effTool() == Tool.LIQUIFY) &&
                 v.cursorStyleMode != 4
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 if (hideCursor && systemNullPointer != null && pointerIcon != systemNullPointer) {
@@ -5003,7 +4614,7 @@ class CanvasTouchView(context: Context) : View(context) {
 
             val canEyedrop = v.longPressEyedropperEnabled &&
                 (!v.penOnlyMode || v.penModeStylusEyedropperEnabled) &&
-                (tool == Tool.BRUSH || tool == Tool.ERASER || tool == Tool.SMUDGE || tool == Tool.LIQUIFY)
+                (effTool() == Tool.BRUSH || effTool() == Tool.ERASER || effTool() == Tool.SMUDGE || effTool() == Tool.LIQUIFY)
 
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
@@ -5027,7 +4638,7 @@ class CanvasTouchView(context: Context) : View(context) {
                     priorStrokeScreenPos = screenPos
                     val downP = pressure.coerceIn(0.01f, 1f)
                     val hasSymmetry = v.drawingGuide.mode == GuideMode.SYMMETRY && v.drawingGuide.assistedDrawing
-                    if (!hasSymmetry && v.frontBufferPredictionEnabled && tool == Tool.BRUSH && screenPos.x.isFinite() && screenPos.y.isFinite()) {
+                    if (!hasSymmetry && v.frontBufferPredictionEnabled && RealInkHoldPolicy.isRealInkTool(tool, effTool()) && screenPos.x.isFinite() && screenPos.y.isFinite()) {
                         universalPredictor.addPoint(screenPos.x, screenPos.y, downP, event.eventTime)
                         recordTouchSample(screenPos.x, screenPos.y, event.eventTime)
                     }
@@ -5087,7 +4698,7 @@ class CanvasTouchView(context: Context) : View(context) {
                     setLocalCursorPos(screenPos.x, screenPos.y)
                     localIsTouching = true
                     // 仅在非笔刷工具、光标跟随模式、绘图辅助生效或预测延伸激活时在 UI 线程重绘
-                    val isDrawingTool = tool == Tool.BRUSH || tool == Tool.ERASER || tool == Tool.SMUDGE
+                    val isDrawingTool = effTool() == Tool.BRUSH || effTool() == Tool.ERASER || tool == Tool.SMUDGE
                     if (!isDrawingTool) {
                         invalidate()
                     } else if (!realInk.wantsHold()) {
@@ -5095,7 +4706,7 @@ class CanvasTouchView(context: Context) : View(context) {
                         val cursorMode = if (isEraser) v.eraserCursorMode else v.brushCursorMode
                         val hasAssist = v.drawingGuide.mode != GuideMode.OFF && v.drawingGuide.assistedDrawing
                         val predictionVisualActive = if (v.frontBufferPredictionEnabled) {
-                            hasPredictedScreenPoint || hasDrawnPrediction
+                            hasPredictedScreenPoint
                         } else {
                             v.isCurrentBrushPredictionEligible && hasPredictedScreenPoint
                         }
@@ -5697,7 +5308,7 @@ class CanvasTouchView(context: Context) : View(context) {
         val docPos = screenToDoc(screenPos)
         val isTouchSlideQuickMenu = v.gestureConfig.getTrigger(com.reverie.paint.model.GestureAction.QUICK_MENU) ==
             com.reverie.paint.model.GestureTrigger.SINGLE_FINGER_TOUCH_SLIDE
-        val isDrawingTool = tool == Tool.BRUSH || tool == Tool.ERASER || tool == Tool.SMUDGE || tool == Tool.LIQUIFY
+        val isDrawingTool = effTool() == Tool.BRUSH || effTool() == Tool.ERASER || effTool() == Tool.SMUDGE || effTool() == Tool.LIQUIFY
         val canEyedrop = (v.longPressEyedropperEnabled || v.gestureConfig.getActionForTrigger(com.reverie.paint.model.GestureTrigger.SINGLE_FINGER_LONG_PRESS) == com.reverie.paint.model.GestureAction.EYEDROPPER) && isDrawingTool
         val isPenOnlyPan = !isTouchSlideQuickMenu && v.penOnlyMode && v.penModeSingleFingerPanEnabled && (
             tool.group == ToolGroup.BRUSH ||
@@ -5731,7 +5342,7 @@ class CanvasTouchView(context: Context) : View(context) {
                     return true
                 }
                 val hasSymmetry = v.drawingGuide.mode == GuideMode.SYMMETRY && v.drawingGuide.assistedDrawing
-                if (!hasSymmetry && v.frontBufferPredictionEnabled && tool == Tool.BRUSH && screenPos.x.isFinite() && screenPos.y.isFinite()) {
+                if (!hasSymmetry && v.frontBufferPredictionEnabled && RealInkHoldPolicy.isRealInkTool(tool, effTool()) && screenPos.x.isFinite() && screenPos.y.isFinite()) {
                     universalPredictor.addPoint(screenPos.x, screenPos.y, 1f, event.eventTime)
                     recordTouchSample(screenPos.x, screenPos.y, event.eventTime)
                 }
@@ -6544,7 +6155,7 @@ class CanvasTouchView(context: Context) : View(context) {
                 // 双系统分派:
                 // - 前缓冲预测开启 (默认): 卡尔曼训练 + 空窗回填 + 前缓冲直出 (本次低延迟技术)
                 // - 前缓冲预测关闭: 上游原版"超低延迟笔迹预测" (OEM 硬件预测器渐隐尾线, 仅 OPPO 有效)
-                val frontBufferPrediction = !hasSymmetry && v.frontBufferPredictionEnabled && tool == Tool.BRUSH
+                val frontBufferPrediction = !hasSymmetry && v.frontBufferPredictionEnabled && RealInkHoldPolicy.isRealInkTool(tool, effTool())
                 val fidelityTier = if (frontBufferPrediction) v.effectivePredictionTier else PaintViewModel.PredictionFidelityTier.NONE
 
                 if (frontBufferPrediction && fidelityTier != PaintViewModel.PredictionFidelityTier.NONE) {
@@ -6710,69 +6321,10 @@ class CanvasTouchView(context: Context) : View(context) {
                         }
                     }
 
-                    // 真墨按住期间前缓冲上是引擎真墨 (渲染线程呈现), 不再叠 #81 的前沿段假线;
-                    // 光标与预测笔尖在本分支末尾记下快照, 由前缓冲随墨一起画。
-                    // 门控: 按住期间或 blockPreviewClear 被置位时禁止提交 #81 预览 (plan 四.1/四.4).
-                    val previewAllowed = previewSubmitAllowed(realInk.held, realInk.blockPreviewClear)
-                    if (!previewAllowed && realInk.blockPreviewClear) {
-                        FbGeomLog.previewBlocked(realInk.currentStrokeSeq, realInk.blockPreviewClear)
-                    }
-                    if (previewAllowed && strokeFbReady &&
-                        frontBufferOverlay?.canRenderPreview == true &&
-                        pointerIndex in 0 until event.pointerCount
-                    ) {
-                        val curX = event.getX(pointerIndex)
-                        val curY = event.getY(pointerIndex)
-                        val curPos = Offset(curX, curY)
-                        var drew = false
-                        // 不再要求 hasPredictedScreenPoint: 预测被抑制时回填段照画
-                        if (computePreviewStrokePath(curPos, previewStrokePath)) {
-                            // 前缓冲层位于窗口 z 序最顶层 (setZOrderOnTop): 起点与终点都落在
-                            // 未渐隐 UI 内才整帧跳过; 靠近边缘时由预览包内的 clipOutUi 精准裁剪,
-                            // 避免整帧闪烁。几何统一来自 vm.panelOcclusion 快照。
-                            val overUi = isHoverOverUi(previewBackfillStartX, previewBackfillStartY) &&
-                                isHoverOverUi(previewTipEndX, previewTipEndY)
-                            if (!overUi) {
-                                val clips = uiClipSnapshot
-                                if (previewUsedStamp && previewStampBitmap != null && previewStampCount > 0) {
-                                    // STAMP 分级: 真实笔尖戳印直出 (水彩/纹理/绘画类)
-                                    frontBufferOverlay?.renderStampPreview(
-                                        previewStampBitmap!!,
-                                        previewStampX, previewStampY,
-                                        previewStampSize, previewStampAlpha,
-                                        previewStampCount,
-                                        clips,
-                                    )
-                                } else {
-                                    frontBufferOverlay?.renderPreviewPath(
-                                        previewStrokePath, previewStrokeWidth, previewStrokeColor, clips,
-                                    )
-                                }
-                                drew = true
-                                activePredictedTipScreenX = previewTipEndX
-                                activePredictedTipScreenY = previewTipEndY
-                                hasActivePredictedTip = true
-                            }
-                        }
-                        if (!drew) {
-                            if (hasActivePredictedTip || hasDrawnPrediction) {
-                                frontBufferOverlay?.clearPreview()
-                            }
-                            hasActivePredictedTip = false
-                        }
-                        hasDrawnPrediction = drew
-                        // 前缓冲直出绕过 onDraw: 必须显式失效光标区域, 否则 onDraw 里的
-                        // 光标环得不到重绘调度, 跟随标记置位也"看似"不跟随
-                        // (handleToolMove 全程零 invalidate, PR 原生问题)。
-                        // 软件回退路径在 onDraw 内绘制, 自带重绘, 不受影响。
-                        // 局部失效 (非全屏), 120Hz 下开销可忽略。
+                    if (!realInk.held) {
                         invalidateCursor(
-                            if (drew) activePredictedTipScreenX
-                            else if (hasLocalCursorPos) localCursorX
-                            else Float.NaN,
-                            if (drew) activePredictedTipScreenY
-                            else if (hasLocalCursorPos) localCursorY
-                            else Float.NaN
+                            if (hasLocalCursorPos) localCursorX else Float.NaN,
+                            if (hasLocalCursorPos) localCursorY else Float.NaN
                         )
                     }
                 } else if (!v.frontBufferPredictionEnabled && isStylus && v.isCurrentBrushPredictionEligible) {
@@ -6844,20 +6396,12 @@ class CanvasTouchView(context: Context) : View(context) {
                         }
                     }
                     if (frontBufferOverlay != null) {
-                        if (hasActivePredictedTip || hasDrawnPrediction) {
-                            frontBufferOverlay?.clearPreview()
-                        }
-                        hasActivePredictedTip = false
-                        hasDrawnPrediction = false
+                        frontBufferOverlay?.clearPreview()
                     }
                 } else {
                     clearPredictedScreenPoint()
                     if (frontBufferOverlay != null) {
-                        if (hasActivePredictedTip || hasDrawnPrediction) {
-                            frontBufferOverlay?.clearPreview()
-                        }
-                        hasActivePredictedTip = false
-                        hasDrawnPrediction = false
+                        frontBufferOverlay?.clearPreview()
                     }
                 }
 
@@ -7668,8 +7212,7 @@ class CanvasTouchView(context: Context) : View(context) {
                 assistLockedRay = null
                 clearPredictionState(triggerInvalidate = true)
                 currentStrokeDocPos = Offset.Zero
-                realInk.blockPreviewClear = false
-            }
+                    }
             Tool.LIQUIFY -> {
                 if (strokeStarted) {
                     // Phase 3B: 抬笔要把没追完的剩余段一次性补齐(此时按常规补点规则覆盖整段,

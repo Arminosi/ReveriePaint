@@ -18,6 +18,13 @@ internal object RealInkHoldPolicy {
     fun shouldReleaseOnReject(held: Boolean, wantsHold: Boolean): Boolean = held && !wantsHold
 
     /**
+     * 判断当前工具是否为低延迟真墨支持的画笔工具。
+     * 侧键临时切橡皮 (tool=BRUSH, effTool=ERASER) 或当前为橡皮时一律返回 false。
+     */
+    fun isRealInkTool(tool: Tool, effTool: Tool): Boolean =
+        tool == Tool.BRUSH && effTool == Tool.BRUSH
+
+    /**
      * 抬笔追赶判定: 当且仅当笔已抬起、追赶已激活、目标版本号已落定且窗口已画到或超过目标版本时,
      * 才允许清空前缓冲。
      */

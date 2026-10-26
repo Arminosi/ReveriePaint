@@ -144,10 +144,6 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
     /** updateClipsAndRebake 专用 scratch 数组（UI 线程复用，零分配，不与渲染线程竞态）。 */
     private val rebakeBmpScratch = IntArray(4)
 
-    /** #81 预览清屏挡板：为 true 时禁止提交 #81 预览包清屏，防止抹除前缓冲真墨。抬笔或下一次落笔时复位。 */
-    @Volatile
-    var blockPreviewClear: Boolean = false
-
     fun setStrokeCompose(on: Boolean, decor: FrontBufferDecor?) {
         composeDecor = if (on) decor else null
         composeStroke = on
@@ -321,7 +317,6 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
         inkBoundB = Int.MIN_VALUE
         publishedInkBoundsPacked = 0L
         rebakePending = false
-        blockPreviewClear = false
         if (!hold) {
             held = false
             strokeHoles = null
@@ -398,7 +393,6 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
 
     /** 松开前缓冲 (抬笔、取消、让位给变换等)。任一线程可调。 */
     fun release() {
-        blockPreviewClear = shouldSetPreviewClearBarrier(blockPreviewClear, view.frontBufferOverlay?.hasInk == true)
         held = false
         uiClips = UiClipSnapshot.EMPTY
         cursorR = 0f
@@ -516,7 +510,7 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
         }
         if (anyFull) {
             // 网格重建/整块重写: 前缓冲上的墨与新瓦片不再同源, 这一笔剩下的部分交给主画布。
-            release()
+            releaseAndCatchUp()
             synchronized(pendingLock) { pendingCount = 0 }
             return false
         }

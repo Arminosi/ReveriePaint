@@ -104,6 +104,17 @@ python3 scripts/model/preview_cat_poses.py          # 产物在 build/3d-pose-re
 
 调姿态数值时先用它看一遍, 再改 `PosePresets.kt`。
 
+## 9. 猫猫耳骨轴心修正 (资产)
+
+原 `anime_cat.glb` 的 `earend` / `R_earend` 轴心在 y=0.577, 而耳朵几何最高点只有 0.573 —— 拖耳骨等于
+绕耳尖把耳朵当倒摆甩, 骨架覆盖层也像两根天线。`scripts/model/fix_cat_ears.py` 只改绑定姿态:
+把轴心移到耳根 (y≈0.455, 即耳区下四分位质心), 骨轴沿"耳根→耳尖", 局部 X 拉回世界 +X 附近,
+并重算两根骨的 inverseBind。
+
+- 静止姿态逐顶点不变: `world × inverseBind` 误差 < 3e-8, `Model3DTest` 的"静止姿态零形变"契约成立;
+- 骨骼名不变 (`earend` / `R_earend`), 既有工程与测试无需迁移;
+- 之后拖耳骨 = 绕耳根摆动, 覆盖层那两根线缩回耳内。
+
 ## 9. 仍可继续优化 (未做)
 
 1. 视口每个三角面一次 `canvas.drawPath`, 猫猫 9.5k 面约 4.7k 次调用/帧 —— 可用 `drawVertices` 批成 1 次

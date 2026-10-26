@@ -10,6 +10,7 @@ import android.graphics.Paint
 import android.graphics.Path
 import com.reverie.paint.model.*
 import kotlin.math.*
+import kotlin.math.roundToInt
 
 /**
  * 极速 120Hz 原生 Canvas 3D 实时投影渲染器
@@ -396,6 +397,7 @@ class Canvas3DDrawer {
     private var projectedCount = 0
     private var projectedJointIndices = IntArray(64)
     private var projectedJointNames: Array<String?> = arrayOfNulls(64)
+    private var projectedParentJoint: IntArray = IntArray(64)
     private var projectedX = FloatArray(64)
     private var projectedY = FloatArray(64)
     private var projectedDepth = FloatArray(64)
@@ -433,6 +435,8 @@ class Canvas3DDrawer {
         color = 0xF2F4F1DE.toInt()
         style = Paint.Style.FILL
     }
+    /** 标签文本复用, 避免每帧拼接字符串 (热路径) */
+    private val angleText = StringBuilder(32)
 
     private fun ensureJointCapacity(n: Int) {
         if (jointScreenX.size >= n) return
@@ -443,6 +447,7 @@ class Canvas3DDrawer {
         jointValid = BooleanArray(cap)
         projectedJointIndices = IntArray(cap)
         projectedJointNames = arrayOfNulls(cap)
+        projectedParentJoint = IntArray(cap)
         projectedX = FloatArray(cap)
         projectedY = FloatArray(cap)
         projectedDepth = FloatArray(cap)
@@ -451,6 +456,8 @@ class Canvas3DDrawer {
     /**
      * 按屏幕距离拾取关节; 距离接近时优先选择离相机更近 (深度更小) 的关节,
      * 避免多个关节重叠时总是选中先遍历到的那个。
+     *
+     * 关节圆点没打中时退化为"骨骼线段"拾取: 沿骨头拖动即可选中该骨 (子关节), 平板上更好点。
      */
     fun hitTestJoint(docX: Float, docY: Float, maxDist: Float = 36f): String? {
         var bestIdx = -1
@@ -472,7 +479,39 @@ class Canvas3DDrawer {
                 bestDepth = depth
             }
         }
+        if (bestIdx >= 0) return projectedJointNames[bestIdx]
+
+        // 骨段拾取: 点到线段距离, 阈值放宽到 1.7 倍
+        val segmentMax = maxDist * 1.7f
+        var bestSegmentDist = segmentMax
+        for (k in 0 until projectedCount) {
+            val parent = projectedParentJoint[k]
+            if (parent !in jointValid.indices || !jointValid[parent]) continue
+            val d = pointSegmentDistance(
+                docX, docY,
+                jointScreenX[parent], jointScreenY[parent],
+                projectedX[k], projectedY[k],
+            )
+            if (d < bestSegmentDist) {
+                bestSegmentDist = d
+                bestIdx = k
+            }
+        }
         return if (bestIdx >= 0) projectedJointNames[bestIdx] else null
+    }
+
+    private fun pointSegmentDistance(
+        px: Float, py: Float,
+        ax: Float, ay: Float,
+        bx: Float, by: Float,
+    ): Float {
+        val vx = bx - ax
+        val vy = by - ay
+        val lenSq = vx * vx + vy * vy
+        if (lenSq < 1e-4f) return hypot(px - ax, py - ay)
+        var t = ((px - ax) * vx + (py - ay) * vy) / lenSq
+        if (t < 0f) t = 0f else if (t > 1f) t = 1f
+        return hypot(px - (ax + vx * t), py - (ay + vy * t))
     }
 
     /**
@@ -521,6 +560,7 @@ class Canvas3DDrawer {
                 jointValid[j] = true
                 projectedJointIndices[projectedCount] = j
                 projectedJointNames[projectedCount] = jointName
+                projectedParentJoint[projectedCount] = skeleton.joints[j].parentIndex
                 projectedX[projectedCount] = jointScreenX[j]
                 projectedY[projectedCount] = jointScreenY[j]
                 projectedDepth[projectedCount] = jointDepth[j]
@@ -566,12 +606,21 @@ class Canvas3DDrawer {
             canvas.drawCircle(x, y, radius, jointStrokePaint)
         }
 
-        // 3. 选中关节的骨骼名标签 (便于确认正在调节哪根骨头)
+        // 3. 选中关节的骨骼名 + 当前角度标签 (拖动时能读到具体数值)
         if (selectedIndex >= 0 && selectedIndex < jointCount) {
             val name = skeleton.joints[selectedIndex].name
             if (name.isNotEmpty()) {
+                val pitch = state.jointAngles[name + "_p"] ?: 0f
+                val yaw = state.jointAngles[name + "_y"] ?: 0f
+                val roll = state.jointAngles[name + "_r"] ?: 0f
+                angleText.setLength(0)
+                angleText.append(name)
+                if (abs(pitch) >= 0.5f) angleText.append("  ").append(pitch.roundToInt())
+                if (abs(yaw) >= 0.5f) angleText.append("  ").append(yaw.roundToInt())
+                if (abs(roll) >= 0.5f) angleText.append("  ").append(roll.roundToInt())
+                val label = angleText.toString()
                 labelPaint.textSize = (docW * 0.016f).coerceIn(18f, 40f)
-                val textW = labelPaint.measureText(name)
+                val textW = labelPaint.measureText(label)
                 val x = jointScreenX[selectedIndex]
                 val y = jointScreenY[selectedIndex] - 34f
                 val padH = labelPaint.textSize * 0.4f
@@ -585,7 +634,7 @@ class Canvas3DDrawer {
                     padV * 2.2f,
                     labelBgPaint,
                 )
-                canvas.drawText(name, x - textW * 0.5f, y - padV * 0.6f, labelPaint)
+                canvas.drawText(label, x - textW * 0.5f, y - padV * 0.6f, labelPaint)
             }
         }
     }

@@ -282,6 +282,8 @@ class CanvasTouchView(context: Context) : View(context) {
     private var touch3DMidX = 0f
     private var touch3DMidY = 0f
     private var touch3DStartState: com.reverie.paint.model.Model3DState? = null
+    /** 骨骼模式下上一次点中骨骼的时间戳 (连点同一根骨头 = 归零该骨骼) */
+    private var lastBoneTapTime = 0L
     private val canvas3DDrawer = com.reverie.paint.core.gl3d.Canvas3DDrawer()
 
     // 触控交互锁 (手指接触期间，阻止外部 Compose 状态回冲覆盖)
@@ -4982,6 +4984,22 @@ class CanvasTouchView(context: Context) : View(context) {
                                 val relDocY = docPos.y - v.docHeight.toFloat() * 0.5f
                                 ensureViewTransform()
                                 val hit = canvas3DDrawer.hitTestJoint(relDocX, relDocY, maxDist = 36f / viewTransform.currentScale.coerceAtLeast(0.1f))
+                                // 连点同一根骨骼 = 归零该骨骼 (比划到面板更快)
+                                val now = System.currentTimeMillis()
+                                if (hit != null && hit == v.active3DSelectedJointName && now - lastBoneTapTime <= 350L) {
+                                    val cur = v.currentLayer3DState
+                                    if (cur != null) {
+                                        val keys = listOf("${hit}_p", "${hit}_y", "${hit}_r")
+                                        val kept = cur.jointAngles.filterKeys { it !in keys }
+                                        if (kept.size != cur.jointAngles.size) {
+                                            v.push3DUndoState(cur)
+                                            v.update3DState(cur.copy(jointAngles = kept))
+                                        }
+                                    }
+                                    lastBoneTapTime = 0L
+                                } else {
+                                    lastBoneTapTime = if (hit != null) now else 0L
+                                }
                                 v.active3DSelectedJointName = hit
                                 invalidate()
                             }

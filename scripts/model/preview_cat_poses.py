@@ -2,15 +2,18 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """猫猫 3D 姿态预览 / 校核工具
 
-用与 App 完全一致的数学 (FK + 线性混合蒙皮 + 预设角度表 + 整体升降) 离线形变内置猫猫模型,
-导出 OBJ 并用 Blender 渲染对照图, 用于人工核对姿态与"贴地"是否符合预期。
+用与 App 完全一致的数学 (拓扑序 FK + 线性混合蒙皮 + 预设角度表 + 骨骼平移 + 贴地升降)
+离线形变内置猫猫模型, 导出 OBJ 并用 Blender 渲染对照图, 同时给出"边拉伸度"指标 —— 姿态
+调参时用它替代真机肉眼试错。
 
 依赖: numpy, 可选 blender (在 PATH 中时自动渲染对照图)
 用法:
-    python3 scripts/model/preview_cat_poses.py
-    python3 scripts/model/preview_cat_poses.py --out build/3d-pose-review --no-render
+    python3 scripts/model/preview_cat_poses.py                        # 全部预设 + 渲染
+    python3 scripts/model/preview_cat_poses.py --presets sit,curl --views side,quarter
+    python3 scripts/model/preview_cat_poses.py --no-render            # 只看数值 (贴地/拉伸)
+    python3 scripts/model/preview_cat_poses.py --model build/3d-rig/anime_cat.spine_mid.glb
 
-注意: 本脚本内的预设数值与 TUNED 升降需要与 app/src/main/java/com/reverie/paint/model/PosePresets.kt 同步,
+注意: 本脚本内的预设数值需要与 app/src/main/java/com/reverie/paint/model/PosePresets.kt 同步,
 它只用于离线核对, 不参与 App 构建。
 """
 import argparse
@@ -24,7 +27,66 @@ import sys
 import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-GLB = os.path.join(ROOT, 'app/src/main/assets/3d_models/anime_cat.glb')
+DEFAULT_GLB = os.path.join(ROOT, 'app/src/main/assets/3d_models/anime_cat.glb')
+
+# ---------------------------------------------------------------------------
+# 与 PosePresets 猫猫分支同步的预设表 (角度单位: 度; 平移单位: 世界单位)
+#   p = pitch (绕骨骼局部 X), y = yaw (绕局部 Y), r = roll (绕局部 Z)
+# ---------------------------------------------------------------------------
+PRESETS = {
+    # 站姿: 尾巴微卷上扬, 其余全零 = 绑定姿态
+    'stand': {},
+    # 端坐: 骨盆坐到后脚上, 脊柱立起, 前腿竖直支撑, 后腿折在体侧, 尾巴上翘
+    # (cat_pose_solver.py 解出; 与 PosePresets.kt 的 SIT 一致)
+    'sit': dict(hip=-6.7, spine=-35.7, chest=-12.2, neck=54.9, head=-27.1,
+                flsh=54.7, frsh=54.7,
+                hlleg=-74.4, hrleg=-74.3, hlshank=119.2, hrshank=119.2,
+                hlfoot=-105.3, hrfoot=-105.3, tailp=30, tailside=20),
+    # 农民揣 (卧姿): 躯干沉伏, 前肢收拢于胸下, 后肢折进腹下, 尾巴贴体
+    'loaf': dict(hip=-12, spine=-4, chest=8, head=-6,
+                 flsh=42, flleg=-68, flpaw=26, hlleg=-52, hlshank=70, hlfoot=-22,
+                 tailp=-25, tailside=30),
+    'walk': dict(hip=3, spine=-3, chest=3, neck=2, head=2,
+                 flsh=-12, flleg=-18, flpaw=10, frsh=10, frleg=14, frpaw=-6,
+                 hlleg=12, hlshank=-8, hrleg=-10, hrshank=10, tailp=25, tailside=12),
+    # 趴伏入睡: 全身趴到地面, 前腿折进胸下, 头歪向一侧搁在前爪之间, 尾巴绕到体侧
+    'curl': dict(hip=11.3, spine=-11.7, chest=-46.2, neck=61.9, head=-32.1, headyaw=32,
+                 flsh=74.6, frsh=74.6, flleg=32.9, frleg=32.9, flpaw=-60.8, frpaw=-60.8,
+                 hlleg=32.0, hrleg=32.0, hlshank=7.3, hrshank=7.3,
+                 hlfoot=-50.6, hrfoot=-50.6, tailp=-18, tailside=62),
+    'pounce': dict(hip=14, spine=-6, chest=-10, neck=-6, head=6,
+                   flsh=-18, flleg=8, flpaw=8, hlleg=-20, hlshank=35, hlfoot=-10,
+                   tailp=10, tailside=18),
+    'rear': dict(hip=-20, spine=-8, chest=-10, neck=-6, head=-12,
+                 flsh=-55, flleg=-35, flpaw=-10, hlleg=10, hlshank=-10,
+                 tailp=-20, tailside=10),
+    # 回首张望: 头转向侧面, 尾巴甩向另一侧
+    'look': dict(hip=-4, spine=-4, chest=-2, neck=4, headyaw=45, tailp=20, tailside=30),
+    'stretch': dict(hip=10, spine=-8, chest=-18, neck=-5, head=18,
+                    flsh=-25, flleg=-10, flpaw=15, hlleg=15, hlshank=-10, hlfoot=5,
+                    tailp=40, tailside=0),
+}
+
+# 美术标定的整体升降: 已清空 —— 根骨平移会被贴地精确抵消, 所有姿态走几何自动贴地
+TUNED_SHIFT = {}
+
+# 语义名 -> 骨骼名别名表 (兼容旧版骨骼命名)
+ALIAS = {
+    'Hips': ['Hips', 'hips'], 'Spine': ['Spine', 'spine'],
+    'spine_mid': ['spine_mid', 'spinemid'],
+    'Chest': ['Chest', 'chest'], 'Neck': ['Neck', 'neck'], 'Head': ['Head', 'head'],
+    'l_front_shoulder': ['l_front_shoulder', 'frontleg'], 'r_front_shoulder': ['r_front_shoulder', 'R_frontleg'],
+    'l_front_leg': ['leftFrontLeg', 'LeftFrontLeg', 'l_front_leg', 'frontleg0'],
+    'r_front_leg': ['rightFrontLeg', 'RightFrontLeg', 'r_front_leg', 'R_frontleg0'],
+    'l_front_paw': ['l_front_paw', 'frontleg1', 'frontleg2'],
+    'r_front_paw': ['r_front_paw', 'R_frontleg1', 'R_frontleg2'],
+    'l_hind_thigh': ['leftHindLeg', 'LeftHindLeg', 'l_hind_thigh', 'backleg'],
+    'r_hind_thigh': ['rightHindLeg', 'RightHindLeg', 'r_hind_thigh', 'R_backleg'],
+    'l_hind_shank': ['l_hind_shank', 'backleg0'], 'r_hind_shank': ['r_hind_shank', 'R_backleg0'],
+    'l_hind_foot': ['l_hind_foot', 'backleg1', 'backleg2'], 'r_hind_foot': ['r_hind_foot', 'R_backleg1', 'R_backleg2'],
+    'tail1': ['Tail1', 'tail1', 'tail'], 'tail2': ['Tail2', 'tail2', 'tailstart'],
+    'tail3': ['Tail3', 'tail3'], 'tail4': ['Tail4', 'tail4'], 'tail5': ['tail5'],
+}
 
 
 def export_obj(path, verts, indices):
@@ -35,237 +97,225 @@ def export_obj(path, verts, indices):
             f.write('v %.6f %.6f %.6f\n' % (p[0], -p[2], p[1]))
         for t in tris:
             f.write('f %d %d %d\n' % (t[0] + 1, t[1] + 1, t[2] + 1))
+
+
 def load_glb(path):
-    data = open(path,'rb').read(); off = 12; js=None; bin_=None
+    data = open(path, 'rb').read()
+    off = 12
+    js = None
+    bin_ = None
     while off < len(data):
-        clen, ctype = struct.unpack_from('<II', data, off); off += 8
-        chunk = data[off:off+clen]; off += clen
-        if ctype == 0x4E4F534A: js = json.loads(chunk)
-        else: bin_ = chunk
+        clen, ctype = struct.unpack_from('<II', data, off)
+        off += 8
+        chunk = data[off:off + clen]
+        off += clen
+        if ctype == 0x4E4F534A:
+            js = json.loads(chunk)
+        else:
+            bin_ = chunk
     return js, bin_
 
+
 def accessor(js, bin_, idx):
-    acc = js['accessors'][idx]; bv = js['bufferViews'][acc['bufferView']]
-    bvoff = bv.get('byteOffset', 0); accoff = acc.get('byteOffset', 0)
-    ncomp = {'SCALAR':1,'VEC2':2,'VEC3':3,'VEC4':4,'MAT4':16}[acc['type']]
-    ct = acc['componentType']; count = acc['count']
-    csize = {5120:1,5121:1,5122:2,5123:2,5125:4,5126:4}[ct]
-    elem = csize*ncomp
-    stride = bv.get('byteStride') or elem
-    out = np.zeros((count, ncomp), dtype=np.float64)
-    for i in range(count):
-        base = bvoff+accoff+i*stride
-        for c in range(ncomp):
-            p = base + c*csize
-            if ct == 5126: out[i,c] = struct.unpack_from('<f', bin_, p)[0]
-            elif ct == 5121: out[i,c] = bin_[p]
-            elif ct == 5123: out[i,c] = struct.unpack_from('<H', bin_, p)[0]
-            elif ct == 5125: out[i,c] = struct.unpack_from('<I', bin_, p)[0]
-            elif ct == 5120: out[i,c] = struct.unpack_from('<b', bin_, p)[0]
-            elif ct == 5122: out[i,c] = struct.unpack_from('<h', bin_, p)[0]
+    a = js['accessors'][idx]
+    bv = js['bufferViews'][a['bufferView']]
+    n = {'SCALAR': 1, 'VEC2': 2, 'VEC3': 3, 'VEC4': 4, 'MAT4': 16}[a['type']]
+    ct = a['componentType']
+    cs = {5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4}[ct]
+    stride = bv.get('byteStride') or cs * n
+    base = bv.get('byteOffset', 0) + a.get('byteOffset', 0)
+    fmt = '<' + {5126: 'f', 5121: 'B', 5123: 'H', 5125: 'I', 5120: 'b', 5122: 'h'}[ct] * n
+    out = np.zeros((a['count'], n))
+    for k in range(a['count']):
+        out[k] = struct.unpack_from(fmt, bin_, base + k * stride)
     return out
 
+
 def node_local(n):
-    m = np.eye(4)
-    if 'matrix' in n: return np.array(n['matrix']).reshape(4,4).T
-    T=np.eye(4); R=np.eye(4); S=np.eye(4)
-    if 'translation' in n: T[:3,3]=n['translation']
+    if 'matrix' in n:
+        return np.array(n['matrix']).reshape(4, 4).T
+    T = np.eye(4)
+    R = np.eye(4)
+    S = np.eye(4)
+    if 'translation' in n:
+        T[:3, 3] = n['translation']
     if 'rotation' in n:
-        x,y,z,w=n['rotation']
-        R[:3,:3]=np.array([
-          [1-2*(y*y+z*z), 2*(x*y-z*w), 2*(x*z+y*w)],
-          [2*(x*y+z*w), 1-2*(x*x+z*z), 2*(y*z-x*w)],
-          [2*(x*z-y*w), 2*(y*z+x*w), 1-2*(x*x+y*y)]])
-    if 'scale' in n: S[0,0],S[1,1],S[2,2]=n['scale']
-    return T@R@S
+        x, y, z, w = n['rotation']
+        R[:3, :3] = np.array([
+            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]])
+    if 'scale' in n:
+        S[0, 0], S[1, 1], S[2, 2] = n['scale']
+    return T @ R @ S
+
 
 def rot_m(deg, x, y, z):
-    r = np.radians(deg); c=np.cos(r); s=np.sin(r)
-    L=np.hypot(np.hypot(x,y),z); 
-    if L<1e-9: return np.eye(4)
-    nx,ny,nz = x/L, y/L, z/L; nc=1-c
-    m=np.eye(4)
-    m[0,0]=nx*nx*nc+c;   m[1,0]=ny*nx*nc+nz*s; m[2,0]=nz*nx*nc-ny*s
-    m[0,1]=nx*ny*nc-nz*s; m[1,1]=ny*ny*nc+c;    m[2,1]=nz*ny*nc+nx*s
-    m[0,2]=nx*nz*nc+ny*s; m[1,2]=ny*nz*nc-nx*s; m[2,2]=nz*nz*nc+c
+    r = np.radians(deg)
+    c = np.cos(r)
+    s = np.sin(r)
+    L = np.hypot(np.hypot(x, y), z)
+    if L < 1e-9:
+        return np.eye(4)
+    nx, ny, nz = x / L, y / L, z / L
+    nc = 1 - c
+    m = np.eye(4)
+    m[0, 0] = nx * nx * nc + c
+    m[1, 0] = ny * nx * nc + nz * s
+    m[2, 0] = nz * nx * nc - ny * s
+    m[0, 1] = nx * ny * nc - nz * s
+    m[1, 1] = ny * ny * nc + c
+    m[2, 1] = nz * ny * nc + nx * s
+    m[0, 2] = nx * nz * nc + ny * s
+    m[1, 2] = ny * nz * nc - nx * s
+    m[2, 2] = nz * nz * nc + c
     return m
 
-js, bin_ = load_glb(GLB)
-skin = js['skins'][0]; joint_nodes = skin['joints']
-nodes = js['nodes']
-invbinds = accessor(js, bin_, skin['inverseBindMatrices'])   # count x 16
-parent = {}
-for i,n in enumerate(nodes):
-    for c in n.get('children',[]): parent[c]=i
 
-names = [nodes[j].get('name','?') for j in joint_nodes]
-index_of = {n:i for i,n in enumerate(names)}
-locals_ = [node_local(nodes[j]) for j in joint_nodes]
+def trans_m(t):
+    m = np.eye(4)
+    m[:3, 3] = t
+    return m
 
-prim = js['meshes'][0]['primitives'][0]
-attrs = prim['attributes']
-P = accessor(js, bin_, attrs['POSITION'])
-N = accessor(js, bin_, attrs['NORMAL']) if 'NORMAL' in attrs else None
-J = accessor(js, bin_, attrs['JOINTS_0']).astype(int)
-W = accessor(js, bin_, attrs['WEIGHTS_0'])
-IDX = accessor(js, bin_, prim['indices']).astype(int).reshape(-1)
 
-# ---- 姿态映射 (与 PosePresets 猫猫分支一致) ----
-ALIAS = {
- 'Hips':['Hips','hips'], 'Spine':['Spine','spine'], 'Chest':['Chest','chest'],
- 'Neck':['Neck','neck'], 'Head':['Head','head'],
- 'l_front_shoulder':['l_front_shoulder','frontleg'], 'r_front_shoulder':['r_front_shoulder','R_frontleg'],
- 'l_front_leg':['leftFrontLeg','LeftFrontLeg','l_front_leg','frontleg0'],
- 'r_front_leg':['rightFrontLeg','RightFrontLeg','r_front_leg','R_frontleg0'],
- 'l_front_paw':['l_front_paw','frontleg1','frontleg2'],
- 'r_front_paw':['r_front_paw','R_frontleg1','R_frontleg2'],
- 'l_hind_thigh':['leftHindLeg','LeftHindLeg','l_hind_thigh','backleg'],
- 'r_hind_thigh':['rightHindLeg','RightHindLeg','r_hind_thigh','R_backleg'],
- 'l_hind_shank':['l_hind_shank','backleg0'], 'r_hind_shank':['r_hind_shank','R_backleg0'],
- 'l_hind_foot':['l_hind_foot','backleg1','backleg2'], 'r_hind_foot':['r_hind_foot','R_backleg1','R_backleg2'],
- 'tail1':['Tail1','tail1','tail'], 'tail2':['Tail2','tail2','tailstart'],
- 'tail3':['Tail3','tail3'], 'tail4':['Tail4','tail4'], 'tail5':['tail5'],
-}
+class Rig:
+    def __init__(self, path):
+        js, bin_ = load_glb(path)
+        skin = js['skins'][0]
+        self.joint_nodes = skin['joints']
+        nodes = js['nodes']
+        self.names = [nodes[j].get('name', '?') for j in self.joint_nodes]
+        self.index = {n: i for i, n in enumerate(self.names)}
+        invbinds = accessor(js, bin_, skin['inverseBindMatrices'])
 
-def pose_map(preset):
-    hipP=headP=spineArch=chestP=neckP=0.0
-    flSh=frSh=flLeg=frLeg=flPaw=frPaw=0.0
-    hlLeg=hrLeg=hlShank=hrShank=hlFoot=hrFoot=0.0
-    tailP, tailSide = 35.0, 8.0
-    if preset=='sit':
-        hipP=-15; spineArch=10; chestP=15; neckP=5; headP=-10
-        flSh=12; frSh=12; flLeg=-12; frLeg=-12
-        hlLeg=-42; hrLeg=-42; hlShank=55; hrShank=55; hlFoot=-25; hrFoot=-25
-        tailP=-30; tailSide=20
-    elif preset=='loaf':
-        hipP=-12; spineArch=-4; chestP=8; headP=-6
-        flSh=42; frSh=42; flLeg=-68; frLeg=-68; flPaw=26; frPaw=26
-        hlLeg=-52; hrLeg=-52; hlShank=70; hrShank=70; hlFoot=-22; hrFoot=-22
-        tailP=-25; tailSide=30
-    elif preset=='walk':
-        hipP=3; spineArch=-3; chestP=3; neckP=2; headP=2
-        flSh=-12; flLeg=-18; flPaw=10
-        frSh=10; frLeg=14; frPaw=-6
-        hlLeg=12; hlShank=-8
-        hrLeg=-10; hrShank=10
-        tailP=25; tailSide=12
-    elif preset=='rear':
-        hipP=-20; spineArch=-8; chestP=-10; neckP=-6; headP=-12
-        flSh=-55; frSh=-55; flLeg=-35; frLeg=-35; flPaw=-10; frPaw=-10
-        hlLeg=10; hrLeg=10; hlShank=-10; hrShank=-10
-        tailP=-20; tailSide=10
-    elif preset=='look':
-        hipP=-4; spineArch=-4; chestP=-2; neckP=4
-        tailP=20; tailSide=30
-    elif preset=='curl':
-        hipP=-18; spineArch=16; chestP=6; neckP=8; headP=16
-        flSh=42; frSh=42; flLeg=-68; frLeg=-68; flPaw=26; frPaw=26
-        hlLeg=-52; hrLeg=-52; hlShank=70; hrShank=70; hlFoot=-22; hrFoot=-22
-        tailP=-18; tailSide=50
-    elif preset=='pounce':
-        hipP=14; spineArch=-6; chestP=-10; neckP=-6; headP=6
-        flSh=-18; frSh=-18; flLeg=8; frLeg=8; flPaw=8; frPaw=8
-        hlLeg=-20; hrLeg=-20; hlShank=35; hrShank=35; hlFoot=-10; hrFoot=-10
-        tailP=10; tailSide=18
-    elif preset=='stretch':
-        hipP=10; spineArch=-8; chestP=-18; neckP=-5; headP=18
-        flSh=-25; frSh=-25; flLeg=-10; frLeg=-10; flPaw=15; frPaw=15
-        hlLeg=15; hrLeg=15; hlShank=-10; hrShank=-10; hlFoot=5; hrFoot=5
-        tailP=40; tailSide=0
+        parent = {}
+        for i, n in enumerate(nodes):
+            for c in n.get('children', []):
+                parent[c] = i
+        # 关节间父子关系 (跳过非关节祖先节点)
+        self.pj = []
+        for jn in self.joint_nodes:
+            p = parent.get(jn)
+            while p is not None and p not in self.joint_nodes:
+                p = parent.get(p)
+            self.pj.append(self.joint_nodes.index(p) if p is not None else -1)
+
+        order = []
+        state = [0] * len(self.joint_nodes)
+
+        def dfs(i):
+            if state[i]:
+                return
+            state[i] = 1
+            if self.pj[i] >= 0:
+                dfs(self.pj[i])
+            state[i] = 2
+            order.append(i)
+
+        for i in range(len(self.joint_nodes)):
+            dfs(i)
+        self.order = order
+        self.invbinds = np.array([invbinds[i].reshape(4, 4).T for i in range(len(self.joint_nodes))])
+        self.locals = [node_local(nodes[j]) for j in self.joint_nodes]
+
+        prim = js['meshes'][0]['primitives'][0]
+        attrs = prim['attributes']
+        self.P = accessor(js, bin_, attrs['POSITION'])
+        self.J = accessor(js, bin_, attrs['JOINTS_0']).astype(int)
+        self.W = accessor(js, bin_, attrs['WEIGHTS_0'])
+        self.IDX = accessor(js, bin_, prim['indices']).astype(int).reshape(-1, 3)
+        self.edges = np.unique(np.sort(np.vstack(
+            [self.IDX[:, [0, 1]], self.IDX[:, [1, 2]], self.IDX[:, [2, 0]]]), 1), axis=0)
+        self.rest_min = float(self.P[:, 1].min())
+
+    def deformed(self, euler_deg, translations=None):
+        """euler_deg: 骨骼名 -> (pitch, yaw, roll); translations: 骨骼名 -> (x,y,z) 局部平移"""
+        world = [np.eye(4)] * len(self.names)
+        for i in self.order:
+            loc = self.locals[i]
+            e = euler_deg.get(self.names[i])
+            tr = translations.get(self.names[i]) if translations else None
+            if tr is not None:
+                loc = loc @ trans_m(tr)
+            if e and any(e):
+                # 与 Kotlin 一致: local * Ry * Rx * Rz
+                loc = loc @ (rot_m(e[1], 0, 1, 0) @ rot_m(e[0], 1, 0, 0) @ rot_m(e[2], 0, 0, 1))
+            world[i] = (world[self.pj[i]] @ loc) if self.pj[i] >= 0 else loc
+        skin_mats = [world[i] @ self.invbinds[i] for i in range(len(world))]
+
+        out = np.zeros_like(self.P)
+        # 每根骨一组批量计算, 避免逐顶点 4 次小矩阵乘 (与 App 结果等价)
+        for k in range(4):
+            w = self.W[:, k:k + 1]
+            sel = w[:, 0] > 1e-5
+            if not sel.any():
+                continue
+            acc = np.zeros((len(self.P), 3))
+            for ji in np.unique(self.J[sel, k]):
+                rows = sel & (self.J[:, k] == ji)
+                M = skin_mats[ji]
+                acc[rows] = (M[:3, :3] @ self.P[rows].T).T + M[:3, 3]
+            out += w * acc
+        return out
+
+    def stretch(self, verts):
+        """边长拉伸度: 只统计足够长的边 (短于 0.008 的碎面/绒毛细节会把比例放大成噪声)"""
+        L0 = np.linalg.norm(self.P[self.edges[:, 0]] - self.P[self.edges[:, 1]], axis=1)
+        L1 = np.linalg.norm(verts[self.edges[:, 0]] - verts[self.edges[:, 1]], axis=1)
+        good = L0 > 0.008
+        r = L1[good] / L0[good]
+        return np.percentile(r, 50), np.percentile(r, 99), r.max(), int((r > 1.25).sum())
+
+
+def pose_map_dict(d):
+    g = lambda k: float(d.get(k, 0.0))
+    tail_p = float(d.get('tailp', 35.0))
+    tail_side = float(d.get('tailside', 8.0))
     vals = {
-      'Hips':(hipP,0,0), 'Spine':(spineArch,0,0), 'Chest':(chestP,0,0), 'Neck':(neckP,0,0),
-      'Head':(headP,0,0),
-      'l_front_shoulder':(flSh,0,0), 'r_front_shoulder':(frSh,0,0),
-      'l_front_leg':(flLeg,0,0), 'r_front_leg':(frLeg,0,0),
-      'l_front_paw':(flPaw,0,0), 'r_front_paw':(frPaw,0,0),
-      'l_hind_thigh':(hlLeg,0,0), 'r_hind_thigh':(hrLeg,0,0),
-      'l_hind_shank':(hlShank,0,0), 'r_hind_shank':(hrShank,0,0),
-      'l_hind_foot':(hlFoot,0,0), 'r_hind_foot':(hrFoot,0,0),
-      'tail1':(tailP,0,tailSide),
-      'tail2':(26+tailP*0.25,0,tailSide*0.8),
-      'tail3':(20+tailP*0.2,0,tailSide*0.6),
-      'tail4':(14+tailP*0.15,0,tailSide*0.4),
-      'tail5':(10+tailP*0.1,0,tailSide*0.2),
+        'Hips': (g('hip'), 0, 0),
+        'Spine': (g('spine'), 0, 0),
+        'spine_mid': (g('smid'), 0, 0),
+        'spine_mid': (g('smid'), 0, 0),
+        'Chest': (g('chest'), 0, 0),
+        'Neck': (g('neck'), 0, 0),
+        'Head': (g('head'), g('headyaw'), 0),
+        'l_front_shoulder': (g('flsh'), 0, 0), 'r_front_shoulder': (g('frsh'), 0, 0),
+        'l_front_leg': (g('flleg'), 0, 0), 'r_front_leg': (g('frleg'), 0, 0),
+        'l_front_paw': (g('flpaw'), 0, 0), 'r_front_paw': (g('frpaw'), 0, 0),
+        'l_hind_thigh': (g('hlleg'), 0, 0), 'r_hind_thigh': (g('hrleg'), 0, 0),
+        'l_hind_shank': (g('hlshank'), 0, 0), 'r_hind_shank': (g('hrshank'), 0, 0),
+        'l_hind_foot': (g('hlfoot'), 0, 0), 'r_hind_foot': (g('hrfoot'), 0, 0),
+        'tail1': (tail_p, 0, tail_side),
+        'tail2': (26 + tail_p * 0.25, 0, tail_side * 0.8),
+        'tail3': (20 + tail_p * 0.2, 0, tail_side * 0.6),
+        'tail4': (14 + tail_p * 0.15, 0, tail_side * 0.4),
+        'tail5': (10 + tail_p * 0.1, 0, tail_side * 0.2),
     }
     m = {}
-    for key,(p,y,r) in vals.items():
-        for nm in ALIAS[key]:
-            m[nm] = (p,y,r)
+    for key, (p, y, r) in vals.items():
+        for nm in ALIAS.get(key, [key]):
+            m[nm] = (p, y, r)
     return m
 
-def fk_and_skin(preset, shift):
-    eul = pose_map(preset)
-    world = [np.eye(4)]*len(joint_nodes)
-    # 拓扑序
-    order=[]; seen=set()
-    def visit(i):
-        if i in seen: return
-        p = index_of.get(nodes[joint_nodes[i]].get('name'))  # not used
-        seen.add(i); order.append(i)
-    # build parent index among joints
-    pj = {}
-    for i,jn in enumerate(joint_nodes):
-        p = parent.get(jn)
-        while p is not None and p not in joint_nodes: p = parent.get(p)
-        pj[i] = joint_nodes.index(p) if p is not None else -1
-    # topological
-    order=[]; state=[0]*len(joint_nodes)
-    def dfs(i):
-        if state[i]==2: return
-        if state[i]==1: return
-        state[i]=1
-        if pj[i]>=0: dfs(pj[i])
-        state[i]=2; order.append(i)
-    for i in range(len(joint_nodes)): dfs(i)
 
-    for i in order:
-        loc = locals_[i]
-        e = eul.get(names[i])
-        if e and any(e):
-            R = rot_m(e[1],0,1,0) @ rot_m(e[0],1,0,0) @ rot_m(e[2],0,0,1)
-            loc = loc @ R
-        world[i] = (world[pj[i]] @ loc) if pj[i]>=0 else loc
+def pose_map(preset):
+    return pose_map_dict(PRESETS[preset])
 
-    skin_mats = [world[i] @ invbinds[i].reshape(4,4).T for i in range(len(joint_nodes))]
-    V = P.copy()
-    out = np.zeros_like(V)
-    for v in range(len(V)):
-        p = np.array([V[v,0],V[v,1],V[v,2],1.0])
-        acc = np.zeros(3); tw = 0.0
-        for k in range(4):
-            w = W[v,k]
-            if w <= 0.001: continue
-            M = skin_mats[J[v,k]]
-            acc += w * (M[:3,:3] @ p[:3] + M[:3,3]); tw += w
-        if tw < 0.001: out[v] = V[v]
-        else: out[v] = acc / tw
-    out[:,1] += shift
-    return out, np.array([[skin_mats[0][0,0]]])  # dummy
 
-def bbox_min(v): return float(v[:,1].min())
-
-# 绑定姿态 (stand, 无偏移) 作为地面基准
-rest, _ = fk_and_skin('stand', 0.0)
-rest_min = bbox_min(rest)
-print('rest minY', rest_min)
-
-variants = {}
-for preset in ['stand','sit','loaf','stretch']:
-    raw, _ = fk_and_skin(preset, 0.0)
-    raw_min = bbox_min(raw)
-    computed = rest_min - raw_min
-    tuned = {'stand':0.0,'sit':-0.50,'loaf':-0.60,'stretch':-0.10}[preset]
-    for label, shift in (('tuned', tuned), ('auto', computed)):
-        v, _ = fk_and_skin(preset, shift)
-        variants[f'{preset}_{label}'] = v
-        print(preset, label, 'shift', round(shift,4), 'minY', round(bbox_min(v),4))
+def translations_for(preset):
+    """预设自带的骨骼平移 (与 PosePresets.buildTranslations 一致): 猫猫 Hips 局部 Y ≈ 世界上方"""
+    d = PRESETS[preset]
+    out = {}
+    if d.get('typh'):
+        out['Hips'] = (0.0, float(d['typh']), 0.0)
+    return out
 
 
 RENDER_TEMPLATE = r"""
 import bpy, math
 from mathutils import Vector
 OUT_DIR = {out_dir!r}
-GROUPS = {groups!r}
+JOBS = {jobs!r}
 GROUND_Z = {ground_z!r}
 
 def clear():
@@ -286,68 +336,89 @@ scene.render.resolution_x = 420
 scene.render.resolution_y = 360
 scene.world.color = (0.95, 0.95, 0.96)
 
-for name in GROUPS:
+CAMERAS = {{
+    'side':    ((3.6, 0.0, 0.15), (0, 0, -0.02)),
+    'quarter': ((2.6, -2.4, 1.15), (0, 0, -0.02)),
+    'front':   ((0.0, -3.6, 0.25), (0, 0, -0.02)),
+    'top':     ((0.0, -0.35, 3.4), (0, 0, -0.05)),
+}}
+
+for name, view in JOBS:
     clear()
     bpy.ops.mesh.primitive_plane_add(size=6, location=(0, 0, GROUND_Z))
     bpy.context.object.color = (0.42, 0.44, 0.47, 1)
-    bpy.ops.object.camera_add(location=(3.4, 0.0, 0.2))
+    bpy.ops.object.camera_add(location=CAMERAS[view][0])
     cam = bpy.context.object
     cam.data.lens = 55
-    look_at(cam, (0, 0, -0.02))
+    look_at(cam, CAMERAS[view][1])
     scene.camera = cam
     bpy.ops.wm.obj_import(filepath=OUT_DIR + '/' + name + '.obj', forward_axis='Y', up_axis='Z')
     obj = bpy.context.selected_objects[0]
     obj.color = (0.86, 0.84, 0.82, 1)
     for poly in obj.data.polygons:
         poly.use_smooth = False
-    cam.location = Vector((3.6, 0.0, 0.15))
-    look_at(cam, (0, 0, -0.02))
-    scene.render.filepath = OUT_DIR + '/' + name + '_side.png'
+    scene.render.filepath = OUT_DIR + '/' + name + '_' + view + '.png'
     bpy.ops.render.render(write_still=True)
 print('PREVIEW DONE')
 """
 
-def render_sheet(out_dir, names, ground_z):
+
+def render(out_dir, jobs, ground_z):
     if shutil.which('blender') is None:
         print('[preview] blender not found, skip rendering')
         return
     script = out_dir + '/_render.py'
     with open(script, 'w') as f:
-        f.write(RENDER_TEMPLATE.format(out_dir=out_dir, groups=names, ground_z=ground_z))
+        f.write(RENDER_TEMPLATE.format(out_dir=out_dir, jobs=jobs, ground_z=ground_z))
     subprocess.run(['blender', '-b', '--factory-startup', '-P', script], check=False)
     print('[preview] images in', out_dir)
 
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument('--model', default=DEFAULT_GLB)
+    ap.add_argument('--presets', default=','.join(PRESETS.keys()))
+    ap.add_argument('--views', default='side')
     ap.add_argument('--out', default=os.path.join(ROOT, 'build/3d-pose-review'))
     ap.add_argument('--no-render', action='store_true')
+    ap.add_argument('--poses-json', help='用 cat_pose_solver.py --emit 输出的姿态覆盖预设表')
     args = ap.parse_args()
     out_dir = os.path.abspath(args.out)
     os.makedirs(out_dir, exist_ok=True)
 
-    if not os.path.exists(GLB):
-        sys.exit('missing asset: ' + GLB)
+    if args.poses_json:
+        with open(args.poses_json) as f:
+            for k, v in json.load(f).items():
+                PRESETS[k] = v
+        print('[poses] 覆盖自', args.poses_json)
+    if not os.path.exists(args.model):
+        sys.exit('missing asset: ' + args.model)
+    rig = Rig(args.model)
+    print('[rig] %s: %d joints, has spine_mid = %s' %
+          (os.path.basename(args.model), len(rig.names), 'spine_mid' in rig.index))
+    print('[rig] rest minY =', round(rig.rest_min, 4))
 
-    rest, _ = fk_and_skin('stand', 0.0)
-    rest_min = bbox_min(rest)
-    print('rest minY =', round(rest_min, 4))
-
-    exported = []
-    for preset in ['sit', 'curl', 'rear', 'look', 'walk', 'pounce']:
-        raw, _ = fk_and_skin(preset, 0.0)
-        auto = rest_min - bbox_min(raw)
-        tuned = {'stand': 0.0, 'loaf': -0.60, 'curl': -0.45, 'stretch': -0.10}.get(preset, auto)
-        for label, shift in (('app', tuned), ('auto', auto)):
-            verts, _ = fk_and_skin(preset, shift)
-            name = '{}_{}'.format(preset, label)
-            export_obj(os.path.join(out_dir, name + '.obj'), verts, IDX)
-            exported.append(name)
-            print('  {:16s} shift={:+.4f} minY={:+.4f}'.format(name, shift, bbox_min(verts)))
+    jobs = []
+    for preset in args.presets.split(','):
+        eul = pose_map(preset)
+        tr = translations_for(preset)
+        raw = rig.deformed(eul, tr)
+        auto = rig.rest_min - float(raw[:, 1].min())
+        shift = TUNED_SHIFT.get(preset, auto)
+        # 贴地升降作用在形变结果上 (与 createDeformedMesh 的 groundShiftY 一致)
+        verts = raw.copy()
+        verts[:, 1] += shift
+        p50, p99, pmax, bad = rig.stretch(verts)
+        print('  %-8s shift=%+.4f minY=%+.4f  stretch p50 %.3f p99 %.3f max %.3f (>1.25: %d)'
+              % (preset, shift, float(verts[:, 1].min()), p50, p99, pmax, bad))
+        name = preset
+        export_obj(os.path.join(out_dir, name + '.obj'), verts, rig.IDX)
+        for view in args.views.split(','):
+            jobs.append((name, view))
 
     print('[preview] objs in', out_dir)
     if not args.no_render:
-        render_sheet(out_dir, exported, rest_min)
+        render(out_dir, jobs, rig.rest_min)
 
 
 if __name__ == '__main__':

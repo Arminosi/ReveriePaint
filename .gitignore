@@ -19,3 +19,7 @@ app/src/main/jniLibsNativeEmpty/
 *.apk
 .agents/
 aqtinstall.log
+
+# Python 脚本缓存 (scripts/model/*)
+__pycache__/
+*.pyc

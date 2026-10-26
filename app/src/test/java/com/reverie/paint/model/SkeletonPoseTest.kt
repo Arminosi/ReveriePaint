@@ -90,19 +90,45 @@ class SkeletonPoseTest {
     // ------------------------------------------------------------------
 
     @Test
-    fun `cat pose presets keep the art-tuned vertical placement`() {
+    fun `cat rig has a mid spine joint that actually bends the torso`() {
         val cat = catModel()
-        // 伏卧类 (loaf/curl) 与伸懒腰是美术标定过的整体升降; 端坐已改回几何贴地
-        val tuned = mapOf(
-            PosePresets.STAND to 0f,
-            PosePresets.STRETCH to -0.10f,
-        )
-        for ((preset, want) in tuned) {
-            val shift = PosePresets.groundShiftForPreset(cat, "cat", preset)
-            assertEquals("preset $preset shift", want, shift, 1e-4f)
+        val skeleton = cat.skeleton!!
+        val idx = skeleton.joints.indexOfFirst { it.name == "spine_mid" }
+        assertTrue("asset must carry the spine_mid joint (scripts/model/add_spine_mid.py)", idx >= 0)
+        // 静止姿态下权重和必须为 1, 否则躯干会被缩放
+        val weights = cat.jointWeights
+        assertNotNull("cat rig must be skinned", weights)
+        var worst = 0f
+        for (v in 0 until cat.baseMesh.vertexCount) {
+            var sum = 0f
+            for (k in 0 until 4) sum += weights!![v * 4 + k]
+            worst = maxOf(worst, abs(sum - 1f))
         }
-        // 端坐/农民揣/蜷缩: 靠骨盆平移 (Hips_ty) 压低身体后按几何贴地, 四爪回到地面线
-        for (preset in listOf(PosePresets.SIT, PosePresets.LOAF, PosePresets.CURL)) {
+        assertTrue("weight sums must be normalized (worst=$worst)", worst < 1e-3f)
+        // 脊柱中段俯仰必须真的改变躯干顶点 (资产若退回两段脊柱, 这条会失败)
+        val rest = cat.createDeformedMesh(emptyMap())
+        val bent = cat.createDeformedMesh(mapOf("spine_mid" to floatArrayOf(24f, 0f, 0f)))
+        var moved = 0
+        for (i in rest.positions.indices step 3) {
+            val d = abs(rest.positions[i] - bent.positions[i]) +
+                abs(rest.positions[i + 1] - bent.positions[i + 1]) +
+                abs(rest.positions[i + 2] - bent.positions[i + 2])
+            if (d > 1e-3f) moved++
+        }
+        assertTrue("spine_mid bend should move torso vertices (moved=$moved)",
+            moved > cat.baseMesh.vertexCount / 20)
+    }
+
+    @Test
+    fun `cat pose presets all ground the paws on the floor line`() {
+        val cat = catModel()
+        // 美术标定表已清空: 根骨平移会被贴地精确抵消, 所以所有姿态都走几何贴地,
+        // 爪子必须落在绑定姿态的地面基准线上 (端坐/趴睡靠折叠四肢真实降低身体)
+        for (preset in listOf(
+            PosePresets.STAND, PosePresets.SIT, PosePresets.LOAF, PosePresets.STRETCH,
+            PosePresets.WALK, PosePresets.CURL, PosePresets.POUNCE, PosePresets.REAR,
+            PosePresets.LOOK,
+        )) {
             val shift = PosePresets.groundShiftForPreset(cat, "cat", preset)
             val mesh = cat.createDeformedMesh(
                 PosePresets.buildEulerMap("cat", preset, emptyMap()),

@@ -31,7 +31,7 @@ object PosePresets {
 
     /** 姿态面板里由语义分支消费的键: 兜底解析必须跳过, 否则同一角度会被施加两次 */
     private val CAT_SEMANTIC_KEYS = setOf(
-        "cat_head_pitch", "cat_head_yaw", "cat_spine_arch",
+        "cat_head_pitch", "cat_head_yaw", "cat_spine_arch", "cat_spine_mid",
         "cat_fl_leg", "cat_fr_leg", "cat_hl_leg", "cat_hr_leg",
         "cat_tail_pitch", "cat_tail_yaw",
     )
@@ -52,13 +52,11 @@ object PosePresets {
      * 这三条是离线渲染校准过的构图参数 (见 docs/3D-SKELETON.md), 换猫猫资产时需要重新标定;
      * 其余组合走下面的几何自动贴地。
      */
-    private val TUNED_PRESET_SHIFT: Map<String, Map<String, Float>> = mapOf(
-        "cat" to mapOf(
-            // 端坐/伏卧现在由"骨盆下沉"(Hips_ty) 真正压低身体, 不再用整模型升降假动作;
-            // 只剩伸懒腰保留一点点构图微调
-            STRETCH to -0.10f,
-        ),
-    )
+    private val TUNED_PRESET_SHIFT: Map<String, Map<String, Float>> = emptyMap()
+
+    // 说明: 这张表保留机制但当前为空 —— 所有姿态都由下面的几何贴地处理。
+    // 根骨平移 (Hips_ty) 与整模型升降等价 (骨架整体平移, 贴地又会精确抵消),
+    // 所以"压低身体"只能靠折叠四肢的真实骨骼姿态, 不能再靠整体升降。
 
     fun isCat(modelType: String): Boolean = modelType.equals("cat", ignoreCase = true)
 
@@ -81,14 +79,8 @@ object PosePresets {
             if (tx == 0f && ty == 0f && tz == 0f) return
             map[bone] = floatArrayOf(tx, ty, tz)
         }
-        if (isCat(modelType)) {
-            // 预设自带的骨盆下沉 (猫猫 Hips 局部 Y 约等于世界上方)
-            when (posePreset.lowercase()) {
-                SIT -> put("Hips", 0f, -0.12f, 0f)
-                CURL -> put("Hips", 0f, -0.22f, 0f)
-                LOAF -> put("Hips", 0f, -0.20f, 0f)
-            }
-        }
+        // 注意: 不要给根骨 (Hips) 加预设平移 —— 根骨平移等于整模型平移, 贴地又会把它精确抵消,
+        // 看上去"什么都没发生"; 压低身体只能靠折叠四肢的真实姿态 (见 SIT/CURL)。
         for ((key, value) in jointAngles) {
             val (bone, axis) = when {
                 key.endsWith("_tx") -> key.removeSuffix("_tx") to 0
@@ -107,8 +99,9 @@ object PosePresets {
      * 猫猫蜷缩弯曲量 —— **暂时停用**。
      *
      * 程序化沿身体前向做圆弧弯曲时, 截面被按 cosθ 缩放却没有对应的工作空间校正,
-     * 躯干会被明显拉伸变形 (实机反馈"模型拉伸得不成样子")。真正的蜷缩要靠脊柱中段骨骼
-     * (spine_mid) 重蒙皮来弯, 不能用无权重约束的顶点弯曲硬掰。等待资产重绑后重写。
+     * 躯干会被明显拉伸变形 (实机反馈"模型拉伸得不成样子")。资产已重绑出脊柱中段骨
+     * spine_mid (见 scripts/model/add_spine_mid.py), 躯干改由真实骨骼弯折, 这条顶点弯曲路径
+     * 不再需要, 保留函数只为不改变既有调用签名。
      */
     fun catCurlBend(modelType: String, posePreset: String, jointAngles: Map<String, Float>): Float = 0f
 
@@ -184,7 +177,8 @@ object PosePresets {
         //   尾骨 pitch > 0 = 上翘, 左右摆走 roll (绕局部 Z, 绕局部 Y 只是沿骨轴扭转)
         // 数值由离线 IK 拟合得出: 目标是把四只爪子和骨盆压到同一水平面 (见 fit 脚本),
         // 拟合后 侧视图上四爪贴地、躯干角度正确, 不再是"腿在空中划水"。
-        var hipP = 0f; var headP = 0f; var spineArch = 0f; var chestP = 0f; var neckP = 0f
+        var hipP = 0f; var headP = 0f; var spineArch = 0f; var spineMid = 0f
+        var chestP = 0f; var neckP = 0f
         var flSh = 0f; var frSh = 0f; var flLeg = 0f; var frLeg = 0f
         var flPaw = 0f; var frPaw = 0f
         var hlLeg = 0f; var hrLeg = 0f
@@ -193,14 +187,15 @@ object PosePresets {
         var tailP = 35f; var tailSide = 8f
 
         when (posePreset.lowercase()) {
-            // 端坐: 骨盆后倾下落, 躯干立起, 前肢竖直支撑, 后肢折叠于体侧, 尾巴环绕贴地
+            // 端坐: 骨盆坐到后脚上, 脊柱立起, 前腿竖直支撑, 后腿折在体侧, 尾巴上翘
+            // 数值由 scripts/model/cat_pose_solver.py 按"前爪与后踝同高 + 前腿世界仰角不变"解出
             SIT -> {
-                hipP = -15f; spineArch = 10f; chestP = 15f; neckP = 5f; headP = -10f
-                flSh = 12f; frSh = 12f; flLeg = -12f; frLeg = -12f
-                hlLeg = -42f; hrLeg = -42f
-                hlShank = 55f; hrShank = 55f
-                hlFoot = -25f; hrFoot = -25f
-                tailP = -30f; tailSide = 20f
+                hipP = -6.7f; spineArch = -35.7f; chestP = -12.2f; neckP = 54.9f; headP = -27.1f
+                flSh = 54.7f; frSh = 54.7f
+                hlLeg = -74.4f; hrLeg = -74.3f
+                hlShank = 119.2f; hrShank = 119.2f
+                hlFoot = -105.3f; hrFoot = -105.3f
+                tailP = 30f; tailSide = 20f
             }
             // 农民揣 (卧姿): 躯干沉伏, 前肢收拢于胸下, 后肢折进腹下, 尾巴贴体
             LOAF -> {
@@ -220,14 +215,16 @@ object PosePresets {
                 hrLeg = -10f; hrShank = 10f
                 tailP = 25f; tailSide = 12f
             }
-            // 蜷缩入睡: 后躯收拢下沉 + 脊柱向前弯成 C + 头埋进胸口 + 尾巴绕体
+            // 趴伏入睡: 全身趴到地面, 前腿折进胸下, 头搁在前爪之间, 尾巴绕到体侧
+            // (这个模型腿长颈长, 团不成一个球; 贴地的趴睡是几何上能做到的最接近的睡姿)
             CURL -> {
-                hipP = -18f; spineArch = 16f; chestP = 6f; neckP = 8f; headP = 16f
-                flSh = 42f; frSh = 42f; flLeg = -68f; frLeg = -68f; flPaw = 26f; frPaw = 26f
-                hlLeg = -52f; hrLeg = -52f
-                hlShank = 70f; hrShank = 70f
-                hlFoot = -22f; hrFoot = -22f
-                tailP = -18f; tailSide = 50f
+                hipP = 11.3f; spineArch = -11.7f; chestP = -46.2f; neckP = 61.9f; headP = -32.1f
+                flSh = 74.6f; frSh = 74.6f; flLeg = 32.9f; frLeg = 32.9f
+                flPaw = -60.8f; frPaw = -60.8f
+                hlLeg = 32.0f; hrLeg = 32.0f
+                hlShank = 7.3f; hrShank = 7.3f
+                hlFoot = -50.6f; hrFoot = -50.6f
+                tailP = -18f; tailSide = 62f
             }
             // 伏击准备: 前半身压低, 后躯蓄力, 前爪前探, 尾巴水平微摆
             POUNCE -> {
@@ -265,6 +262,7 @@ object PosePresets {
         headP += (jointAngles["cat_head_pitch"] ?: 0f)
         var headY = (jointAngles["cat_head_yaw"] ?: 0f)
         spineArch += (jointAngles["cat_spine_arch"] ?: 0f)
+        spineMid += (jointAngles["cat_spine_mid"] ?: 0f)
         flLeg += (jointAngles["cat_fl_leg"] ?: 0f)
         frLeg += (jointAngles["cat_fr_leg"] ?: 0f)
         hlLeg += (jointAngles["cat_hl_leg"] ?: 0f)
@@ -274,9 +272,12 @@ object PosePresets {
 
         b.joint("Hips", "hips", hipP, 0f, 0f)
         b.joint("Spine", "spine", spineArch, 0f, 0f)
+        b.joint("spine_mid", "spine_mid", spineMid, 0f, 0f)
         b.joint("Chest", "chest", chestP, 0f, 0f)
         b.joint("Neck", "neck", neckP, 0f, 0f)
         if (posePreset.equals(LOOK, ignoreCase = true)) headY = 45f
+        // 趴睡时头要歪向一侧 (枕在前爪上), 不然正对前方像"低头罚站"
+        if (posePreset.equals(CURL, ignoreCase = true)) headY += 32f
         b.joint("Head", "head", headP, headY, 0f)
         b.joint("l_front_shoulder", "frontleg", flSh, 0f, 0f)
         b.joint("r_front_shoulder", "R_frontleg", frSh, 0f, 0f)

@@ -134,7 +134,7 @@ fun PoseAdjustmentPanel(
                 JointDef("cat_head_pitch", R.string.layer_3d_joint_cat_head_pitch, -30f, 30f, JointCategory.HEAD),
                 JointDef("cat_head_yaw", R.string.layer_3d_joint_cat_head_yaw, -40f, 40f, JointCategory.HEAD),
                 JointDef("cat_spine_arch", R.string.layer_3d_joint_cat_spine, -25f, 30f, JointCategory.TORSO),
-                JointDef("Hips_ty", R.string.layer_3d_joint_cat_pelvis, -30f, 10f, JointCategory.TORSO),
+                JointDef("cat_spine_mid", R.string.layer_3d_joint_cat_spine_mid, -30f, 30f, JointCategory.TORSO),
                 JointDef("cat_fl_leg", R.string.layer_3d_joint_cat_fl_leg, -45f, 45f, JointCategory.FRONT_LEGS),
                 JointDef("cat_fr_leg", R.string.layer_3d_joint_cat_fr_leg, -45f, 45f, JointCategory.FRONT_LEGS),
                 JointDef("cat_hl_leg", R.string.layer_3d_joint_cat_hl_leg, -50f, 45f, JointCategory.HIND_LEGS),

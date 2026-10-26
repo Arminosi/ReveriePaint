@@ -3049,7 +3049,7 @@
     <string name="layer_3d_joint_cat_spine">Spine Arch</string>
     <string name="layer_3d_joint_cat_curl">Curl Bend</string>
     <string name="layer_3d_joint_cat_rise_removed">Model Rise (ground tweak)</string>
-    <string name="layer_3d_joint_cat_pelvis">Pelvis Drop (sit / lie)</string>
+    <string name="layer_3d_joint_cat_spine_mid">Mid-spine (arch / dip)</string>
     <string name="layer_3d_joint_cat_fl_leg">Front Left Paw</string>
     <string name="layer_3d_joint_cat_fr_leg">Front Right Paw</string>
     <string name="layer_3d_joint_cat_hl_leg">Hind Left Leg</string>

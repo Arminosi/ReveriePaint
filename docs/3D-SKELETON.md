@@ -46,23 +46,24 @@ Deformed3D(mesh, skeleton, worldJoints)
 `Canvas3DDrawer` 复用投影矩阵 (仅在宽高比或缩放变化时重算)、三角形排序缓冲、骨骼屏幕坐标数组;
 骨架覆盖层不再每帧 new `ProjectedJoint` 列表。
 
-## 4. 姿态预设的整体升降 (贴地)
+## 4. 姿态贴地与"压低身体"的正确做法
 
-骨架层只有旋转, 没有"根节点位移" —— 端坐 / 农民揣这类需要把骨盆压到地面的姿态, 靠旋转表达不了,
-只能在整模型上补一个 Y 升降。现在的规则是:
+**结论先行: 根骨 (Hips) 的平移不是自由度。** 平移根骨等于整只模型平移, 而贴地又会把整只模型
+抬回原位 (`groundShift = restMinY - minY` 精确抵消), 视觉上"什么都没发生"。这正是早期
+"整体升降"滑杆被否掉的原因 —— 要压低身体只能折叠**四肢与脊柱**的真实骨骼姿态。
 
-- **美术标定过的组合**用标定值 (猫猫): `sit -0.50` / `loaf -0.60` / `stretch -0.10` / `stand 0`。
-  这三条是构图参数, 换猫猫资产必须重新标定 (`PosePresets.TUNED_PRESET_SHIFT`)。
-- **其余组合**自动贴地: 用预设本身形变一次, 把网格最低点对齐到绑定姿态的地面基准线
-  (`SkinnedMesh3D.restMinY`), 与模型无关。人体实测: stand 0 / sit +0.005 / action ≈0 / kneel ≈0
-  (人体网格最低点几乎不随预设移动, 所以对既有画面几乎无影响), 导入模型通常也接近 0。
+现在的规则:
 
-升降量只由「预设」决定, 调节关节滑杆时模型不会上下漂移。
+- `TUNED_PRESET_SHIFT` **已清空**, 所有姿态一律走几何自动贴地: 用预设本身形变一次, 把网格最低点
+  对齐到绑定姿态的地面基准线 (`SkinnedMesh3D.restMinY`)。升降量只由「预设」决定, 拖关节滑杆时
+  模型不会上下漂移。
+- 预设自带的骨盆平移 (`buildTranslations` 里的 `Hips` 那几条) 已删除, 原因见上; 通用
+  `<骨骼>_tx/_ty/_tz` 通道保留, 但只对**非根骨**有意义 (让某段骨骼相对父级错位)。
+- 端坐 / 趴睡的姿态数值由 `scripts/model/cat_pose_solver.py` 用"世界仰角 + 两骨 IK"解出,
+  不再手调 (手调必然调出"腿在空中划水 / 骨盆悬空")。
 
-> 离线渲染核对 (Blender + 与 Kotlin 逐位一致的形变复算, 地面取绑定姿态最低点):
-> 站姿四爪贴地; 旧的 `sit/loaf` 升降值会把猫整体压到地面线以下约 0.4 (前腿明显陷进地面),
-> 因此这里保留原值作为"构图"选择, 而不是当作物理贴地。若后续要改成严格贴地, 把
-> `TUNED_PRESET_SHIFT` 清空即可退化为几何自动贴地 (猫猫实测 sit -0.087 / loaf -0.122 / stretch -0.034)。
+> 离线核对 (Blender + 与 Kotlin 逐位一致的形变复算, 地面取绑定姿态最低点): 9 个猫猫预设
+> 贴地后 `minY` 全部等于 `restMinY = -0.5691`, 四爪/跗关节落在同一水平面。
 
 ## 5. 骨骼拖拽轴角色
 
@@ -92,17 +93,35 @@ Deformed3D(mesh, skeleton, worldJoints)
 - `GlbPrimitiveMergeTest`: 多图元合并、交错缓冲 (`byteStride`) 解码、合并后索引/关节索引平移、静态图元不动;
 - `Model3DTest`: 既有资产契约 (关节名、朝向、静止姿态零形变)。
 
-## 8. 离线核对工具
+## 8. 离线工具链 (调姿态 / 改资产前必读)
 
-`scripts/model/preview_cat_poses.py` 用与 App 完全一致的数学 (FK + 线性混合蒙皮 + 预设角度表 + 升降)
-离线形变内置猫猫模型, 导出 OBJ 并用 Blender 渲染"当前值 vs 严格贴地"对照图 (依赖 numpy, Blender 可选),
-用于人工核对姿态 / 贴地是否符合预期:
+三个脚本构成一条链路, 都是纯 Python (numpy), Blender 只在最后出图时用:
+
+| 脚本 | 作用 |
+|---|---|
+| `scripts/model/add_spine_mid.py` | 给 GLB 插入脊柱中段骨 `spine_mid` 并重蒙皮躯干 (见 §9) |
+| `scripts/model/cat_pose_solver.py` | 按"世界仰角 + 两骨 IK"反解逐骨局部俯仰, 输出可直接粘进 `PosePresets.kt` 的数值 |
+| `scripts/model/preview_cat_poses.py` | 用与 App 逐位一致的数学 (FK + LBS + 预设表 + 贴地) 形变模型, 导出 OBJ 并用 Blender 出对照图, 同时打印"边拉伸度" |
 
 ```bash
-python3 scripts/model/preview_cat_poses.py          # 产物在 build/3d-pose-review
+# 1) 解姿态 (不上屏, 只打印数值与落点)
+python3 scripts/model/cat_pose_solver.py --pose sit,curl
+# 2) 出图核对 (side / quarter / front / top 四个机位, 建议至少看 side + quarter)
+python3 scripts/model/preview_cat_poses.py --presets sit,curl --views side,quarter
+# 3) 数值满意后同步两处: PosePresets.kt (App) 与本脚本 PRESETS (离线复算)
 ```
 
-调姿态数值时先用它看一遍, 再改 `PosePresets.kt`。
+**踩过的坑 (务必守住)**:
+
+1. **不要用"目标关节坐标"硬拟合躯干** —— 这套骨架 Chest 骨只有 0.17 长且静止时朝前下, Neck 骨却有
+   0.41 长, 会把链条拉成不可能的形状。躯干用世界仰角描述 (仰角在链上线性可加), 四肢才用 IK。
+2. **IK 有两个解, 必须挑"转动量最小"的那支**。另一支是反关节 (膝盖朝后上), 要求股骨翻 150°+,
+   线性混合蒙皮直接塌成一团 —— 实机/渲染都表现为"髋部鼓一个包"。
+3. **单骨局部角超过 ~75° 就会开始鬼畜** (颈、跖骨尤其明显)。`cat_pose_solver.py` 打印每根骨的
+   局部角, 越界就说明目标姿态在这个骨架上做不到, 应该降低目标而不是硬掰。
+4. **贴地取最低点, 所以"尾巴/耳朵先着地"会把整只猫顶起来**。核对时看 `preview_cat_poses.py`
+   打印的"最低 1cm 内顶点所属骨", 必须是爪子/跗关节/腹部, 不能是耳朵或吻部。
+5. **根骨平移等于整体平移** (见 §4), 不要指望它压低骨盆。
 
 ## 9. 猫猫耳骨轴心修正 (资产)
 
@@ -114,6 +133,27 @@ python3 scripts/model/preview_cat_poses.py          # 产物在 build/3d-pose-re
 - 静止姿态逐顶点不变: `world × inverseBind` 误差 < 3e-8, `Model3DTest` 的"静止姿态零形变"契约成立;
 - 骨骼名不变 (`earend` / `R_earend`), 既有工程与测试无需迁移;
 - 之后拖耳骨 = 绕耳根摆动, 覆盖层那两根线缩回耳内。
+
+## 10. 脊柱中段骨 spine_mid (2026-10 资产重绑)
+
+原骨架躯干只有 `Hips → Spine → Chest` 两个旋转轴心, 且 Chest 的权重被肩骨抢走, 蜷缩/趴伏只能
+靠程序化顶点弯曲 (那条路径会按 cosθ 缩放截面, 实机表现为"躯干被拉长变形", 已废弃)。
+
+`scripts/model/add_spine_mid.py` 对 GLB 做二进制手术:
+
+- 在 `Spine` 骨中点 (Spine 骨长的 50%) 插入节点 `spine_mid`, 朝向与 Spine 相同, `Chest` 改挂到它下面;
+  **全部绑定姿态世界矩阵保持不变**, 所以静止姿态逐顶点零形变;
+- `spine_mid` 追加到 `skins[0].joints` **末尾** (索引 29), 既有 `JOINTS_0` 索引一个都不动;
+- `inverseBindMatrices` accessor 从 29 条扩到 30 条 (该 bufferView 正好在 BIN 末尾, 直接追加 64B);
+- 重蒙皮只重分配**已有的躯干权重** (Hips/Spine/Chest 之和保持不变), 其它骨骼权重逐字节不变;
+  躯干四骨按 `1/(d+0.03)³` 分配 + 网格上 12 轮平滑 + 同位置重复顶点取均值 (防形变裂缝)。
+
+核对结果: 静止姿态逐顶点位移 0; `world × inverseBind` 误差 2.9e-7; 权重和 1.0; 2308 组同位置
+重复顶点权重完全一致; 30 关节, 资产 608808 B (sha256 `3746ac75…`)。回归测试
+`SkeletonPoseTest.cat rig has a mid spine joint that actually bends the torso` 守住这条链路
+(关节存在 + 权重归一 + `spine_mid` 旋转确实带动躯干顶点)。
+
+面板上对应"脊柱中段"滑杆 (`cat_spine_mid`, ±30°), 用来补弓背/塌腰; 预设里端坐与趴睡已经用到它。
 
 ## 9. 仍可继续优化 (未做)
 

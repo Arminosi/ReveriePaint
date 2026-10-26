@@ -6254,6 +6254,8 @@ class PaintViewModel : ViewModel() {
     var active3DLayers by mutableStateOf<Map<Long, com.reverie.paint.model.Model3DState>>(emptyMap())
     var active3DInteractionMode by mutableStateOf(com.reverie.paint.model.Interaction3DMode.ROTATE)
     var active3DSelectedJointName by mutableStateOf<String?>(null)
+    /** 骨骼拖拽锁定的旋转轴: -1 = 未锁定, 0 = 俯仰环(X), 1 = 偏转环(Y) */
+    var active3DBoneAxis by mutableStateOf(-1)
     var live3DPreviewBitmap by mutableStateOf<android.graphics.Bitmap?>(null)
     var isInteracting3D by mutableStateOf(false)
     var show3DModelPicker by mutableStateOf(false)

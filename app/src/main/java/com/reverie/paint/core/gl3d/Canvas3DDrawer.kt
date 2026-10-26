@@ -438,6 +438,23 @@ class Canvas3DDrawer {
     /** 标签文本复用, 避免每帧拼接字符串 (热路径) */
     private val angleText = StringBuilder(32)
 
+    // ---- 选中骨骼的 X/Y 旋转轴环 (gizmo), 全程零分配 ----
+    private val ringPitchPts = FloatArray(RING_SEG * 2)
+    private val ringYawPts = FloatArray(RING_SEG * 2)
+    private var ringPitchVisible = false
+    private var ringYawVisible = false
+    private val ringPath = Path()
+    private val ringPitchPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 2.2f
+        color = 0xFFC97B5A.toInt() // 俯仰环: 陶土色
+    }
+    private val ringYawPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 2.2f
+        color = 0xFF5B9BD5.toInt() // 偏转环: 莫兰迪蓝
+    }
+
     private fun ensureJointCapacity(n: Int) {
         if (jointScreenX.size >= n) return
         val cap = maxOf(n * 2, 64)
@@ -451,6 +468,150 @@ class Canvas3DDrawer {
         projectedX = FloatArray(cap)
         projectedY = FloatArray(cap)
         projectedDepth = FloatArray(cap)
+    }
+
+    /**
+     * 画选中骨骼的两条旋转环 (点环即可锁定该轴再拖):
+     * - 俯仰环 (绕局部 X, 陶土色): 由"骨骼方向 × 前后"张成的平面
+     * - 偏转环 (绕骨轴 Y, 蓝色): 由"侧向 × 前后"张成的平面
+     *
+     * 轴向由当前姿态下的 骨 -> 子关节 方向反推, 环会跟着姿势一起转, 不依赖绑定姿态, 导入模型同样适用。
+     */
+    private fun drawAxisRings(
+        canvas: Canvas,
+        skeleton: Skeleton3D,
+        worldJoints: FloatArray,
+        selectedIndex: Int,
+        mvp: FloatArray,
+        halfW: Float,
+        halfH: Float,
+        lockedAxis: Int,
+    ) {
+        ringPitchVisible = false
+        ringYawVisible = false
+        if (selectedIndex < 0 || selectedIndex >= skeleton.count) return
+        val jointCount = skeleton.count
+        if (worldJoints.size < jointCount * 3) return
+
+        val ox = worldJoints[selectedIndex * 3]
+        val oy = worldJoints[selectedIndex * 3 + 1]
+        val oz = worldJoints[selectedIndex * 3 + 2]
+
+        var ax = 0f; var ay = 1f; var az = 0f
+        val child = skeleton.firstChildJoint(selectedIndex)
+        if (child >= 0) {
+            ax = worldJoints[child * 3] - ox
+            ay = worldJoints[child * 3 + 1] - oy
+            az = worldJoints[child * 3 + 2] - oz
+        } else {
+            val parent = skeleton.joints[selectedIndex].parentIndex
+            if (parent in 0 until jointCount) {
+                ax = ox - worldJoints[parent * 3]
+                ay = oy - worldJoints[parent * 3 + 1]
+                az = oz - worldJoints[parent * 3 + 2]
+            }
+        }
+        var len = hypot(hypot(ax, ay), az)
+        if (len < 1e-5f) { ax = 0f; ay = 1f; az = 0f; len = 1f }
+        ax /= len; ay /= len; az /= len
+
+        // 侧向轴 = 骨轴 × 世界上方 (退化时退回 X 轴)
+        var sx = -az
+        var sy = 0f
+        var sz = ax
+        var slen = hypot(hypot(sx, sy), sz)
+        if (slen < 1e-4f) { sx = 1f; sy = 0f; sz = 0f; slen = 1f }
+        sx /= slen; sy /= slen; sz /= slen
+        // 前后轴 = 侧向 × 骨轴
+        val fx = sy * az - sz * ay
+        val fy = sz * ax - sx * az
+        val fz = sx * ay - sy * ax
+
+        // 世界半径: 屏幕上的环大小随缩放稳定
+        val r = 0.085f
+        ringPitchVisible = buildRing(
+            ox, oy, oz, ax * r, ay * r, az * r, fx * r, fy * r, fz * r,
+            mvp, halfW, halfH, ringPitchPts,
+        )
+        ringYawVisible = buildRing(
+            ox, oy, oz, sx * r, sy * r, sz * r, fx * r, fy * r, fz * r,
+            mvp, halfW, halfH, ringYawPts,
+        )
+
+        drawRing(canvas, ringPitchPts, ringPitchVisible, ringPitchPaint, lockedAxis == 0, lockedAxis == 1)
+        drawRing(canvas, ringYawPts, ringYawVisible, ringYawPaint, lockedAxis == 1, lockedAxis == 0)
+    }
+
+    private fun buildRing(
+        cx: Float, cy: Float, cz: Float,
+        ux: Float, uy: Float, uz: Float,
+        vx: Float, vy: Float, vz: Float,
+        mvp: FloatArray, halfW: Float, halfH: Float,
+        out: FloatArray,
+    ): Boolean {
+        var visible = true
+        for (i in 0 until RING_SEG) {
+            val ang = i * TWO_PI / RING_SEG
+            val c = cos(ang)
+            val sn = sin(ang)
+            val wx = cx + ux * c + vx * sn
+            val wy = cy + uy * c + vy * sn
+            val wz = cz + uz * c + vz * sn
+            val px = mvp[0] * wx + mvp[4] * wy + mvp[8] * wz + mvp[12]
+            val py = mvp[1] * wx + mvp[5] * wy + mvp[9] * wz + mvp[13]
+            val pw = mvp[3] * wx + mvp[7] * wy + mvp[11] * wz + mvp[15]
+            if (pw <= 0.05f) {
+                visible = false
+            } else {
+                out[i * 2] = (px / pw) * halfW
+                out[i * 2 + 1] = (-py / pw) * halfH
+            }
+        }
+        return visible
+    }
+
+    private fun drawRing(
+        canvas: Canvas,
+        pts: FloatArray,
+        visible: Boolean,
+        paint: Paint,
+        locked: Boolean,
+        dimmed: Boolean,
+    ) {
+        if (!visible) return
+        paint.strokeWidth = if (locked) 4.0f else 2.2f
+        paint.alpha = if (dimmed) 70 else 255
+        ringPath.rewind()
+        ringPath.moveTo(pts[0], pts[1])
+        for (i in 1 until RING_SEG) ringPath.lineTo(pts[i * 2], pts[i * 2 + 1])
+        ringPath.close()
+        canvas.drawPath(ringPath, paint)
+    }
+
+    /**
+     * 触摸点是否落在某条轴环上: 0 = 俯仰环, 1 = 偏转环, -1 = 都没点中
+     */
+    fun hitTestAxisRing(docX: Float, docY: Float, tolerance: Float): Int {
+        var bestAxis = -1
+        var best = tolerance
+        if (ringPitchVisible) {
+            val d = distanceToRing(ringPitchPts, docX, docY)
+            if (d < best) { best = d; bestAxis = 0 }
+        }
+        if (ringYawVisible) {
+            val d = distanceToRing(ringYawPts, docX, docY)
+            if (d < best) { best = d; bestAxis = 1 }
+        }
+        return bestAxis
+    }
+
+    private fun distanceToRing(pts: FloatArray, px: Float, py: Float): Float {
+        var best = Float.MAX_VALUE
+        for (i in 0 until RING_SEG) {
+            val d = hypot(px - pts[i * 2], py - pts[i * 2 + 1])
+            if (d < best) best = d
+        }
+        return best
     }
 
     /**
@@ -525,6 +686,7 @@ class Canvas3DDrawer {
         docW: Float,
         docH: Float,
         state: Model3DState,
+        lockedAxis: Int = -1,
     ) {
         projectedCount = 0
         if (skeleton == null || worldJoints == null || skeleton.count == 0) return
@@ -606,7 +768,10 @@ class Canvas3DDrawer {
             canvas.drawCircle(x, y, radius, jointStrokePaint)
         }
 
-        // 3. 选中关节的骨骼名 + 当前角度标签 (拖动时能读到具体数值)
+        // 3. 选中关节的 X/Y 旋转轴环: 点环锁定该轴, 拖动只改该轴
+        drawAxisRings(canvas, skeleton, worldJoints, selectedIndex, mvp, halfW, halfH, lockedAxis)
+
+        // 4. 选中关节的骨骼名 + 当前角度标签 (拖动时能读到具体数值)
         if (selectedIndex >= 0 && selectedIndex < jointCount) {
             val name = skeleton.joints[selectedIndex].name
             if (name.isNotEmpty()) {
@@ -642,5 +807,8 @@ class Canvas3DDrawer {
     private companion object {
         /** 深度分桶数量: 1k 桶 = 深度精度 ~0.2% 视深差, 画面上完全不可分辨 */
         const val DEPTH_BUCKETS = 1024
+        /** 轴环采样段数 */
+        const val RING_SEG = 40
+        const val TWO_PI = 6.2831855f
     }
 }

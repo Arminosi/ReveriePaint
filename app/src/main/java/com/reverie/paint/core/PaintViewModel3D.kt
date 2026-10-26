@@ -539,6 +539,26 @@ internal fun PaintViewModel.handle3DGesture(deltaX: Float, deltaY: Float) {
                 update3DState(state.copy(rotX = newRotX, rotY = newRotY))
                 return
             }
+            // 点中轴环后只改该轴, 手感与环一致
+            val lockedAxis = active3DBoneAxis
+            if (lockedAxis >= 0) {
+                val pitchKey = "${jointName}_p"
+                val yawKey = "${jointName}_y"
+                val newAngles = state.jointAngles.toMutableMap()
+                if (lockedAxis == 0) {
+                    val cur = state.jointAngles[pitchKey] ?: 0f
+                    val next = (cur + deltaY * 0.6f * skeleton!!.dragPitchSign(jointIndex)).coerceIn(-150f, 150f)
+                    if (kotlin.math.abs(next - cur) < 0.01f) return
+                    newAngles[pitchKey] = next
+                } else {
+                    val cur = state.jointAngles[yawKey] ?: 0f
+                    val next = (cur + deltaX * 0.6f) % 360f
+                    if (kotlin.math.abs(next - cur) < 0.01f) return
+                    newAngles[yawKey] = next
+                }
+                update3DState(state.copy(jointAngles = newAngles))
+                return
+            }
             val pitchSign = skeleton!!.dragPitchSign(jointIndex)
             val swingAxis = skeleton.dragSwingAxis(jointIndex)
             val swingSign = skeleton.dragSwingSign(jointIndex)

@@ -2905,6 +2905,7 @@ class CanvasTouchView(context: Context) : View(context) {
                             imgW.toFloat(),
                             imgH.toFloat(),
                             state,
+                            v.active3DBoneAxis,
                         )
                     }
                 }
@@ -4983,6 +4984,17 @@ class CanvasTouchView(context: Context) : View(context) {
                                 val relDocX = docPos.x - v.docWidth.toFloat() * 0.5f
                                 val relDocY = docPos.y - v.docHeight.toFloat() * 0.5f
                                 ensureViewTransform()
+                                // 先看是否点在 X/Y 轴环上: 点中只锁轴, 不改选中关节
+                                val ringAxis = canvas3DDrawer.hitTestAxisRing(
+                                    relDocX, relDocY,
+                                    tolerance = 22f / viewTransform.currentScale.coerceAtLeast(0.1f),
+                                )
+                                if (ringAxis >= 0 && v.active3DSelectedJointName != null) {
+                                    v.active3DBoneAxis = ringAxis
+                                    invalidate()
+                                    return true
+                                }
+                                v.active3DBoneAxis = -1
                                 val hit = canvas3DDrawer.hitTestJoint(relDocX, relDocY, maxDist = 36f / viewTransform.currentScale.coerceAtLeast(0.1f))
                                 // 连点同一根骨骼 = 归零该骨骼 (比划到面板更快)
                                 val now = System.currentTimeMillis()
@@ -5053,6 +5065,7 @@ class CanvasTouchView(context: Context) : View(context) {
                         }
                         touch3DStartState = null
                         touch3DIsPinch = false
+                        v.active3DBoneAxis = -1
                         v.isInteracting3D = false
                         invalidate()
                     }

@@ -73,11 +73,9 @@ QImage ReverieCore::renderMergedQImage()
         const QRect fullRect(0, 0, image->width(), image->height());
         compDev->clear(fullRect);
         compositeLayersRange(compDev, 0, m_layers.size(), fullRect);
-        // Krita 的 convertToQImage 内部已分配独立像素缓冲区，返回值即是独立图，不得再加 copy() 避免深拷贝浪费。
-        return compDev->convertToQImage(nullptr, 0, 0, image->width(), image->height());
+        return reverieDeviceToQImage(compDev, 0, 0, image->width(), image->height());
     }
-    // 同上，Krita 内部已深拷贝像素并释放临时缓冲，直接返回独立图
-    return image->convertToQImage(0, 0, image->width(), image->height(), nullptr);
+    return reverieDeviceToQImage(image->projection(), 0, 0, image->width(), image->height());
 }
 
 bool ReverieCore::savePng(const QString &path)
@@ -480,14 +478,14 @@ RevpPngJob makeSnapshotLayerJob(const QString &name, const KisPaintDeviceSP &dev
             img = QImage(1, 1, QImage::Format_ARGB32_Premultiplied);
             img.fill(Qt::transparent);
         } else if (bounds == docRect) {
-            img = snap->convertToQImage(nullptr, 0, 0, docW, docH);
+            img = reverieDeviceToQImage(snap, 0, 0, docW, docH);
             if (img.isNull()) {
                 img = QImage(1, 1, QImage::Format_ARGB32_Premultiplied);
                 img.fill(Qt::transparent);
             }
         } else {
             // 稀疏: 只转换有效区域，避免 24MP 全画幅无效色彩转换与临时内存分配
-            QImage part = snap->convertToQImage(nullptr, bounds.x(), bounds.y(), bounds.width(), bounds.height());
+            QImage part = reverieDeviceToQImage(snap, bounds.x(), bounds.y(), bounds.width(), bounds.height());
             if (part.isNull()) {
                 img = QImage(1, 1, QImage::Format_ARGB32_Premultiplied);
                 img.fill(Qt::transparent);
@@ -536,10 +534,10 @@ RevpPngJob makeKeyframePngJob(const QString &name, KisRasterKeyframeChannel *ch,
             img = QImage(1, 1, QImage::Format_ARGB32_Premultiplied);
             img.fill(Qt::transparent);
         } else if (bounds == docRect) {
-            img = frameDev->convertToQImage(nullptr, 0, 0, docW, docH);
+            img = reverieDeviceToQImage(frameDev, 0, 0, docW, docH);
             if (img.isNull()) return QByteArray();
         } else {
-            QImage part = frameDev->convertToQImage(nullptr, bounds.x(), bounds.y(), bounds.width(), bounds.height());
+            QImage part = reverieDeviceToQImage(frameDev, bounds.x(), bounds.y(), bounds.width(), bounds.height());
             if (part.isNull()) return QByteArray();
             if (part.format() != QImage::Format_ARGB32_Premultiplied) {
                 part = part.convertToFormat(QImage::Format_ARGB32_Premultiplied);
@@ -3231,7 +3229,7 @@ bool ReverieCore::renderLayerCanvas(int index, int w, int h, void *dstPixels, in
     }
 
     try {
-        const QImage img = dev->convertToQImage(nullptr, 0, 0, m_docWidth, m_docHeight);
+        const QImage img = reverieDeviceToQImage(dev, 0, 0, m_docWidth, m_docHeight);
         if (img.isNull()) {
             return false;
         }

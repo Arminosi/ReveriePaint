@@ -956,10 +956,12 @@ private:
     std::thread m_writerThread;
 };
 
-// ---- 增量保存 (debug.reverie.saveincr): 未改动的图层沿用上次同路径产物里的 PNG 字节 ----
+// ---- 增量保存: 未改动的图层沿用上次同路径产物里的 PNG 字节 ----
 // 判据: node 指针 + 图层名 + KisPaintDevice::sequenceNumber() 均未变, 且旧文件 size+mtime
 // 与上次保存完成时一致。任一不满足就退回全量编码, 绝不因缓存让保存失败。
 // seq 必须在引擎线程快照时刻采集 (异步保存时引擎线程仍在绘制)。
+// 默认开启; 需要整体关掉时 `setprop debug.reverie.saveincr 0` (按次读属性, 立即生效)。
+// 复用条目像素自检 `debug.reverie.saveverify 1` 保持不变 (默认关, 只用于压测)。
 struct SavedLayerEntry {
     quintptr node = 0;
     QString layerName;
@@ -986,7 +988,7 @@ std::shared_ptr<RevpIncrCtx> revpIncrBegin(const QString &path)
 {
     auto ctx = std::make_shared<RevpIncrCtx>();
     ctx->path = path;
-    ctx->enabled = rpDebugFlag("debug.reverie.saveincr", "REVERIE_SAVEINCR", false);
+    ctx->enabled = rpDebugFlag("debug.reverie.saveincr", "REVERIE_SAVEINCR", true);
     ctx->verify = rpDebugFlag("debug.reverie.saveverify", "REVERIE_SAVEVERIFY", false);
     if (!ctx->enabled) return ctx;
     {

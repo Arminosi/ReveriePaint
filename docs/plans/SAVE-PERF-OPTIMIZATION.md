@@ -157,7 +157,10 @@ PaintViewModelProjects.kt:184 (saveProject) / :265 (autoSaveProject) / :329 (eme
 异步保存时引擎线程仍在绘制 —— seq 必须在**快照时刻**在引擎线程采集并随 job 传递，缓存也记录这份快照值，而不是写盘线程结束时的值。
 
 #### 2.7 默认值策略
-先 `debug.reverie.saveincr`（默认 0）上线；真机跑完 §2.9 压测矩阵且 `saveverify` 0 不一致后，再改默认为 1。
+原计划先以默认 0 上线、跑完 §2.9 全矩阵后再改默认 1。**实际执行**：2026-10-26 已在真机覆盖
+笔画/橡皮/填充/变换/液化/撤销 + 图层增删改序可见性 + 保存重开 + 1.6.0 产物往返回环（均 `saveverify` 0 不一致）后，
+按维护者指示改为**默认开启**；`debug.reverie.saveincr 0` 保留为整轮回退开关。未覆盖路径清单见
+`docs/RENDER-OPTIMIZATION.md` §12「默认开启的覆盖面」。
 
 #### 2.8 安全网 `debug.reverie.saveverify`
 开启后对每个"被复用"的条目，用当前设备重新转换成 QImage 与旧 PNG 解码后的像素逐字节比对，不一致即 logcat 报错并强制该次保存重编码（release 保留代码，仅由 prop 开启，平时零开销）。

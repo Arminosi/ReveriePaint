@@ -960,7 +960,7 @@ Krita 继续负责最终正确性(形变 / 采样 / 像素 / 事务 / 撤销 / �
 
 ### 增量保存
 
-- 开关 `debug.reverie.saveincr` (默认关闭), 自检 `debug.reverie.saveverify`
+- 开关 `debug.reverie.saveincr` (**默认开启**, 按次读属性; `setprop ... 0` 可整轮退回全量编码), 自检 `debug.reverie.saveverify`
 - 判据: node 指针 + 图层名 + `KisPaintDevice::sequenceNumber()` + 旧文件 size/mtime
 - 只复用 `layer_*.png`, 描边层 / `frame_*` / 预览 / 缩略图每次重编码
 - 缓存最多 4 个路径, `newDocument` / `closeDocument` / `loadRevp` 时清空
@@ -971,7 +971,18 @@ Krita 继续负责最终正确性(形变 / 采样 / 像素 / 事务 / 撤销 / �
 - `writeBytes` / `fill` / `clear` / `fastBitBlt` / `convertFromQImage` 在 Krita 内部都会 `cache()->invalidate()`, 序号自动递增
 - 唯一绕过的是迭代器直写 (`ReverieCoreFilterPlugins.cpp` 的卷积, `ReverieMaskingBrushRenderer.cpp`), 其调用方均随后 `setDirty`
 - `moveTo` 的调用点 (`ReverieCoreSelectionTools.cpp`) 均随后 `setDirty`
-- 仍需真机 `saveverify` 全矩阵压测后才能把默认值改为开启
+
+### 默认开启的覆盖面 (2026-10-26)
+
+- 已真机跑过: 画笔/橡皮/填充/变换/液化/撤销 + 图层新建/可见性, 每次 `saveverify` 均 0 处 MISMATCH;
+  单层改动后只有该层 PNG 变化 (预览/缩略图随之重编码, 其余图层条目逐字节复用), 保存后杀进程重开逐层一致
+- 已验证默认行为: 属性清空后冷启动首次保存 688ms (缓存冷) -> 第二次 143ms (复用 4 条目 554KB);
+  `setprop debug.reverie.saveincr 0` 时该次保存退回全量编码 (626ms, reused=0), 回退路径可用
+- 尚未覆盖 (复用逻辑不会因此出错, 但这些路径的 `sequenceNumber` 正确性没被真机验证过):
+  滤镜图层 / 调整图层 / 存储选区条目 / 动画关键帧 / 3D 参考层 / KRA·PSD 导入后的图层。
+  其中 `frame_*`(关键帧) 与 `selections/*` 每次全量重编码, 不参与复用, 风险只在 `layer_*.png`。
+- 若后续在这些路径上遇到"画面已变但保存下来没变", 先 `debug.reverie.saveverify 1` 复现,
+  日志里会出现 `saveverify MISMATCH <条目名>` 定位到漏 `setDirty()` 的写入点
 
 ### 取图转换: 绕开 Krita 的逐像素 QColor 回退 (2026-10-26)
 

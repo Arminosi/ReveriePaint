@@ -40,43 +40,66 @@ internal object JointOffsetSpec {
 
     data class BoneGroup(val label: String, val bones: List<String>)
 
-    /** 平移键名 (与 [PosePresets.buildTranslations] 的约定一致) */
+    /**
+     * 静止位置偏移键名: `<骨名>_rx` / `<骨名>_ry`。
+     *
+     * 刻意与姿态平移的 `_tx/_ty/_tz` 区分开 —— 那些是"摆姿势时的位移"(会带着顶点走,
+     * 网格变形), 这里改的是绑定姿态 (网格不动, 只挪旋转轴心)。
+     */
     fun key(bone: String, axis: Int): String =
         bone + when (axis) {
-            0 -> "_tx"
-            1 -> "_ty"
-            else -> "_tz"
+            0 -> "_rx"
+            1 -> "_ry"
+            else -> "_rz"
         }
 
     /** 滑杆取值范围 (单位: 1/100 模型单位; 猫的体高约 1.14, ±20 即 ±0.2) */
     const val RANGE: Float = 20f
 
-    /** 从 jointAngles 里读出某骨的竖直偏移 (滑杆值, 未除以 100) */
-    fun offsetOf(jointAngles: Map<String, Float>, bone: String): Float =
-        jointAngles[key(bone, 1)] ?: 0f
+    /** 读出某骨的静止偏移 (滑杆值, 未除以 100) */
+    fun offsetOf(offsets: Map<String, Float>, bone: String, axis: Int = 1): Float =
+        offsets[key(bone, axis)] ?: 0f
 
-    /** 写入某骨的竖直偏移, 返回新的 jointAngles (0 时移除键, 保持 Map 精简) */
-    fun withOffset(jointAngles: Map<String, Float>, bone: String, value: Float): Map<String, Float> {
-        val k = key(bone, 1)
+    /** 写入某骨的静止偏移 (0 时移除键, 保持 Map 精简) */
+    fun withOffset(offsets: Map<String, Float>, bone: String, value: Float, axis: Int = 1): Map<String, Float> {
+        val k = key(bone, axis)
         if (value == 0f) {
-            if (!jointAngles.containsKey(k)) return jointAngles
-            return jointAngles - k
+            if (!offsets.containsKey(k)) return offsets
+            return offsets - k
         }
-        return jointAngles + (k to value)
+        return offsets + (k to value)
     }
 
-    /** 清掉所有平移键, 保留旋转角度 */
-    fun clearOffsets(jointAngles: Map<String, Float>): Map<String, Float> =
-        jointAngles.filterKeys { !it.endsWith("_tx") && !it.endsWith("_ty") && !it.endsWith("_tz") }
+    /** 清掉所有静止位置偏移 (rotation 角度在 jointAngles, 不受影响) */
+    fun clearOffsets(offsets: Map<String, Float>): Map<String, Float> =
+        offsets.filterKeys { !it.endsWith("_rx") && !it.endsWith("_ry") && !it.endsWith("_rz") }
 
-    /** 是否已有任一平移偏移 (用于 UI 显示"已修改") */
-    fun hasOffsets(jointAngles: Map<String, Float>): Boolean =
-        jointAngles.keys.any { it.endsWith("_tx") || it.endsWith("_ty") || it.endsWith("_tz") }
+    /** 是否已有任一静止位置偏移 (用于 UI 显示"已修改") */
+    fun hasOffsets(offsets: Map<String, Float>): Boolean =
+        offsets.keys.any { it.endsWith("_rx") || it.endsWith("_ry") || it.endsWith("_rz") }
+
+    /** 把偏移表转成 [Skeleton3D.withRestOffsets] 需要的"关节名 -> 世界位移(模型单位)" */
+    fun toWorldOffsets(offsets: Map<String, Float>): Map<String, FloatArray> {
+        if (offsets.isEmpty()) return emptyMap()
+        val out = HashMap<String, FloatArray>(offsets.size)
+        for ((k, v) in offsets) {
+            val axis = when {
+                k.endsWith("_rx") -> 0
+                k.endsWith("_ry") -> 1
+                k.endsWith("_rz") -> 2
+                else -> continue
+            }
+            val bone = k.substring(0, k.length - 3)
+            val arr = out.getOrPut(bone) { FloatArray(3) }
+            arr[axis] += v / 100f
+        }
+        return out
+    }
 
     /** 导出用的稳定文本 (每行 "骨名 ty=值", 便于人读与 diff) */
-    fun describe(jointAngles: Map<String, Float>): String =
-        jointAngles.entries
-            .filter { it.key.endsWith("_ty") }
+    fun describe(offsets: Map<String, Float>): String =
+        offsets.entries
+            .filter { it.key.endsWith("_rx") || it.key.endsWith("_ry") }
             .sortedBy { it.key }
-            .joinToString("\n") { "${it.key.substringBeforeLast('_')} ty=${it.value}" }
+            .joinToString("\n") { "${it.key.substringBeforeLast('_')} ${it.key.takeLast(2)}=${it.value}" }
 }

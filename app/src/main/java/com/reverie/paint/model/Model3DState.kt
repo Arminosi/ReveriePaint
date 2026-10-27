@@ -71,6 +71,11 @@ data class Model3DState(
     val wireframeColor: Long = 0xFF36383B, // 默认线框颜色 (深灰炭笔色)
     val posePreset: String = "stand",  // 姿态预设: stand, sit, action, crossed, hips, kneel 等
     val jointAngles: Map<String, Float> = emptyMap(), // 骨骼关节细调角度增量 [jointKey -> degrees]
+    /**
+     * 关节**静止位置**偏移 (重新绑骨): [bone_rx / bone_ry -> 1/100 模型单位]。
+     * 只影响骨骼的绑定姿态与旋转轴心, 不改变静止网格形状 (见 Skeleton3D.withRestOffsets)。
+     */
+    val jointRestOffsets: Map<String, Float> = emptyMap(),
 ) {
     fun isBuiltin(): Boolean = BuiltinModel3D.fromId(modelType) != null
 

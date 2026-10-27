@@ -622,3 +622,120 @@ class SkinnedMesh3D(
         return if (minY == Float.MAX_VALUE) 0f else minY
     }
 }
+
+/**
+ * 关节**静止位置**偏移 (重新绑骨, 不改网格形状)。
+ *
+ * 语义与姿态平移 ([PosePresets.buildTranslations] 的 `_tx/_ty/_tz`) 完全不同:
+ * 那个是"摆姿势时说这根骨平移了", 会带着它驱动的顶点一起走 -> 网格变形;
+ * 这里改的是骨骼的**绑定姿态** —— 关节挪位置、同时把逆绑定矩阵反向补偿,
+ * 于是静止网格一个顶点都不动, 只有"以后绕这根骨旋转时绕着新位置转"。
+ *
+ * 实现要点:
+ * - 每根关节的世界位移 = 父级累计位移 + 父级世界旋转 * 本关节局部平移增量
+ * - 逆绑定补偿: IB' = T(-世界位移) * IB, 保证 world' * IB' == world * IB (静止形变不变)
+ *
+ * @param offsets 关节名 -> (dx, dy, dz) 世界坐标位移 (模型单位)
+ */
+fun Skeleton3D.withRestOffsets(offsets: Map<String, FloatArray>): Skeleton3D {
+    if (offsets.isEmpty()) return this
+    val n = joints.size
+
+    // 拓扑序 (父先于子)
+    val order = IntArray(n)
+    var head = 0
+    val indeg = IntArray(n)
+    val kids = Array(n) { ArrayList<Int>() }
+    for (i in 0 until n) {
+        val p = joints[i].parentIndex
+        if (p in 0 until n) { indeg[i] = 1; kids[p].add(i) }
+    }
+    val queue = ArrayDeque<Int>()
+    for (i in 0 until n) if (indeg[i] == 0) queue.addLast(i)
+    while (queue.isNotEmpty()) {
+        val i = queue.removeFirst()
+        order[head++] = i
+        for (c in kids[i]) queue.addLast(c)
+    }
+    if (head != n) return this // 拓扑异常时保持原状
+
+    val bindWorld = FloatArray(n * 16)
+    val accWorld = FloatArray(n * 3)          // 每根关节的累计世界位移
+    val newLocal = arrayOfNulls<FloatArray>(n)
+    val newIB = arrayOfNulls<FloatArray>(n)
+
+    for (k in 0 until n) {
+        val i = order[k]
+        val j = joints[i]
+        val p = j.parentIndex
+        val parentWorldOff = if (p in 0 until n) p * 16 else -1
+
+        // 绑定姿态世界矩阵
+        if (parentWorldOff >= 0) {
+            Math3D.multiplyMMInto(bindWorld, i * 16, bindWorld, parentWorldOff, j.localMatrix, 0)
+        } else {
+            System.arraycopy(j.localMatrix, 0, bindWorld, i * 16, 16)
+        }
+
+        val d = offsets[j.name]
+        val pw = if (p in 0 until n) accWorld else null
+        val ax = if (d != null) d[0] else 0f
+        val ay = if (d != null) d[1] else 0f
+        val az = if (d != null) d[2] else 0f
+
+        var tx = 0f; var ty = 0f; var tz = 0f
+        if (d != null) {
+            // 世界位移 -> 父级坐标系下的局部平移: t = R_parent^-1 * dWorld
+            if (parentWorldOff >= 0) {
+                val m = bindWorld
+                val o = parentWorldOff
+                // 取父级世界矩阵的 3x3 逆 (假设无缩放: 用转置)
+                val r00 = m[o]; val r01 = m[o + 4]; val r02 = m[o + 8]
+                val r10 = m[o + 1]; val r11 = m[o + 5]; val r12 = m[o + 9]
+                val r20 = m[o + 2]; val r21 = m[o + 6]; val r22 = m[o + 10]
+                tx = r00 * ax + r10 * ay + r20 * az
+                ty = r01 * ax + r11 * ay + r21 * az
+                tz = r02 * ax + r12 * ay + r22 * az
+            } else {
+                tx = ax; ty = ay; tz = az
+            }
+        }
+
+        accWorld[i * 3] = (pw?.get(p * 3) ?: 0f) + ax
+        accWorld[i * 3 + 1] = (pw?.get(p * 3 + 1) ?: 0f) + ay
+        accWorld[i * 3 + 2] = (pw?.get(p * 3 + 2) ?: 0f) + az
+
+        val local = j.localMatrix.copyOf()
+        if (d != null) {
+            local[12] = local[12] + tx
+            local[13] = local[13] + ty
+            local[14] = local[14] + tz
+        }
+        newLocal[i] = local
+
+        // IB' = T(-acc) * IB
+        val ib = j.inverseBindMatrix.copyOf()
+        val cx = accWorld[i * 3]; val cy = accWorld[i * 3 + 1]; val cz = accWorld[i * 3 + 2]
+        if (cx != 0f || cy != 0f || cz != 0f) {
+            // 平移矩阵左乘: 只影响最后一列 M[12..14] += -c (IB 为列主序)
+            // 列主序下 T(-c)*M 等价于把 M 的平移列整体减去 c
+            ib[12] -= cx
+            ib[13] -= cy
+            ib[14] -= cz
+        }
+        newIB[i] = ib
+    }
+
+    val newJoints = ArrayList<Joint3D>(n)
+    for (i in 0 until n) {
+        val j = joints[i]
+        newJoints.add(
+            j.copy(
+                localMatrix = newLocal[i] ?: j.localMatrix,
+                inverseBindMatrix = newIB[i] ?: j.inverseBindMatrix,
+                children = j.children,
+            ),
+        )
+    }
+    return Skeleton3D(newJoints, humanoidMapping)
+}

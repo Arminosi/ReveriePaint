@@ -66,15 +66,16 @@ fun JointOffsetPanel(
     }
     val context = LocalContext.current
     var selected by remember { mutableStateOf("scapula_L") }
+    var axis by remember { mutableStateOf(1) }   // 0 = X (左右), 1 = Y (上下)
     var exportedPath by remember { mutableStateOf<String?>(null) }
 
-    val angles = state.jointAngles
-    val current = JointOffsetSpec.offsetOf(angles, selected)
+    val offsets = state.jointRestOffsets
+    val current = JointOffsetSpec.offsetOf(offsets, selected, axis)
 
     fun apply(value: Float) {
         vm.push3DUndoState(state)
         vm.update3DState(
-            state.copy(jointAngles = JointOffsetSpec.withOffset(state.jointAngles, selected, value)),
+            state.copy(jointRestOffsets = JointOffsetSpec.withOffset(state.jointRestOffsets, selected, value, axis)),
         )
     }
 
@@ -132,7 +133,8 @@ fun JointOffsetPanel(
                         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             group.bones.forEach { bone ->
                                 val active = bone == selected
-                                val modified = JointOffsetSpec.offsetOf(angles, bone) != 0f
+                                val modified = JointOffsetSpec.offsetOf(offsets, bone, 0) != 0f ||
+                                    JointOffsetSpec.offsetOf(offsets, bone, 1) != 0f
                                 Box(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(6.dp))
@@ -169,7 +171,7 @@ fun JointOffsetPanel(
                     modifier = Modifier.width(110.dp),
                 )
                 Text(
-                    text = "ty = %+.1f".format(current),
+                    text = "%s = %+.1f".format(if (axis == 0) "x" else "y", current),
                     color = if (current == 0f) Morandi.subText else Morandi.accent,
                     fontSize = 12.sp,
                     modifier = Modifier.width(96.dp),
@@ -185,6 +187,25 @@ fun JointOffsetPanel(
                         inactiveTrackColor = Morandi.border,
                     ),
                 )
+            }
+
+            Spacer(Modifier.height(6.dp))
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                listOf(0 to "左右 X", 1 to "上下 Y").forEach { (a, label) ->
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (axis == a) Morandi.accent.copy(alpha = 0.28f) else Morandi.panelHi)
+                            .clickable { axis = a }
+                            .padding(horizontal = 10.dp, vertical = 5.dp),
+                    ) {
+                        Text(text = label, color = Morandi.text, fontSize = 11.sp)
+                    }
+                }
             }
 
             Spacer(Modifier.height(6.dp))
@@ -219,7 +240,9 @@ fun JointOffsetPanel(
                         .background(Morandi.panelHi)
                         .clickable {
                             vm.push3DUndoState(state)
-                            vm.update3DState(state.copy(jointAngles = JointOffsetSpec.clearOffsets(state.jointAngles)))
+                            vm.update3DState(
+                                state.copy(jointRestOffsets = JointOffsetSpec.clearOffsets(state.jointRestOffsets)),
+                            )
                         }
                         .padding(horizontal = 12.dp, vertical = 6.dp),
                 ) {
@@ -235,7 +258,7 @@ fun JointOffsetPanel(
                                     context,
                                     state.modelType,
                                     state.posePreset,
-                                    state.jointAngles,
+                                    state.jointRestOffsets,
                                 )
                             }
                             .padding(horizontal = 12.dp, vertical = 6.dp),
@@ -248,7 +271,7 @@ fun JointOffsetPanel(
             Spacer(Modifier.height(8.dp))
             Text(
                 text = exportedPath?.let { "已导出: $it" }
-                    ?: "调好后点「导出」, 开发侧读取后固化进资产 (仅 debug 包)",
+                    ?: "改的是骨骼绑定位置 (网格不动), 只影响之后旋转该关节的轴心 · 导出仅 debug 包",
                 color = Morandi.subText,
                 fontSize = 9.sp,
             )

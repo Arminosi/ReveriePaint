@@ -113,9 +113,32 @@ internal fun PaintViewModel.getSkinnedModelForState(state: Model3DState): Skinne
 
     if (skinned != null) {
         if (skinnedModelCache.size > 20) skinnedModelCache.clear()
+        // 缓存的是"原始绑定姿态": 关节静止偏移是每层各自的状态, 不能污染共享缓存
         skinnedModelCache[key] = skinned
     }
-    return skinned
+    // 关节静止位置偏移 (用户微调过的 bind pose): 重算 IB, 静止网格保持不变
+    val rest = state.jointRestOffsets
+    if (skinned == null || rest.isEmpty()) return skinned
+    return withRestRebindCache(skinned, JointOffsetSpec.toWorldOffsets(rest), rest)
+}
+
+/** 重绑结果缓存: 键 = 模型对象 + 偏移签名, 避免拖动时每帧重建骨架 */
+private val restRebindCache = LinkedHashMap<String, SkinnedMesh3D>(8, 0.75f, true)
+
+private fun withRestRebindCache(
+    base: SkinnedMesh3D,
+    worldOffsets: Map<String, FloatArray>,
+    raw: Map<String, Float>,
+): SkinnedMesh3D {
+    val skeleton = base.skeleton ?: return base
+    val sig = raw.entries.sortedBy { it.key }.joinToString(",") { "${it.key}=${it.value}" }
+    val key = System.identityHashCode(base).toString() + "|" + sig
+    restRebindCache[key]?.let { return it }
+    val rebound = Skeleton3D(skeleton.withRestOffsets(worldOffsets).joints, skeleton.humanoidMapping)
+    val result = SkinnedMesh3D(base.baseMesh, rebound, base.jointIndices, base.jointWeights)
+    if (restRebindCache.size > 8) restRebindCache.clear()
+    restRebindCache[key] = result
+    return result
 }
 
 /**
@@ -545,16 +568,19 @@ internal fun PaintViewModel.handle3DGesture(deltaX: Float, deltaY: Float) {
             // 竖直拖拽 = 沿骨骼局部 Y 平移 (与 PosePresets.buildTranslations 的 _ty 约定一致,
             // 存储单位 1/100 模型单位, 因此每像素 0.1 = 0.001 模型单位)。
             if (jointPositionEditMode) {
-                val key = JointOffsetSpec.key(jointName, 1)
-                val cur = state.jointAngles[key] ?: 0f
-                val next = (cur - deltaY * 0.1f).coerceIn(-JointOffsetSpec.RANGE, JointOffsetSpec.RANGE)
-                if (kotlin.math.abs(next - cur) < 0.01f) return
-                // 不逐帧压撤销栈 (与既有骨骼旋转拖拽一致): 撤销一次即恢复到拖拽前
-                update3DState(
-                    state.copy(
-                        jointAngles = state.jointAngles + (key to next),
-                    ),
-                )
+                // 改的是"绑定姿态"而非姿势: 网格不动, 只挪这根骨及其子链的旋转轴心。
+                // 竖直 = Y, 水平 = X (屏幕右 -> 模型 +X)
+                val kx = JointOffsetSpec.key(jointName, 0)
+                val ky = JointOffsetSpec.key(jointName, 1)
+                val curX = state.jointRestOffsets[kx] ?: 0f
+                val curY = state.jointRestOffsets[ky] ?: 0f
+                val nextX = (curX + deltaX * 0.1f).coerceIn(-JointOffsetSpec.RANGE, JointOffsetSpec.RANGE)
+                val nextY = (curY - deltaY * 0.1f).coerceIn(-JointOffsetSpec.RANGE, JointOffsetSpec.RANGE)
+                if (kotlin.math.abs(nextX - curX) < 0.01f && kotlin.math.abs(nextY - curY) < 0.01f) return
+                var next = state.jointRestOffsets
+                next = JointOffsetSpec.withOffset(next, jointName, nextX, 0)
+                next = JointOffsetSpec.withOffset(next, jointName, nextY, 1)
+                update3DState(state.copy(jointRestOffsets = next))
                 return
             }
             // 点中轴环后只改该轴, 手感与环一致

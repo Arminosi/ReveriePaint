@@ -1,0 +1,82 @@
+From 05a06f0ebf9485a574fe29ae662a2465c85507b2 Mon Sep 17 00:00:00 2001
+From: LanRhyme <xiao_ren233@foxmail.com>
+Date: Wed, 28 Oct 2026 01:11:41 +0800
+Subject: [PATCH 9/9] =?UTF-8?q?fix(android):=20=E8=A7=86=E9=A2=91=E7=BC=96?=
+ =?UTF-8?q?=E7=A0=81=E5=99=A8=E6=94=B9=E7=94=A8=E7=A9=BA=E5=AE=9E=E7=8E=B0?=
+ =?UTF-8?q?=E6=A1=A9,=20=E4=BF=AE=E5=A4=8D=20kritaui=20=E9=93=BE=E6=8E=A5?=
+ =?UTF-8?q?=E5=A4=B1=E8=B4=A5?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+上游把视频导出重构后, KisVideoSaver / KisDlgAnimationRenderer /
+KisMediaEncoderFormatPreferencesDialog 都会引用 KisMediaEncoderWrapper, 而
+wrapper 在 Android 分支上要求 KisAndroidMediaEncoderRunnable 与
+KisLibavMediaEncoderRunnable 可链接。这两个实现分别硬依赖 mlt++/Mlt.h 与
+libav 头库, Android 构建里没有这些依赖 (MP4 导出由应用侧 Kotlin MediaCodec 实现)。
+
+本提交的做法:
+- Android 源列表加回 animation/KisMediaEncoderWrapper.cpp
+- 新增 animation/KisMediaEncoderRunnables_stub.cpp, 只提供 wrapper 用到的四个
+  静态入口 (两个 create() 返回 nullptr, 两个 getSupportedFormats() 输出空列表),
+  界面上表现为"无可用视频格式", 但整个 kritaui 可以正常链接
+- 两个真实编码器实现继续不参与 Android 构建
+---
+ libs/ui/CMakeLists.txt                        |  2 ++
+ .../KisMediaEncoderRunnables_stub.cpp         | 34 +++++++++++++++++++
+ 2 files changed, 36 insertions(+)
+ create mode 100644 libs/ui/animation/KisMediaEncoderRunnables_stub.cpp
+
+diff --git a/libs/ui/CMakeLists.txt b/libs/ui/CMakeLists.txt
+index f9d332a0..fd97e3ef 100644
+--- a/libs/ui/CMakeLists.txt
++++ b/libs/ui/CMakeLists.txt
+@@ -578,6 +578,8 @@ if(ANDROID)
+     list(APPEND kritaui_LIB_SRCS
+         KisAndroidDonations.cpp
+         animation/KisMediaEncoderFormatPreferencesDialog.cpp
++        animation/KisMediaEncoderWrapper.cpp
++        animation/KisMediaEncoderRunnables_stub.cpp
+     )
+ endif()
+ 
+diff --git a/libs/ui/animation/KisMediaEncoderRunnables_stub.cpp b/libs/ui/animation/KisMediaEncoderRunnables_stub.cpp
+new file mode 100644
+index 00000000..ab273a6d
+--- /dev/null
++++ b/libs/ui/animation/KisMediaEncoderRunnables_stub.cpp
+@@ -0,0 +1,34 @@
++/*
++ *  SPDX-License-Identifier: GPL-3.0-or-later
++ *
++ *  ReveriePaint: Android 构建没有 MLT 与 FFmpeg 开发库, 因此不编译上游的
++ *  KisAndroidMediaEncoderRunnable / KisLibavMediaEncoderRunnable 实现 (它们硬包含
++ *  mlt++/Mlt.h 与 libav 头), 只在这里提供 KisMediaEncoderWrapper 用到的四个静态
++ *  入口的空实现, 让 kritaui 正常链接。
++ *
++ *  Android 端的 MP4 导出由应用侧 Kotlin MediaCodec 实现, Krita 侧的视频导出入口
++ *  在本 fork 里返回空格式列表 + create() 返回 nullptr, 界面上表现为"无可用格式"。
++ */
++
++#include "KisAndroidMediaEncoderRunnable.h"
++#include "KisLibavMediaEncoderRunnable.h"
++
++KisAndroidMediaEncoderRunnable *
++KisAndroidMediaEncoderRunnable::create(const KisMediaEncoderWrapperSettings &, QObject *)
++{
++    return nullptr;
++}
++
++void KisAndroidMediaEncoderRunnable::getSupportedFormats(QVector<KisMediaEncoderFormat *> &)
++{
++}
++
++KisLibavMediaEncoderRunnable *
++KisLibavMediaEncoderRunnable::create(const KisMediaEncoderWrapperSettings &, QObject *)
++{
++    return nullptr;
++}
++
++void KisLibavMediaEncoderRunnable::getSupportedFormats(QVector<KisMediaEncoderFormat *> &)
++{
++}

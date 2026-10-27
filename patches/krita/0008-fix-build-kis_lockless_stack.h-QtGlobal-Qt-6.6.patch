@@ -1,0 +1,30 @@
+From 5a023ebfbd8181969c82a9fc47834e8d468f840e Mon Sep 17 00:00:00 2001
+From: LanRhyme <xiao_ren233@foxmail.com>
+Date: Wed, 28 Oct 2026 00:31:05 +0800
+Subject: [PATCH 8/9] =?UTF-8?q?fix(build):=20=E4=B8=BA=20kis=5Flockless=5F?=
+ =?UTF-8?q?stack.h=20=E8=A1=A5=20QtGlobal=20=E5=8C=85=E5=90=AB,=20?=
+ =?UTF-8?q?=E4=BF=AE=E5=A4=8D=20Qt=206.6=20=E4=B8=8B=E7=BC=96=E8=AF=91?=
+ =?UTF-8?q?=E5=A4=B1=E8=B4=A5?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Qt 6.6 的 qatomic.h 链不再传递包含 qglobal.h, 而该头文件只包含 QAtomicPointer
+却使用了 Q_DISABLE_COPY, 导致以它为第一个 Qt 头文件的编译单元直接报
+"unknown type name 'Q_DISABLE_COPY'" (例如 lcms2engine 的 CmykU16ColorSpace.cpp)
+---
+ libs/global/kis_lockless_stack.h | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/libs/global/kis_lockless_stack.h b/libs/global/kis_lockless_stack.h
+index 99cf26c4..ed06a61c 100644
+--- a/libs/global/kis_lockless_stack.h
++++ b/libs/global/kis_lockless_stack.h
+@@ -18,6 +18,7 @@
+ #define __KIS_LOCKLESS_STACK_H
+ 
+ #include <QAtomicPointer>
++#include <QtGlobal>
+ 
+ template<class T>
+ class KisLocklessStack

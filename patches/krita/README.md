@@ -18,6 +18,8 @@
 | 0005 | `feat-clipping` | 剪切蒙版引擎支持（剪切链表检索、基底定位、递归投影合成、KRA/PSD 落盘与读回） |
 | 0006 | `feat-mypaint-Android` | MyPaint 引擎静态注册与 Android 构建支持 |
 | 0007 | `fix-mypaint-Android-dlopen` | MyPaint 传感器连接改为懒初始化，修复 Android 上 dlopen 阶段崩溃 |
+| 0008 | `fix-build-kis_lockless_stack.h-QtGlobal-Qt-6.6` | `kis_lockless_stack.h` 补 `<QtGlobal>`，修 Qt 6.6.3 下 `Q_DISABLE_COPY` 未定义 |
+| 0009 | `fix-android-kritaui` | Android 视频编码器改用空实现桩（无 MLT/FFmpeg），修复 `libkritaui.so` 链接失败 |
 
 ## 应用与重建
 
@@ -38,4 +40,6 @@ git am /path/to/ReveriePaint-native/patches/krita/*.patch
 
 - 补丁基线必须与 `third_party/android-native-libs/` 里的预编译库同源，换基线后要重新编译并替换动态库
 - 0001 里对 Android 端 LibAV 的禁用是刻意的：MP4 导出由应用侧 Kotlin `MediaCodec` 实现，不依赖 Krita 的 FFmpeg 通道
+- 0009 的空实现桩让 Krita 侧视频导出在 Android 上表现为「无可用格式」，但 `libkritaui.so` 可以正常链接；
+  上游视频导出重构后若再新增对编码器类的引用，需要同步补桩
 - 上游每次同步后应重新导出本目录，并把基线 commit 写进本文件

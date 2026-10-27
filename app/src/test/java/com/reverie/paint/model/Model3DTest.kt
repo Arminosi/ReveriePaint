@@ -347,12 +347,12 @@ class Model3DTest {
             for (required in listOf(
                 // UniRig 自动绑定的 40 关节骨架 (见 docs/3D-SKELETON.md)
                 "root", "spine_01", "spine_02", "spine_03", "spine_04", "spine_05", "spine_06", "head",
-                // 本地增补关节: 脊柱起点处 (腰背), 见 docs/3D-SKELETON.md
-                "lumbar",
+                // 本地增补关节: 腰背 (root->spine_01) + 前肢肘部 (shoulder->elbow)
+                "lumbar", "forearm_L", "forearm_R",
                 "ear_L", "ear_tip_L", "ear_R", "ear_tip_R",
                 "tail_01", "tail_02", "tail_03", "tail_04", "tail_05", "tail_06", "tail_07", "tail_08",
-                "scapula_L", "shoulder_L", "elbow_L", "carpus_L", "toe_front_L",
-                "scapula_R", "shoulder_R", "elbow_R", "carpus_R", "toe_front_R",
+                "scapula_L", "shoulder_L", "forearm_L", "elbow_L", "carpus_L", "toe_front_L",
+                "scapula_R", "shoulder_R", "forearm_R", "elbow_R", "carpus_R", "toe_front_R",
                 "hip_L", "knee_L", "hock_L", "meta_L", "toe_hind_L",
                 "hip_R", "knee_R", "hock_R", "meta_R", "toe_hind_R",
             )) {

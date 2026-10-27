@@ -87,6 +87,19 @@ ninja -C build-android -j$(nproc) \
 
 2026-10-27 这次同步就是按上述目标集验证通过的（228 个编译步骤，0 错误）。
 
+如果之后还要验证 app 侧 JNI 是否跟着编得过，再补一步（用 gradle 既有的 CMake 配置目录）：
+
+```bash
+cd ~/Projects/ReveriePaint-native
+D=$(ls -td app/.cxx/Release/*/arm64-v8a | head -1)
+ninja -C "$D" -j$(nproc) reverie_jni
+```
+
+注意 `lib/libkritadefaultpaintops_static.a` 也被 app 直接链接：它的 mtime 若比源码新（比如从提交里
+捞回来的构建目录），ninja 不会重建，链 JNI 时会报 `undefined symbol:
+KisPaintOpSettingsWidget::setImage(...)` 这类已删 API 的错。先 `ninja -C build-android
+lib/libkritadefaultpaintops_static.a` 刷新它再链。
+
 构建目录 `build-android/` 的关键配置（`CMakeCache.txt`）：
 
 - 工具链 `~/ReveriePaint-android/toolchain/qt-chainload.cmake`

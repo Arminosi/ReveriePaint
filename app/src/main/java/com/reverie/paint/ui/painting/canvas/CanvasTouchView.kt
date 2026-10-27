@@ -2304,6 +2304,21 @@ class CanvasTouchView(context: Context) : View(context) {
      * onDraw 薄壳: 只在性能标尺开启时计时并叠加标尺, 关闭时直接转发 (零额外开销)。
      * 标尺本体在 debug 专属源集里 ([PerfHud]), 正式版是空实现。
      */
+    override fun invalidate() {
+        if (LandDiag.armed) LandDiag.noteInvalidate(LandDiag.shortCaller())
+        super.invalidate()
+    }
+
+    override fun postInvalidate() {
+        if (LandDiag.armed) LandDiag.noteInvalidate("post:" + LandDiag.shortCaller())
+        super.postInvalidate()
+    }
+
+    override fun postInvalidateOnAnimation() {
+        if (LandDiag.armed) LandDiag.noteInvalidate("postOnAnim:" + LandDiag.shortCaller())
+        super.postInvalidateOnAnimation()
+    }
+
     override fun onDraw(canvas: Canvas) {
         val tInvalidate = lastInvalidateFromRenderUptimeNs
         if (tInvalidate > 0L) {
@@ -2557,6 +2572,9 @@ class CanvasTouchView(context: Context) : View(context) {
                     releaseLargeBitmapTiles()
                 }
                 drawDisplayTiles(canvas, tiles)
+                if (LandDiag.armed) {
+                    LandDiag.holdDraw(true, v.displayTiles.generation, drawnRev, isInteracting)
+                }
                 // 液化上屏用的整图快照 (只在液化等待上屏/参考窗口开着时才存在)
                 v.displayBitmap?.let { v.onLiquifyBitmapDrawn(it) }
             } else if (bmp != null) {

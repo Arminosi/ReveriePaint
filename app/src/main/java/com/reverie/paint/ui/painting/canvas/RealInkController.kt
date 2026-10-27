@@ -14,6 +14,7 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.os.Build
 import android.os.SystemClock
+import com.reverie.paint.core.LandDiag
 import com.reverie.paint.core.PaintViewModel
 import com.reverie.paint.core.PublishedTiles
 import com.reverie.paint.core.RealInkSink
@@ -328,6 +329,12 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
         inkBoundB = Int.MIN_VALUE
         publishedInkBoundsPacked = 0L
         rebakePending = false
+        if (hold) {
+            LandDiag.endHold()
+            LandDiag.beginHold()
+        } else {
+            LandDiag.endHold()
+        }
         if (!hold) {
             held = false
             strokeHoles = null
@@ -412,6 +419,7 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
     /** 松开前缓冲 (抬笔、取消、让位给变换等)。任一线程可调。 */
     fun release() {
         held = false
+        LandDiag.endHold()
         synchronized(pendingLock) {
             uiClips = UiClipSnapshot.EMPTY
         }
@@ -1135,6 +1143,15 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
             returnPending(snapCount, seq)
             return false
         }
+        if (baked > 0) {
+            LandDiag.noteCompose(
+                final, baked, n, screenRects, bmpRects, packXY,
+                slotBitmap.width, slotBitmap.height,
+            )
+            if (LandDiag.takeShot(final)) {
+                saveLandSlot(slotBitmap, screenRects, packXY)
+            }
+        }
         baseState.copyFrom(shownState)
         shownState.copyFrom(next)
         if (baked > 0 || rebake) {
@@ -1308,6 +1325,29 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
             if (s.busy.compareAndSet(false, true)) return s
         }
         return null
+    }
+
+    private fun saveLandSlot(bmp: Bitmap, screenRects: IntArray, packXY: IntArray) {
+        val w = (screenRects[2] - screenRects[0]).coerceAtLeast(1)
+        val h = (screenRects[3] - screenRects[1]).coerceAtLeast(1)
+        val x = packXY[0].coerceIn(0, (bmp.width - 1).coerceAtLeast(0))
+        val y = packXY[1].coerceIn(0, (bmp.height - 1).coerceAtLeast(0))
+        val cw = w.coerceAtMost(bmp.width - x)
+        val ch = h.coerceAtMost(bmp.height - y)
+        if (cw <= 0 || ch <= 0) return
+        val dir = view.context.getExternalFilesDir(null) ?: return
+        val file = java.io.File(dir, "slot-${SystemClock.uptimeMillis()}.png")
+        val crop = Bitmap.createBitmap(bmp, x, y, cw, ch)
+        try {
+            java.io.FileOutputStream(file).use { out ->
+                crop.compress(Bitmap.CompressFormat.PNG, 100, out)
+            }
+            android.util.Log.i("LandDiag", "ev=slot file=${file.absolutePath} ${cw}x$ch")
+        } catch (t: Throwable) {
+            android.util.Log.i("LandDiag", "ev=slot fail ${t.javaClass.simpleName}")
+        } finally {
+            crop.recycle()
+        }
     }
 
     private fun clearSlotRect(l: Int, t: Int, r: Int, b: Int) {

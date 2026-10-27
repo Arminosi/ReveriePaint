@@ -86,10 +86,10 @@ internal class FrontBufferHoleMaskBuilder(private val view: CanvasTouchView) {
      *   手势中触摸态不调用这里): 不等防抖, post 到本帧之后立即录制 —— 手势后第一笔不再因为
      *   掩码还没建好而回落 (只省掉 100 ms 防抖; 光栅化仍在后台线程)。
      */
-    fun scheduleIfStale(v: PaintViewModel, pose: CanvasPose, settled: Boolean = false) {
+    fun scheduleIfStale(v: PaintViewModel, pose: CanvasPose, settled: Boolean = false, immediate: Boolean = false) {
         if (!recorder.isStale(v, pose, isTransform())) return
         val now = SystemClock.uptimeMillis()
-        val leading = FrontBufferHolePolicy.buildImmediately(settled, now, lastStaleMs, QUIET_MS)
+        val leading = immediate || FrontBufferHolePolicy.buildImmediately(settled, now, lastStaleMs, QUIET_MS)
         lastStaleMs = now
         if (scheduled) view.removeCallbacks(buildRunnable)
         scheduled = true

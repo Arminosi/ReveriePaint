@@ -139,7 +139,7 @@ object FrontBufferProbe {
         probeFinished = true
         Log.i(TAG, "preserve_probe supported=$result source=$probeSource sdk=${Build.VERSION.SDK_INT}")
 
-        if (prefs != null) {
+        if (prefs != null && probeSource == SOURCE_PROBE) {
             val key = getCacheKey()
             if (!prefs.contains(key) || prefs.getBoolean(key, !result) != result) {
                 prefs.edit().putBoolean(key, result).apply()

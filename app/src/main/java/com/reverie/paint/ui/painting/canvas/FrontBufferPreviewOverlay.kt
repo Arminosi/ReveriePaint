@@ -1409,10 +1409,9 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
         return created
     }
 
-    /** 内存告警时释放备份层 (不在运笔/追赶时)。 */
+    /** 内存告警时释放备份层 (不在运笔/追赶时)。只置空引用, 避免在 UI 线程 recycle GL 线程独占位图。 */
     fun trimStrokeLayer() {
         if (realInk?.held == true || realInk?.catchUpPending == true) return
-        strokeLayer?.recycle()
         strokeLayer = null
         strokeCanvas = null
         strokeLayerDirty.setEmpty()

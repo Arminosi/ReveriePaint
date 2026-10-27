@@ -354,7 +354,12 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
         }
         if (release && ctl != null) {
             // 旧缓冲 (含本笔已上屏的增量墨) 已丢弃: 松开, 窗口全量接管这一笔, 与关低延迟同图。
-            ctl.release()
+            if (ctl.held) {
+                Log.i(TAG, "ev=surface_changed_release seq=${ctl.currentStrokeSeq}")
+                ctl.releaseAndCatchUpSafe()
+            } else {
+                ctl.release()
+            }
             targetTouchView?.postInvalidate()
         }
         if (valid && ctl != null && w > 0 && h > 0) {
@@ -453,7 +458,8 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
                         // 松开它并让主画布接管, 否则按住期间主画布不刷新就是一段空白。
                         val ctl = realInk
                         if (ctl != null && ctl.held) {
-                            ctl.release()
+                            Log.i(TAG, "ev=multi_buffered_redraw_release seq=${ctl.currentStrokeSeq}")
+                            ctl.releaseAndCatchUpSafe()
                             targetTouchView?.postInvalidate()
                         }
                     }

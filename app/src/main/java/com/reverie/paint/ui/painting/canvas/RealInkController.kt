@@ -442,6 +442,18 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
     }
 
     /**
+     * 线程安全的追赶释放: 若在非 UI 线程触发 (例如 GL 线程的 multiBuffered 回调或 Surface 回调),
+     * post 回 UI 线程安全调度 scheduleRender, 避免并发争用与断墨。
+     */
+    fun releaseAndCatchUpSafe() {
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+            releaseAndCatchUp()
+        } else {
+            view.post { releaseAndCatchUp() }
+        }
+    }
+
+    /**
      * 视图画完一帧之后调用 (UI 线程, drawCanvas 末尾): 这一帧已经包含追赶的像素, 等它真正
      * 提交之后再清前缓冲。drawnRev 达到或超过目标版本说明窗口已追平。
      */
@@ -495,20 +507,25 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
 
     // ================= 渲染线程 (RealInkSink) =================
 
-    override fun wantsHold(): Boolean {
-        if (!held || view.isTransformActive || view.overlayPanelsOpen) return false
-        if (view.filterSessionActive) return false
+    fun wantsHoldRejectReason(): Int {
+        if (!held) return REJECT_NOT_HELD
+        if (view.isTransformActive) return REJECT_TRANSFORM
+        if (view.overlayPanelsOpen) return REJECT_PANELS
+        if (view.filterSessionActive) return REJECT_FILTER
         val vm = view.vm
-        if (vm != null && vm.anim.shiftTraceActive) return false
+        if (vm != null && vm.anim.shiftTraceActive) return REJECT_SHIFT_TRACE
         if (vm != null && vm.drawingGuide.mode == com.reverie.paint.model.GuideMode.SYMMETRY && vm.drawingGuide.assistedDrawing) {
-            if (vm.mirrorGate.state == com.reverie.paint.core.MirrorLiveGate.State.FALLBACK) return false
+            if (vm.mirrorGate.state == com.reverie.paint.core.MirrorLiveGate.State.FALLBACK) return REJECT_MIRROR_FALLBACK
         }
-        val overlay = view.frontBufferOverlay ?: return false
-        if (!overlay.canRenderPreview) return false
-        if (!overlay.bufferStillValid) return false
-        val p = pose ?: return false
-        return p.bmpW > 0 && p.bmpH > 0
+        val overlay = view.frontBufferOverlay ?: return REJECT_NO_OVERLAY
+        if (!overlay.canRenderPreview) return REJECT_CANNOT_PREVIEW
+        if (!overlay.bufferStillValid) return REJECT_BUFFER_INVALID
+        val p = pose ?: return REJECT_POSE_INVALID
+        if (p.bmpW <= 0 || p.bmpH <= 0) return REJECT_POSE_INVALID
+        return REJECT_NONE
     }
+
+    override fun wantsHold(): Boolean = wantsHoldRejectReason() == REJECT_NONE
 
     override fun presentTileFrame(
         tiles: PublishedTiles,
@@ -520,8 +537,15 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
         writtenBottom: Int,
         anyFull: Boolean,
     ): Boolean {
-        if (!wantsHold()) {
-            if (RealInkHoldPolicy.shouldReleaseOnReject(held, wantsHold = false)) release()
+        val rejectCode = wantsHoldRejectReason()
+        if (rejectCode != REJECT_NONE) {
+            if (RealInkHoldPolicy.shouldReleaseOnReject(held, wantsHold = false)) {
+                android.util.Log.i(
+                    "RealInkController",
+                    "ev=hold_reject reason=${rejectReasonToString(rejectCode)} seq=$currentStrokeSeq held=$held",
+                )
+                releaseAndCatchUp()
+            }
             synchronized(pendingLock) { pendingCount = 0 }
             return false
         }
@@ -1441,5 +1465,31 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
     companion object {
         const val SLOT_COUNT = 4
         const val SLOT_MIN_PX = 512
+
+        const val REJECT_NONE = 0
+        const val REJECT_NOT_HELD = 1
+        const val REJECT_TRANSFORM = 2
+        const val REJECT_PANELS = 3
+        const val REJECT_FILTER = 4
+        const val REJECT_SHIFT_TRACE = 5
+        const val REJECT_MIRROR_FALLBACK = 6
+        const val REJECT_NO_OVERLAY = 7
+        const val REJECT_CANNOT_PREVIEW = 8
+        const val REJECT_BUFFER_INVALID = 9
+        const val REJECT_POSE_INVALID = 10
+
+        fun rejectReasonToString(reason: Int): String = when (reason) {
+            REJECT_NOT_HELD -> "not_held"
+            REJECT_TRANSFORM -> "transform_active"
+            REJECT_PANELS -> "panels_open"
+            REJECT_FILTER -> "filter_session"
+            REJECT_SHIFT_TRACE -> "shift_trace"
+            REJECT_MIRROR_FALLBACK -> "mirror_fallback"
+            REJECT_NO_OVERLAY -> "no_overlay"
+            REJECT_CANNOT_PREVIEW -> "cannot_preview"
+            REJECT_BUFFER_INVALID -> "buffer_invalid"
+            REJECT_POSE_INVALID -> "pose_invalid"
+            else -> "unknown"
+        }
     }
 }

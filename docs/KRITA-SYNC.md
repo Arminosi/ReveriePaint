@@ -107,7 +107,24 @@ lib/libkritadefaultpaintops_static.a` 刷新它再链。
 - `ANDROID_ABI=arm64-v8a`、`ANDROID_NDK_ROOT=~/Android/Sdk/ndk/25.2.9519653`
 - 依赖前缀 `~/ReveriePaint-android/deps`
 
-产物替换到 `third_party/android-native-libs/` 后，`./scripts/build_native.sh` 才能打出与新引擎一致的 APK。
+### 刷新预编译库（发版/换引擎必做）
+
+产物要按**旧文件名**落盘，应用侧的加载路径才不用改。三个注意点：
+
+1. 上游现在把插件产物命名为 `krita*.so`（无 `lib` 前缀），而 APK 里历史上是
+   `libkrita*.so`（有前缀）——复制时按旧名重命名：
+   `build-android/lib/kritaroundmarkerpaintop.so` → `third_party/.../libkritaroundmarkerpaintop.so`
+2. `build-android/lib/` 里可能同时存在**陈旧**的带前缀副本（构建目录是从旧状态恢复时会这样），
+   一律以无前缀的新产物为准，别被 `-f` 判断骗到
+3. 逐个 `llvm-strip --strip-unneeded`（未 strip 的中间库约 888MB，strip 后 ~50MB），
+   再 `scripts/copy_jni_libs.sh` + `./gradlew assembleDebug`
+
+`libreverie_jni.so` 也必须换成用新引擎重编的版本（`app/build/intermediates/cxx/Release/*/obj/arm64-v8a/`），
+否则会在运行期和新的 `libkritaui` 行为不一致。
+
+**已知差异**：上游删除了导出 `KisColorManager` 的 `libkritacolor.so` 插件（新树里没有对应目标），
+当前仍保留旧文件（34KB，新代码不引用它），等真机验证后再决定是否从 `third_party` 和
+`app/src/main/cpp/CMakeLists.txt` 里摘掉。
 
 ## 5. 踩过的坑
 

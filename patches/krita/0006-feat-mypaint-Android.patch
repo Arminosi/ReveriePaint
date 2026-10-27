@@ -1,0 +1,86 @@
+From b1f178fbcc9ab6902899e63dd82e21eda1853d2c Mon Sep 17 00:00:00 2001
+From: LanRhyme <xiao_ren233@foxmail.com>
+Date: Tue, 27 Oct 2026 23:59:52 +0800
+Subject: [PATCH 6/7] =?UTF-8?q?feat(mypaint):=20=E9=9D=99=E6=80=81?=
+ =?UTF-8?q?=E6=B3=A8=E5=86=8C=E4=B8=8E=20Android=20=E6=9E=84=E5=BB=BA?=
+ =?UTF-8?q?=E6=94=AF=E6=8C=81?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- 新增 register_static.cpp, 与其它笔刷引擎走同一静态注册路径
+- FindLibMyPaint 在 ANDROID 下只链 json-c, 去掉 pkg-config 的桌面依赖
+---
+ cmake/modules/FindLibMyPaint.cmake           |  5 +++
+ plugins/paintops/mypaint/CMakeLists.txt      |  2 +-
+ plugins/paintops/mypaint/register_static.cpp | 32 ++++++++++++++++++++
+ 3 files changed, 38 insertions(+), 1 deletion(-)
+ create mode 100644 plugins/paintops/mypaint/register_static.cpp
+
+diff --git a/cmake/modules/FindLibMyPaint.cmake b/cmake/modules/FindLibMyPaint.cmake
+index 6cde3df7..247c3424 100644
+--- a/cmake/modules/FindLibMyPaint.cmake
++++ b/cmake/modules/FindLibMyPaint.cmake
+@@ -77,6 +77,11 @@ if (PkgConfig_FOUND)
+     set(LibMyPaint_COMPILE_OPTIONS "${MYPAINT_PKGCONF_CFLAGS};${MYPAINT_PKGCONF_CFLAGS_OTHER}")
+ endif ()
+ 
++if (ANDROID)
++    set(MYPAINT_PKGCONF_LIBRARIES json-c)
++    set(MYPAINT_PKGCONF_CFLAGS_OTHER "")
++endif()
++
+ find_path(LibMyPaint_INCLUDE_DIR
+     NAMES libmypaint/mypaint-config.h
+     HINTS ${MYPAINT_PKGCONF_INCLUDE_DIRS} ${MYPAINT_PKGCONF_INCLUDEDIR}
+diff --git a/plugins/paintops/mypaint/CMakeLists.txt b/plugins/paintops/mypaint/CMakeLists.txt
+index d5b1a646..a5f765be 100644
+--- a/plugins/paintops/mypaint/CMakeLists.txt
++++ b/plugins/paintops/mypaint/CMakeLists.txt
+@@ -25,7 +25,7 @@ kis_add_library(kritamypaintop_static STATIC ${kritamypaintop_SOURCES})
+ 
+ target_link_libraries(kritamypaintop_static kritalibpaintop LibMyPaint::mypaint kritawidgetutils kritaui kritalibbrush kritaresources)
+ 
+-kis_add_library(kritamypaintop MODULE MyPaintPaintOpPlugin.cpp)
++kis_add_library(kritamypaintop MODULE MyPaintPaintOpPlugin.cpp register_static.cpp)
+ 
+ target_link_libraries(kritamypaintop kritamypaintop_static)
+ 
+diff --git a/plugins/paintops/mypaint/register_static.cpp b/plugins/paintops/mypaint/register_static.cpp
+new file mode 100644
+index 00000000..319ae1f2
+--- /dev/null
++++ b/plugins/paintops/mypaint/register_static.cpp
+@@ -0,0 +1,32 @@
++/*
++ * SPDX-FileCopyrightText: 2026 ReveriePaint
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ *
++ * Static registration for the mypaint paintop, callable from external
++ * code without QPluginLoader (same pattern as defaultpaintops).
++ */
++
++#include <brushengine/kis_paintop_registry.h>
++#include <klocalizedstring.h>
++#include <KisResourceLoader.h>
++#include <KisResourceLoaderRegistry.h>
++
++#include "MyPaintPaintOpFactory.h"
++#include "MyPaintPaintOpPreset.h"
++
++extern "C" __attribute__((visibility("default"))) void krita_register_mypaint_paintop()
++{
++    KisResourceLoaderRegistry::instance()->registerLoader(
++        new KisResourceLoader<KisMyPaintPaintOpPreset>(
++            ResourceSubType::MyPaintPaintOpPresets,
++            ResourceType::PaintOpPresets,
++            i18n("MyPaint Brush Presets"),
++            QStringList() << "application/x-mypaint-brush"));
++    KisPaintOpRegistry::instance()->add(new KisMyPaintOpFactory());
++}
++
++extern "C" __attribute__((visibility("default"))) KisPaintOpPreset* krita_create_mypaint_preset(const QString &fileName)
++{
++    return new KisMyPaintPaintOpPreset(fileName);
++}

@@ -1,0 +1,593 @@
+From 35ad69db9b92ca3007f4fa78cd24998799cb41bc Mon Sep 17 00:00:00 2001
+From: LanRhyme <xiao_ren233@foxmail.com>
+Date: Tue, 27 Oct 2026 23:59:52 +0800
+Subject: [PATCH 5/7] =?UTF-8?q?feat(clipping):=20=E7=A7=BB=E6=A4=8D?=
+ =?UTF-8?q?=E5=B9=B6=E5=8A=A0=E5=9B=BA=E5=89=AA=E5=88=87=E8=92=99=E7=89=88?=
+ =?UTF-8?q?=E5=BC=95=E6=93=8E=E6=94=AF=E6=8C=81?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- KisLayer 与 KisNode 支持剪切链表检索与基底定位 (gatherClippingLayers / findClippingBase)
+- KisLayerProjectionPlane 采用 projection() 递归合成剪切层, 解决分组图层与蒙版失效问题
+- 修复自由画笔脏矩形通知, 同步传播更新至基底图层
+- 支持 KRA 与 PSD 格式的剪切属性加载与保存
+---
+ .../kis_node_property_list_command.cpp        |  8 +-
+ libs/image/kis_layer.cc                       | 56 ++++++++++++++
+ libs/image/kis_layer.h                        | 10 +++
+ libs/image/kis_layer_projection_plane.cpp     | 67 ++++++++++++++--
+ libs/image/kis_layer_properties_icons.cpp     |  2 +
+ libs/image/kis_layer_properties_icons.h       |  1 +
+ libs/image/kis_node.cpp                       | 76 +++++++++++++++++++
+ libs/image/kis_node.h                         | 20 +++++
+ libs/psd/psd_layer_section.cpp                |  6 +-
+ libs/ui/tool/strokes/freehand_stroke.cpp      | 20 +++++
+ plugins/impex/libkra/kis_kra_loader.cpp       |  5 ++
+ .../impex/libkra/kis_kra_savexml_visitor.cpp  |  5 ++
+ plugins/impex/libkra/kis_kra_tags.h           |  1 +
+ plugins/impex/psd/psd_loader.cpp              |  3 +
+ 14 files changed, 272 insertions(+), 8 deletions(-)
+
+diff --git a/libs/image/commands/kis_node_property_list_command.cpp b/libs/image/commands/kis_node_property_list_command.cpp
+index 0dc63834..38cc8c92 100644
+--- a/libs/image/commands/kis_node_property_list_command.cpp
++++ b/libs/image/commands/kis_node_property_list_command.cpp
+@@ -115,9 +115,15 @@ bool KisNodePropertyListCommand::mergeWith(const KUndo2Command *command)
+         const QSet<QString> changedInTheMeantime =
+             changedProperties(m_newPropertyList, other->m_oldPropertyList);
+ 
++        static const QSet<QString> allowedMidAir = {
++            KisLayerPropertiesIcons::colorOverlay.id(),
++            KisLayerPropertiesIcons::clippingLayer.id(),
++            KisLayerPropertiesIcons::inheritAlpha.id()
++        };
++
+         KIS_SAFE_ASSERT_RECOVER_NOOP(changedInTheMeantime.isEmpty() ||
+                                      (changedInTheMeantime.size() == 1 &&
+-                                      *changedInTheMeantime.begin() == KisLayerPropertiesIcons::colorOverlay.id()));
++                                      allowedMidAir.contains(*changedInTheMeantime.begin())));
+ 
+         m_newPropertyList = other->m_newPropertyList;
+         return true;
+diff --git a/libs/image/kis_layer.cc b/libs/image/kis_layer.cc
+index e7dd90fe..edf6604c 100644
+--- a/libs/image/kis_layer.cc
++++ b/libs/image/kis_layer.cc
+@@ -167,6 +167,7 @@ struct Q_DECL_HIDDEN KisLayer::Private
+     QBitArray channelFlags;
+     KisMetaData::Store* metaDataStore {nullptr};
+     KisCloneLayersList clonesList;
++    bool clipping {false};
+ 
+     KisPSDLayerStyleSP layerStyle;
+     KisLayerStyleProjectionPlaneSP layerStyleProjectionPlane;
+@@ -197,6 +198,7 @@ KisLayer::KisLayer(const KisLayer& rhs)
+     if (this != &rhs) {
+         m_d->metaDataStore = new KisMetaData::Store(*rhs.m_d->metaDataStore);
+         m_d->channelFlags = rhs.m_d->channelFlags;
++        m_d->clipping = rhs.m_d->clipping;
+ 
+         setName(rhs.name());
+         m_d->projectionPlane = toQShared(new KisLayerProjectionPlane(this));
+@@ -285,6 +287,7 @@ KisBaseNode::PropertyList KisLayer::sectionModelProperties() const
+     }
+ 
+     l << KisLayerPropertiesIcons::getProperty(KisLayerPropertiesIcons::inheritAlpha, alphaChannelDisabled());
++    l << KisLayerPropertiesIcons::getProperty(KisLayerPropertiesIcons::clippingLayer, clippingEnabled());
+ 
+     if (colorOverlayMask()) {
+         // Use an immutable property (with a string value), to hide it in the layer properties dialog.
+@@ -303,6 +306,10 @@ void KisLayer::setSectionModelProperties(const KisBaseNode::PropertyList &proper
+             disableAlphaChannel(property.state.toBool());
+         }
+ 
++        if (property.id == KisLayerPropertiesIcons::clippingLayer.id()) {
++            enableClippingLayer(property.state.toBool());
++        }
++
+         if (property.id == KisLayerPropertiesIcons::layerStyle.id()) {
+             if (m_d->layerStyle &&
+                 m_d->layerStyle->isEnabled() != property.state.toBool()) {
+@@ -316,8 +323,43 @@ void KisLayer::setSectionModelProperties(const KisBaseNode::PropertyList &proper
+     }
+ }
+ 
++bool KisLayer::clippingEnabled() const
++{
++    return m_d->clipping;
++}
++
++void KisLayer::enableClippingLayer(bool enable)
++{
++    if (m_d->clipping == enable) return;
++
++    if (enable && alphaChannelDisabled()) {
++        disableAlphaChannel(false);
++    }
++
++    KisNodeSP base = findClippingBase();
++    m_d->clipping = enable;
++    if (!base) {
++        base = findClippingBase();
++    }
++
++    if (base) {
++        base->setDirty();
++    } else {
++        setDirty();
++    }
++
++    baseNodeChangedCallback();
++    baseNodeInvalidateAllFramesCallback();
++}
++
+ void KisLayer::disableAlphaChannel(bool disable)
+ {
++    if (alphaChannelDisabled() == disable) return;
++
++    if (disable && clippingEnabled()) {
++        enableClippingLayer(false);
++    }
++
+     QBitArray newChannelFlags = m_d->channelFlags;
+ 
+     if(newChannelFlags.isEmpty())
+@@ -426,6 +468,7 @@ void KisLayer::fillMergedLayerTemplate(KisLayerSP dstLayer, KisLayerSP prevLayer
+     QRect layerProjectionExtent = this->projection()->extent();
+     QRect prevLayerProjectionExtent = prevLayer->projection()->extent();
+     bool alphaDisabled = this->alphaChannelDisabled();
++    bool clipping = this->clippingEnabled();
+     bool prevAlphaDisabled = prevLayer->alphaChannelDisabled();
+ 
+     KisPaintDeviceSP mergedDevice = dstLayer->paintDevice();
+@@ -439,6 +482,7 @@ void KisLayer::fillMergedLayerTemplate(KisLayerSP dstLayer, KisLayerSP prevLayer
+         }
+ 
+         //Copy the pixels of previous layer with their actual alpha value
++        prevLayer->enableClippingLayer(false);
+         prevLayer->disableAlphaChannel(false);
+ 
+         prevLayer->projectionPlane()->apply(&gc, prevLayerProjectionExtent | imageSP->bounds());
+@@ -451,11 +495,15 @@ void KisLayer::fillMergedLayerTemplate(KisLayerSP dstLayer, KisLayerSP prevLayer
+             if (alphaDisabled == prevAlphaDisabled) {
+                 this->disableAlphaChannel(false);
+             }
++            if (clipping) {
++                this->disableAlphaChannel(true);
++            }
+ 
+             this->projectionPlane()->apply(&gc, layerProjectionExtent | imageSP->bounds());
+ 
+             //Restore the layer disableAlpha status for correct undo/redo
+             this->disableAlphaChannel(alphaDisabled);
++            this->enableClippingLayer(clipping);
+         }
+     }
+     else {
+@@ -466,6 +514,9 @@ void KisLayer::fillMergedLayerTemplate(KisLayerSP dstLayer, KisLayerSP prevLayer
+         if (!skipPaintingThisLayer) {
+             //Paint layer on the copy
+             KisPainter gc(mergedDevice);
++            if (clipping) {
++                gc.setChannelFlags(mergedDevice->colorSpace()->channelFlags(true, false));
++            }
+             gc.bitBlt(layerProjectionExtent.topLeft(), this->projection(), layerProjectionExtent);
+         }
+     }
+@@ -499,6 +550,11 @@ void KisLayer::updateClones(const QRect &rect, bool dontInvalidateFrames)
+ void KisLayer::notifyChildMaskChanged()
+ {
+     m_d->masksCache.setDirty();
++    if (clippingEnabled()) {
++        if (KisNodeSP base = findClippingBase()) {
++            base->setDirty(extent());
++        }
++    }
+ }
+ 
+ KisSelectionMaskSP KisLayer::selectionMask() const
+diff --git a/libs/image/kis_layer.h b/libs/image/kis_layer.h
+index 9deb2885..badfb13a 100644
+--- a/libs/image/kis_layer.h
++++ b/libs/image/kis_layer.h
+@@ -131,6 +131,16 @@ public:
+      */
+     bool alphaChannelDisabled() const;
+ 
++    /**
++     * set/unset layer properties flag for the clipping of this layer
++     */
++    void enableClippingLayer(bool enable);
++
++    /**
++     * returns true if clipping is enabled for this layer
++     */
++    bool clippingEnabled() const;
++
+     /**
+      * set the channelflags for this layer to the specified bit array.
+      * The bit array must have exactly the same number of channels as
+diff --git a/libs/image/kis_layer_projection_plane.cpp b/libs/image/kis_layer_projection_plane.cpp
+index 0a05b65e..16f702cc 100644
+--- a/libs/image/kis_layer_projection_plane.cpp
++++ b/libs/image/kis_layer_projection_plane.cpp
+@@ -14,6 +14,8 @@
+ #include "kis_projection_leaf.h"
+ #include "kis_cached_paint_device.h"
+ #include "kis_sequential_iterator.h"
++#include "kis_paint_layer.h"
++#include "kis_group_layer.h"
+ 
+ 
+ struct KisLayerProjectionPlane::Private
+@@ -43,6 +45,10 @@ void KisLayerProjectionPlane::applyImpl(KisPainter *painter, const QRect &rect,
+     KisPaintDeviceSP device = m_d->layer->projection();
+     if (!device) return;
+ 
++    if (m_d->layer->clippingEnabled()) {
++        return;
++    }
++
+     QRect needRect = rect;
+ 
+     if (m_d->layer->compositeOpId() != COMPOSITE_COPY &&
+@@ -54,7 +60,28 @@ void KisLayerProjectionPlane::applyImpl(KisPainter *painter, const QRect &rect,
+ 
+     if(needRect.isEmpty()) return;
+ 
+-    const QBitArray channelFlags = m_d->layer->projectionLeaf()->channelFlags();
++    QBitArray channelFlags = m_d->layer->projectionLeaf()->channelFlags();
++    const KoColorSpace *srcCS = device->colorSpace();
++    const KoColorSpace *dstCS = painter->device()->colorSpace();
++
++    if (!channelFlags.isEmpty() && srcCS != dstCS) {
++        bool alphaFlagIsSet        = (srcCS->channelFlags(false, true) & channelFlags) == srcCS->channelFlags(false, true);
++        bool allColorFlagsAreSet   = (srcCS->channelFlags(true, false) & channelFlags) == srcCS->channelFlags(true, false);
++        bool allColorFlagsAreUnset = (srcCS->channelFlags(true, false) & channelFlags).count(true) == 0;
++
++        if (allColorFlagsAreSet) {
++            channelFlags = dstCS->channelFlags(true, alphaFlagIsSet);
++        } else if (allColorFlagsAreUnset) {
++            channelFlags = dstCS->channelFlags(false, alphaFlagIsSet);
++        } else {
++            for (quint32 i = 0; i < dstCS->channelCount(); ++i) {
++                if (dstCS->channels()[i]->channelType() == KoChannelInfo::ALPHA) {
++                    channelFlags.setBit(i, alphaFlagIsSet);
++                    break;
++                }
++            }
++        }
++    }
+ 
+     QScopedPointer<KisCachedPaintDevice::Guard> d1;
+ 
+@@ -68,10 +95,40 @@ void KisLayerProjectionPlane::applyImpl(KisPainter *painter, const QRect &rect,
+         device = tmp;
+     }
+ 
+-    painter->setChannelFlags(channelFlags);
+-    painter->setCompositeOpId(m_d->layer->compositeOpId());
+-    painter->setOpacityU8(m_d->layer->projectionLeaf()->opacity());
+-    painter->bitBlt(needRect.topLeft(), device, needRect);
++    QList<KisNodeSP> clippedNodes = m_d->layer->gatherClippingLayers();
++
++    if (clippedNodes.isEmpty()) {
++        painter->setChannelFlags(channelFlags);
++        painter->setCompositeOpId(m_d->layer->compositeOpId());
++        painter->setOpacityU8(m_d->layer->projectionLeaf()->opacity());
++        painter->bitBlt(needRect.topLeft(), device, needRect);
++    } else {
++        KisPaintDeviceSP deviceClone = new KisPaintDevice(dstCS);
++        deviceClone->makeCloneFrom(device, needRect);
++
++        QBitArray newChannelFlags = deviceClone->colorSpace()->channelFlags(true, false);
++
++        KisPainter clipPainter(deviceClone);
++        clipPainter.setChannelFlags(newChannelFlags);
++
++        for (KisNodeSP node : clippedNodes) {
++            KisLayer *clipLayer = dynamic_cast<KisLayer*>(node.data());
++            if (!clipLayer || !clipLayer->visible()) continue;
++
++            KisPaintDeviceSP clipDev = clipLayer->projection();
++            if (!clipDev) continue;
++
++            clipPainter.setCompositeOpId(clipLayer->compositeOpId());
++            clipPainter.setOpacityU8(clipLayer->projectionLeaf()->opacity());
++            clipPainter.bitBlt(needRect.topLeft(), clipDev, needRect);
++        }
++        clipPainter.end();
++
++        painter->setChannelFlags(channelFlags);
++        painter->setCompositeOpId(m_d->layer->compositeOpId());
++        painter->setOpacityU8(m_d->layer->projectionLeaf()->opacity());
++        painter->bitBlt(needRect.topLeft(), deviceClone, needRect);
++    }
+ }
+ 
+ void KisLayerProjectionPlane::apply(KisPainter *painter, const QRect &rect)
+diff --git a/libs/image/kis_layer_properties_icons.cpp b/libs/image/kis_layer_properties_icons.cpp
+index 1f07d78e..28dc780b 100644
+--- a/libs/image/kis_layer_properties_icons.cpp
++++ b/libs/image/kis_layer_properties_icons.cpp
+@@ -25,6 +25,7 @@ const KoID KisLayerPropertiesIcons::visible("visible", ki18n("Visible"));
+ const KoID KisLayerPropertiesIcons::layerStyle("layer-style", ki18n("Layer Style"));
+ const KoID KisLayerPropertiesIcons::inheritAlpha("inherit-alpha", ki18n("Inherit Alpha"));
+ const KoID KisLayerPropertiesIcons::alphaLocked("alpha-locked", ki18n("Alpha Locked"));
++const KoID KisLayerPropertiesIcons::clippingLayer("clipping-layer", ki18n("Clipping Layer"));
+ const KoID KisLayerPropertiesIcons::onionSkins("onion-skins", ki18n("Onion Skins"));
+ const KoID KisLayerPropertiesIcons::passThrough("pass-through", ki18n("Pass Through"));
+ const KoID KisLayerPropertiesIcons::selectionActive("selection-active", ki18n("Active"));
+@@ -78,6 +79,7 @@ void KisLayerPropertiesIcons::updateIcons()
+     m_d->icons.insert(layerStyle.id(), IconsPair(KisIconUtils::loadIcon("layer-style-enabled"), KisIconUtils::loadIcon("layer-style-disabled")));
+     m_d->icons.insert(inheritAlpha.id(), IconsPair(KisIconUtils::loadIcon("transparency-disabled"), KisIconUtils::loadIcon("transparency-enabled")));
+     m_d->icons.insert(alphaLocked.id(), IconsPair(KisIconUtils::loadIcon("transparency-locked"), KisIconUtils::loadIcon("transparency-unlocked")));
++    m_d->icons.insert(clippingLayer.id(), IconsPair(KisIconUtils::loadIcon("quick_clipping"), KisIconUtils::loadIcon("quick_clipping")));
+     m_d->icons.insert(onionSkins.id(), IconsPair(KisIconUtils::loadIcon("onionOn"), KisIconUtils::loadIcon("onionOff")));
+     m_d->icons.insert(passThrough.id(), IconsPair(KisIconUtils::loadIcon("passthrough-enabled"), KisIconUtils::loadIcon("passthrough-disabled")));
+     m_d->icons.insert(selectionActive.id(), IconsPair(KisIconUtils::loadIcon("local-selection-active"), KisIconUtils::loadIcon("local-selection-inactive")));
+diff --git a/libs/image/kis_layer_properties_icons.h b/libs/image/kis_layer_properties_icons.h
+index 7e0f6701..ec5bb01d 100644
+--- a/libs/image/kis_layer_properties_icons.h
++++ b/libs/image/kis_layer_properties_icons.h
+@@ -24,6 +24,7 @@ public:
+     static const KoID layerStyle;
+     static const KoID inheritAlpha;
+     static const KoID alphaLocked;
++    static const KoID clippingLayer;
+     static const KoID onionSkins;
+     static const KoID passThrough;
+     static const KoID selectionActive;
+diff --git a/libs/image/kis_node.cpp b/libs/image/kis_node.cpp
+index f5a1f814..63cc5fcb 100644
+--- a/libs/image/kis_node.cpp
++++ b/libs/image/kis_node.cpp
+@@ -25,6 +25,8 @@
+ #include "KisFrameChangeUpdateRecipe.h"
+ 
+ #include "kis_clone_layer.h"
++#include "kis_layer.h"
++#include "kis_group_layer.h"
+ 
+ #include "kis_time_span.h"
+ 
+@@ -411,6 +413,80 @@ KisNodeSP KisNode::nextSibling() const
+     return parentNode ? parentNode->nextChildImpl(const_cast<KisNode*>(this)) : 0;
+ }
+ 
++bool KisNode::isClippingPrevSibling() const
++{
++    if (KisNodeSP prev = prevSibling()) {
++        if (!prev->inherits("KisGroupLayer")) {
++            if (KisLayer *layer = qobject_cast<KisLayer*>(prev.data())) {
++                return layer->clippingEnabled();
++            }
++        }
++    }
++    return false;
++}
++
++bool KisNode::isClippingNextSibling() const
++{
++    if (KisNodeSP next = nextSibling()) {
++        if (KisLayer *layer = qobject_cast<KisLayer*>(next.data())) {
++            return layer->clippingEnabled();
++        }
++    }
++    return false;
++}
++
++QList<KisNodeSP> KisNode::gatherClippingLayers() const
++{
++    QList<KisNodeSP> clippedNodes;
++    KisNodeSP current = nextSibling();
++
++    while (current) {
++        if (current == parent()) break;
++
++        KisLayer *currentLayer = qobject_cast<KisLayer*>(current.data());
++        if (!currentLayer) break;
++
++        if (!currentLayer->clippingEnabled()) break;
++
++        KisGroupLayerSP group = qobject_cast<KisGroupLayer*>(currentLayer);
++        if (group && group->passThroughMode()) {
++            for (KisNodeSP child = group->firstChild(); child; child = child->nextSibling()) {
++                KisLayer *chLay = qobject_cast<KisLayer*>(child.data());
++                if (!chLay) break;
++                if (!child->visible()) continue;
++                if (!chLay->clippingEnabled()) break;
++                clippedNodes.append(child);
++            }
++            current = group->nextSibling();
++            continue;
++        }
++
++        if (current->visible()) {
++            clippedNodes.append(current);
++        }
++        current = current->nextSibling();
++    }
++    return clippedNodes;
++}
++
++KisNodeSP KisNode::findClippingBase() const
++{
++    const KisLayer *selfLayer = qobject_cast<const KisLayer*>(this);
++    if (!selfLayer || !selfLayer->clippingEnabled()) {
++        return nullptr;
++    }
++
++    KisNodeSP current = prevSibling();
++    while (current) {
++        KisLayer *layer = qobject_cast<KisLayer*>(current.data());
++        if (layer && !layer->clippingEnabled()) {
++            return current;
++        }
++        current = current->prevSibling();
++    }
++    return nullptr;
++}
++
+ quint32 KisNode::childCount() const
+ {
+     QReadLocker l(&m_d->nodeSubgraphLock);
+diff --git a/libs/image/kis_node.h b/libs/image/kis_node.h
+index 92f830ee..aef55424 100644
+--- a/libs/image/kis_node.h
++++ b/libs/image/kis_node.h
+@@ -305,6 +305,26 @@ public: // Graph methods
+      */
+     KisNodeSP nextSibling() const;
+ 
++    /**
++     * Returns true if previous layer has Clipping ON
++     */
++    bool isClippingPrevSibling() const;
++
++    /**
++     * Returns true if next layer has Clipping ON
++     */
++    bool isClippingNextSibling() const;
++
++    /**
++     * Returns list of nodes clipped to current node
++     */
++    QList<KisNodeSP> gatherClippingLayers() const;
++
++    /**
++     * Returns node the current layer is clipped to or nullptr
++     */
++    KisNodeSP findClippingBase() const;
++
+     /**
+      * Returns how many direct child nodes this node has (not
+      * recursive).
+diff --git a/libs/psd/psd_layer_section.cpp b/libs/psd/psd_layer_section.cpp
+index 52863ec4..5e4691d1 100644
+--- a/libs/psd/psd_layer_section.cpp
++++ b/libs/psd/psd_layer_section.cpp
+@@ -675,7 +675,8 @@ void PSDLayerMaskSection::writePsdImpl(QIODevice &io, KisNodeSP rootLayer, psd_c
+                 const bool nodeLocked = node->userLocked();
+                 const KoColorSpace *colorSpace = node->colorSpace();
+                 const quint8 nodeOpacity = node->opacity();
+-                const quint8 nodeClipping = 0;
++                const KisLayer *layerObj = qobject_cast<const KisLayer *>(node.data());
++                const quint8 nodeClipping = (layerObj && layerObj->clippingEnabled()) ? 1 : 0;
+                 const int nodeLabelColor = node->colorLabelIndex();
+                 const KisPaintLayer *paintLayer = qobject_cast<KisPaintLayer *>(node.data());
+                 const bool alphaLocked = (paintLayer && paintLayer->alphaLocked());
+@@ -1064,7 +1065,8 @@ void PSDLayerMaskSection::writeTiffImpl(QIODevice &io, KisNodeSP rootLayer, psd_
+                 const bool nodeVisible = node->visible();
+                 const KoColorSpace *colorSpace = node->colorSpace();
+                 const quint8 nodeOpacity = node->opacity();
+-                const quint8 nodeClipping = 0;
++                const KisLayer *layerObj = qobject_cast<const KisLayer *>(node.data());
++                const quint8 nodeClipping = (layerObj && layerObj->clippingEnabled()) ? 1 : 0;
+                 const int nodeLabelColor = node->colorLabelIndex();
+                 const KisPaintLayer *paintLayer = qobject_cast<KisPaintLayer *>(node.data());
+                 const bool alphaLocked = (paintLayer && paintLayer->alphaLocked());
+diff --git a/libs/ui/tool/strokes/freehand_stroke.cpp b/libs/ui/tool/strokes/freehand_stroke.cpp
+index eb350c2b..4d2b38a6 100644
+--- a/libs/ui/tool/strokes/freehand_stroke.cpp
++++ b/libs/ui/tool/strokes/freehand_stroke.cpp
+@@ -316,6 +316,16 @@ void FreehandStrokeStrategy::issueSetDirtySignals()
+         KritaUtils::addJobSequential(jobs,
+             [this, dirtyRects] () {
+                 this->targetNode()->setDirty(dirtyRects);
++                if (this->targetNode()->inherits("KisMask")) {
++                    KisNodeSP parent = this->targetNode()->parent();
++                    if (parent && !parent->inherits("KisGroupLayer")) {
++                        if (KisNodeSP base = parent->findClippingBase()) {
++                            base->setDirty(dirtyRects);
++                        }
++                    }
++                } else if (KisNodeSP base = this->targetNode()->findClippingBase()) {
++                    base->setDirty(dirtyRects);
++                }
+             }
+         );
+ 
+@@ -323,6 +333,16 @@ void FreehandStrokeStrategy::issueSetDirtySignals()
+ 
+     } else {
+         targetNode()->setDirty(dirtyRects);
++        if (this->targetNode()->inherits("KisMask")) {
++            KisNodeSP parent = this->targetNode()->parent();
++            if (parent && !parent->inherits("KisGroupLayer")) {
++                if (KisNodeSP base = parent->findClippingBase()) {
++                    base->setDirty(dirtyRects);
++                }
++            }
++        } else if (KisNodeSP base = this->targetNode()->findClippingBase()) {
++            base->setDirty(dirtyRects);
++        }
+     }
+ 
+     //KisUpdateTimeMonitor::instance()->reportJobFinished(data, dirtyRects);
+diff --git a/plugins/impex/libkra/kis_kra_loader.cpp b/plugins/impex/libkra/kis_kra_loader.cpp
+index 904a7808..0916250b 100644
+--- a/plugins/impex/libkra/kis_kra_loader.cpp
++++ b/plugins/impex/libkra/kis_kra_loader.cpp
+@@ -1036,6 +1036,11 @@ KisNodeSP KisKraLoader::loadNode(const QDomElement& element, KisImageSP image)
+         QBitArray channelFlags    = stringToFlags(element.attribute(CHANNEL_FLAGS, ""), colorSpace->channelCount());
+         layer->setChannelFlags(channelFlags);
+ 
++        if (element.hasAttribute(CLIPPED)) {
++            bool clipped = element.attribute(CLIPPED, "0") != "0";
++            layer->enableClippingLayer(clipped);
++        }
++
+         if (element.hasAttribute(LAYER_STYLE_UUID)) {
+             QString uuidString = element.attribute(LAYER_STYLE_UUID);
+             QUuid uuid(uuidString);
+diff --git a/plugins/impex/libkra/kis_kra_savexml_visitor.cpp b/plugins/impex/libkra/kis_kra_savexml_visitor.cpp
+index ff9de809..ab87b85f 100644
+--- a/plugins/impex/libkra/kis_kra_savexml_visitor.cpp
++++ b/plugins/impex/libkra/kis_kra_savexml_visitor.cpp
+@@ -324,6 +324,10 @@ void KisSaveXmlVisitor::loadLayerAttributes(const QDomElement &el, KisLayer *lay
+         layer->setUserLocked(el.attribute(LOCKED).toInt());
+     }
+ 
++    if (el.hasAttribute(CLIPPED)) {
++        layer->enableClippingLayer(el.attribute(CLIPPED).toInt());
++    }
++
+     if (el.hasAttribute(X)) {
+         layer->setX(el.attribute(X).toInt());
+     }
+@@ -385,6 +389,7 @@ void KisSaveXmlVisitor::saveLayer(QDomElement & el, const QString & layerType, c
+     el.setAttribute(COMPOSITE_OP, layer->compositeOp()->id());
+     el.setAttribute(VISIBLE, layer->visible());
+     el.setAttribute(LOCKED, layer->userLocked());
++    el.setAttribute(CLIPPED, layer->clippingEnabled());
+     el.setAttribute(NODE_TYPE, layerType);
+     el.setAttribute(FILE_NAME, filename);
+     el.setAttribute(X, layer->x());
+diff --git a/plugins/impex/libkra/kis_kra_tags.h b/plugins/impex/libkra/kis_kra_tags.h
+index 5eed00ee..5a6db010 100644
+--- a/plugins/impex/libkra/kis_kra_tags.h
++++ b/plugins/impex/libkra/kis_kra_tags.h
+@@ -37,6 +37,7 @@ const QString ANIMATION_METADATA_PATH = "/animation/";
+ const QString ADJUSTMENT_LAYER = "adjustmentlayer";
+ const QString CHANNEL_FLAGS = "channelflags";
+ const QString CHANNEL_LOCK_FLAGS = "channellockflags";
++const QString CLIPPED = "clipping";
+ const QString CLONE_FROM = "clonefrom";
+ const QString CLONE_FROM_UUID = "clonefromuuid";
+ const QString CLONE_LAYER = "clonelayer";
+diff --git a/plugins/impex/psd/psd_loader.cpp b/plugins/impex/psd/psd_loader.cpp
+index 0b3a0da4..175e6c8c 100644
+--- a/plugins/impex/psd/psd_loader.cpp
++++ b/plugins/impex/psd/psd_loader.cpp
+@@ -568,6 +568,9 @@ KisImportExportErrorCode PSDLoader::decode(QIODevice &io)
+             }
+             layer->setVisible(layerRecord->visible);
+             layer->setUserLocked(layerRecord->userLocked);
++            if (layerRecord->clipping == 1) {
++                layer->enableClippingLayer(true);
++            }
+             newLayer = layer;
+ 
+         }

@@ -1,0 +1,92 @@
+From d47ea9e5db109705bae2ab74cc403d0220e7bf3c Mon Sep 17 00:00:00 2001
+From: LanRhyme <xiao_ren233@foxmail.com>
+Date: Tue, 27 Oct 2026 23:59:52 +0800
+Subject: [PATCH 7/7] =?UTF-8?q?fix(mypaint):=20=E4=BC=A0=E6=84=9F=E5=99=A8?=
+ =?UTF-8?q?=E8=BF=9E=E6=8E=A5=E6=94=B9=E4=B8=BA=E6=87=92=E5=88=9D=E5=A7=8B?=
+ =?UTF-8?q?=E5=8C=96,=20=E4=BF=AE=E5=A4=8D=20Android=20=E4=B8=8A=20dlopen?=
+ =?UTF-8?q?=20=E9=98=B6=E6=AE=B5=E5=B4=A9=E6=BA=83?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+静态初始化期构造 MyPaintSensorPack 会在库加载阶段访问尚未就绪的 Qt/Krita
+单例, 改为首次使用时再构造
+---
+ plugins/paintops/mypaint/MyPaintSensorPack.cpp | 18 +++++++++++-------
+ plugins/paintops/mypaint/MyPaintSensorPack.h   |  2 ++
+ plugins/paintops/mypaint/register_static.cpp   |  2 ++
+ 3 files changed, 15 insertions(+), 7 deletions(-)
+
+diff --git a/plugins/paintops/mypaint/MyPaintSensorPack.cpp b/plugins/paintops/mypaint/MyPaintSensorPack.cpp
+index 2a6cfc3d..c96ad433 100644
+--- a/plugins/paintops/mypaint/MyPaintSensorPack.cpp
++++ b/plugins/paintops/mypaint/MyPaintSensorPack.cpp
+@@ -20,11 +20,12 @@
+ #include <MyPaintCurveRangeModel.h>
+ #include <QJsonDocument>
+ #include <QJsonObject>
+-#include <KisStaticInitializer.h>
+-
+-namespace detail {
++void initMyPaintSensors()
++{
++    static bool initialized = false;
++    if (initialized) return;
++    initialized = true;
+ 
+-KIS_DECLARE_STATIC_INITIALIZER {
+     auto addFactory = [](const KoID &id,
+                          int minimumValue,
+                          int maximumValue,
+@@ -45,11 +46,13 @@ KIS_DECLARE_STATIC_INITIALIZER {
+     addFactory(MyPaintRandomId,  0, 1, "", "", "");
+     addFactory(MyPaintStrokeId, 0, 1, "", "", "");
+     addFactory(MyPaintDirectionId, 0, 180, "", "", "");
+-    addFactory(MyPaintDeclinationId, 0, 90, "", "", i18n("%"));
+-    addFactory(MyPaintAscensionId, -180, 180, "", "", i18n("%"));
+-    addFactory(MyPaintCustomId, -20, 20, "", "", i18n("%"));
++    addFactory(MyPaintDeclinationId, 0, 90, "", "", QStringLiteral("%"));
++    addFactory(MyPaintAscensionId, -180, 180, "", "", QStringLiteral("%"));
++    addFactory(MyPaintCustomId, -20, 20, "", "", QStringLiteral("%"));
+ }
+ 
++namespace detail {
++
+ template <typename Data,
+           typename SensorData =
+               std::copy_const_t<Data,
+@@ -139,6 +142,7 @@ MyPaintSensorData::MyPaintSensorData()
+       sensorAscension(MyPaintAscensionId),
+       sensorCustom(MyPaintCustomId)
+ {
++    initMyPaintSensors();
+     sensorPressure.isActive = true;
+ }
+ 
+diff --git a/plugins/paintops/mypaint/MyPaintSensorPack.h b/plugins/paintops/mypaint/MyPaintSensorPack.h
+index 381d6b72..f72295a0 100644
+--- a/plugins/paintops/mypaint/MyPaintSensorPack.h
++++ b/plugins/paintops/mypaint/MyPaintSensorPack.h
+@@ -92,4 +92,6 @@ private:
+     MyPaintSensorData m_data;
+ };
+ 
++void initMyPaintSensors();
++
+ #endif // MYPAINTSENSORPACK_H
+diff --git a/plugins/paintops/mypaint/register_static.cpp b/plugins/paintops/mypaint/register_static.cpp
+index 319ae1f2..9265a2ea 100644
+--- a/plugins/paintops/mypaint/register_static.cpp
++++ b/plugins/paintops/mypaint/register_static.cpp
+@@ -14,9 +14,11 @@
+ 
+ #include "MyPaintPaintOpFactory.h"
+ #include "MyPaintPaintOpPreset.h"
++#include "MyPaintSensorPack.h"
+ 
+ extern "C" __attribute__((visibility("default"))) void krita_register_mypaint_paintop()
+ {
++    initMyPaintSensors();
+     KisResourceLoaderRegistry::instance()->registerLoader(
+         new KisResourceLoader<KisMyPaintPaintOpPreset>(
+             ResourceSubType::MyPaintPaintOpPresets,

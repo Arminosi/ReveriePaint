@@ -1,13 +1,25 @@
-From d95bb73973108e7ae03b4200b12723f4d8e8367a Mon Sep 17 00:00:00 2001
+From e087afa02516b160976e263f90530039bd828ce5 Mon Sep 17 00:00:00 2001
 From: LanRhyme <xiao_ren233@foxmail.com>
-Date: Thu, 13 Aug 2026 09:49:22 +0800
-Subject: [PATCH 1/4] =?UTF-8?q?feat:=20=E5=85=A8=E9=83=A813=E7=A7=8D?=
- =?UTF-8?q?=E7=AC=94=E5=88=B7=E5=BC=95=E6=93=8E=E9=9D=99=E6=80=81=E6=B3=A8?=
- =?UTF-8?q?=E5=86=8C=E4=B8=8EAndroid=E5=85=BC=E5=AE=B9=E8=A1=A5=E4=B8=81?=
+Date: Tue, 27 Oct 2026 23:59:51 +0800
+Subject: [PATCH 1/7] =?UTF-8?q?feat(android):=2014=20=E4=B8=AA=E7=AC=94?=
+ =?UTF-8?q?=E5=88=B7=E5=BC=95=E6=93=8E=E6=94=B9=E4=B8=BA=E9=9D=99=E6=80=81?=
+ =?UTF-8?q?=E6=B3=A8=E5=86=8C,=20=E8=A1=A5=E9=BD=90=20Android=20=E6=9E=84?=
+ =?UTF-8?q?=E5=BB=BA=E5=85=BC=E5=AE=B9?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
+- colorsmudge / curvebrush / defaultpaintops / deform / experiment / filterop /
+  gridbrush / hairy / hatching / particle / roundmarker / sketch / spray /
+  tangentnormal 各新增 register_static.cpp, 由 CMake 直接编译进插件库, 绕开
+  Android 上无法 dlopen 插件的问题
+- 根 CMakeLists 在 ANDROID 下禁用 LibAV/FFmpeg (Android 端视频编码由应用侧实现),
+  LibAV 由 REQUIRED 降为 OPTIONAL
+- libs/ui 去掉 Qt AndroidExtras 依赖, 改链 Qt6::Core / Qt6::Gui; ANDROID 源列表
+  移出视频编码器实现
+- libs/global / libs/flake / libs/pigment / libs/widgetutils / libs/ui 的 Android
+  兼容修补: 日志与退出信息改走 stdout, 文本布局与颜色空间去掉桌面端依赖,
+  滚动与按键序列控件适配触屏
 ---
  CMakeLists.txt                                | 14 ++---
  libs/flake/KoShapeBulkActionLock.h            |  2 +
@@ -20,7 +32,7 @@ Content-Transfer-Encoding: 8bit
  libs/image/kis_base_accessor.h                |  1 +
  libs/pigment/KoColorSpaceRegistry.cpp         |  2 +-
  .../KisSurfaceColorimetry.cpp                 |  2 +-
- libs/ui/CMakeLists.txt                        |  4 +-
+ libs/ui/CMakeLists.txt                        |  5 +-
  libs/ui/KisAndroidDonations.cpp               | 48 +++++++++--------
  libs/ui/KisAndroidScaling.cpp                 |  6 ++-
  libs/ui/KisLongPressEventFilter.cpp           |  6 ++-
@@ -62,7 +74,7 @@ Content-Transfer-Encoding: 8bit
  plugins/paintops/spray/register_static.cpp    | 22 ++++++++
  plugins/paintops/tangentnormal/CMakeLists.txt |  1 +
  .../tangentnormal/register_static.cpp         | 22 ++++++++
- 53 files changed, 491 insertions(+), 136 deletions(-)
+ 53 files changed, 491 insertions(+), 137 deletions(-)
  create mode 100644 plugins/paintops/colorsmudge/register_static.cpp
  create mode 100644 plugins/paintops/curvebrush/register_static.cpp
  create mode 100644 plugins/paintops/defaultpaintops/register_static.cpp
@@ -79,10 +91,10 @@ Content-Transfer-Encoding: 8bit
  create mode 100644 plugins/paintops/tangentnormal/register_static.cpp
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 957cc15c..4440301e 100644
+index 87013581..1d69d999 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -1520,16 +1520,8 @@ if(ANDROID)
+@@ -1530,16 +1530,8 @@ if(ANDROID)
          PURPOSE "Needed to find ffmpeg libraries on Android."
      )
  
@@ -101,7 +113,7 @@ index 957cc15c..4440301e 100644
  
      # The PkgConfig and FeatureSummary modules don't play nice with each other
      # on their own, so this has to be set manually for the summary to show up.
-@@ -1542,7 +1534,7 @@ if(ANDROID)
+@@ -1552,7 +1544,7 @@ if(ANDROID)
      set_package_properties(LibAV PROPERTIES
          DESCRIPTION "FFmpeg libraries"
          URL "https://ffmpeg.org/"
@@ -426,10 +438,10 @@ index c9c0f6e4..5ba274f9 100644
              qWarning("KisAndroidExitInfo::getLast: JNI exception in getDescription");
              env->ExceptionDescribe();
 diff --git a/libs/global/KisAndroidUtils.cpp b/libs/global/KisAndroidUtils.cpp
-index 2a50e2b3..85b750a2 100644
+index a0b9e89e..84ce115a 100644
 --- a/libs/global/KisAndroidUtils.cpp
 +++ b/libs/global/KisAndroidUtils.cpp
-@@ -7,12 +7,14 @@
+@@ -10,12 +10,14 @@
  
  #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
  #include <QJniEnvironment>
@@ -513,20 +525,21 @@ index c69848ed..c7f0fd13 100644
          debug.nospace() << ", luminance: " << "<none>";
      }
 diff --git a/libs/ui/CMakeLists.txt b/libs/ui/CMakeLists.txt
-index cf7eb79f..dc023e36 100644
+index 621c09f7..f9d332a0 100644
 --- a/libs/ui/CMakeLists.txt
 +++ b/libs/ui/CMakeLists.txt
-@@ -569,9 +569,7 @@ endif()
+@@ -577,10 +577,7 @@ endif()
  if(ANDROID)
      list(APPEND kritaui_LIB_SRCS
          KisAndroidDonations.cpp
 -        animation/KisAndroidMediaEncoderRunnable.cpp
+-        animation/KisLibavMediaEncoderRunnable.cpp
          animation/KisMediaEncoderFormatPreferencesDialog.cpp
 -        animation/KisMediaEncoderWrapper.cpp
      )
  endif()
  
-@@ -788,7 +786,7 @@ endif()
+@@ -807,7 +804,7 @@ endif()
  if (ANDROID)
      target_link_libraries(kritaui PRIVATE GLESv3)
      target_link_libraries(kritaui PUBLIC Qt${QT_MAJOR_VERSION}::Gui)
@@ -736,7 +749,7 @@ index 5e8d0fcd..19535af4 100644
  }
  
 diff --git a/libs/ui/KisMainWindow.cpp b/libs/ui/KisMainWindow.cpp
-index bbf49728..771813b8 100644
+index 37a2b2fa..6781db64 100644
 --- a/libs/ui/KisMainWindow.cpp
 +++ b/libs/ui/KisMainWindow.cpp
 @@ -13,6 +13,9 @@
@@ -757,7 +770,7 @@ index bbf49728..771813b8 100644
  #include <KisAndroidUtils.h>
  #endif
  
-@@ -639,7 +641,9 @@ KisMainWindow::KisMainWindow(QUuid uuid)
+@@ -643,7 +645,9 @@ KisMainWindow::KisMainWindow(QUuid uuid)
      setFixedSize(KisApplication::primaryScreen()->availableGeometry().size());
  
      QScreen *s = QGuiApplication::primaryScreen();
@@ -767,7 +780,7 @@ index bbf49728..771813b8 100644
      connect(s, SIGNAL(orientationChanged(Qt::ScreenOrientation)), this, SLOT(orientationChanged()));
  
  #if KRITA_QT_HAS_ANDROID_QPLATFORMSCREEN_DENSITY_ADJUSTMENT
-@@ -658,7 +662,7 @@ KisMainWindow::KisMainWindow(QUuid uuid)
+@@ -662,7 +666,7 @@ KisMainWindow::KisMainWindow(QUuid uuid)
      // When Krita starts, Java side sends an event to set applicationState() to active. But, before
      // the event could reach KisApplication's platform integration, it is cleared by KisOpenGLModeProber::probeFormat.
      // So, we send it manually when MainWindow shows up.
@@ -777,10 +790,10 @@ index bbf49728..771813b8 100644
  
      setAcceptDrops(true);
 diff --git a/libs/ui/KisReferenceImage.cpp b/libs/ui/KisReferenceImage.cpp
-index 882bc8ce..697b57e3 100644
+index 748eb25f..b4e474e6 100644
 --- a/libs/ui/KisReferenceImage.cpp
 +++ b/libs/ui/KisReferenceImage.cpp
-@@ -93,7 +93,7 @@ struct KisReferenceImage::Private : public QSharedData
+@@ -94,7 +94,7 @@ struct KisReferenceImage::Private : public QSharedData
          // loaded into a qimage cannot be saved to png unless we explicitly
          // convert the colorspace of the QImage
  #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
@@ -789,7 +802,7 @@ index 882bc8ce..697b57e3 100644
              image.convertToColorSpace(QColorSpace(QColorSpace::SRgb));
          }
  #else
-@@ -274,7 +274,7 @@ void KisReferenceImage::paint(QPainter &gc) const
+@@ -278,7 +278,7 @@ void KisReferenceImage::paint(QPainter &gc) const
      // Color conversion.
      QImage *targetD = dynamic_cast<QImage*>(gc.device());
  #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
@@ -821,10 +834,10 @@ index c7b547d0..a6e2606d 100644
          
          Q_UNREACHABLE_RETURN(QColorSpace());
 diff --git a/libs/ui/animation/KisAndroidMediaEncoderRunnable.cpp b/libs/ui/animation/KisAndroidMediaEncoderRunnable.cpp
-index b4390f68..83c8b0be 100644
+index 28aae9c0..84ac1213 100644
 --- a/libs/ui/animation/KisAndroidMediaEncoderRunnable.cpp
 +++ b/libs/ui/animation/KisAndroidMediaEncoderRunnable.cpp
-@@ -13,12 +13,14 @@
+@@ -14,12 +14,14 @@
  
  #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
  #include <QJniEnvironment>
@@ -844,7 +857,7 @@ index b4390f68..83c8b0be 100644
  
  #include <klocalizedstring.h>
 diff --git a/libs/ui/canvas/kis_display_color_converter.cpp b/libs/ui/canvas/kis_display_color_converter.cpp
-index 8ed6cc06..752552bd 100644
+index bbcfabc6..c1f138d7 100644
 --- a/libs/ui/canvas/kis_display_color_converter.cpp
 +++ b/libs/ui/canvas/kis_display_color_converter.cpp
 @@ -9,6 +9,7 @@
@@ -955,7 +968,7 @@ index f45e5b05..d8dcfa0f 100644
                  m_texturesInfo.type = GL_FLOAT;
                  m_texturesInfo.format = GL_RGBA;
 diff --git a/libs/widgetutils/CMakeLists.txt b/libs/widgetutils/CMakeLists.txt
-index 00f3c84d..7c18fbe0 100644
+index 6d44ab7f..a2672a71 100644
 --- a/libs/widgetutils/CMakeLists.txt
 +++ b/libs/widgetutils/CMakeLists.txt
 @@ -146,7 +146,7 @@ if (APPLE)
@@ -1575,6 +1588,3 @@ index 00000000..0328b6aa
 +            "tangentnormal", i18n("Tangent Normal"), KisPaintOpFactory::categoryStable(),
 +            "krita-tangentnormal.png", QString(), QStringList(), 16));
 +}
--- 
-2.55.0
-

@@ -20,7 +20,7 @@ import com.reverie.paint.model.HoleMaskGrid
  * adb shell setprop debug.reverie.fb_snap_hold 1       # 1a: 吸附线笔画也按住 (默认 0 = 走常规路径, 严格同图)
  * adb shell setprop debug.reverie.fb_strict 1          # 严格同一性: 关预测笔尖 (默认 1)
  * adb shell setprop debug.reverie.fb_clear_delay 0     # 抬笔清前缓冲再多等的帧数
- * adb shell setprop debug.reverie.fb_mid_refresh_ms 100 # 运笔中渐进刷新已落定瓦片的最小间隔 (ms, 0=关)
+ * adb shell setprop debug.reverie.fb_mid_refresh_ms 100 # 运笔中渐进刷新已落定瓦片的最小间隔 (ms, 默认 0=关)
  * ```
  */
 internal object FrontBufferFeatureFlags {
@@ -58,8 +58,8 @@ internal object FrontBufferFeatureFlags {
     /** 蚂蚁线进 compose (默认 1 开)。 */
     val composeAnts: Boolean by lazy { PerfTrace.debugPropInt("debug.reverie.fb_compose_ants", 1) != 0 }
 
-    /** D3: 运笔中渐进刷新已落定瓦片的节流间隔 (ms), 默认 100, 0=关闭。 */
+    /** D3: 运笔中渐进刷新已落定瓦片的节流间隔 (ms), 默认 0 (关闭)。 */
     val midStrokeRefreshMs: Long by lazy {
-        PerfTrace.debugPropInt("debug.reverie.fb_mid_refresh_ms", 100).toLong().coerceAtLeast(0L)
+        PerfTrace.debugPropInt("debug.reverie.fb_mid_refresh_ms", 0).toLong().coerceAtLeast(0L)
     }
 }

@@ -1452,7 +1452,7 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
     }
 
     /** 落笔 (UI 线程): 新的一笔, 下一包前作废上一笔残留的光标账本。 */
-    fun beginStroke(preserveInk: Boolean = false) {
+    fun beginStroke() {
         strokeStartPending = true
     }
 

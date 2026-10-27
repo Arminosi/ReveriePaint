@@ -347,8 +347,7 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
         tipWidth = 0f
         symCursorCount = 0
         overlay!!.onInkFrameDone = frameDoneCallback
-        val preserve = catchUpArmed
-        overlay.beginStroke(preserveInk = preserve)
+        overlay.beginStroke()
         cancelCatchUp()
         held = true
         return true

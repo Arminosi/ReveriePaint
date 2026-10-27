@@ -107,7 +107,4 @@ internal object FbGeomLog {
 
     fun poseRelease(reason: String, seq: Long, uptimeMs: Long) {
     }
-
-    fun previewBlocked(seq: Long, blockPreviewClear: Boolean) {
-    }
 }

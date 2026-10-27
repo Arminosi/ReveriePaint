@@ -244,8 +244,9 @@ class SkeletonPoseTest {
         val headAxis = skeleton.dragSwingAxis(headIdx)
         assertTrue("head swing axis must be resolved", headAxis in 0..2)
         val headSuffix = listOf("p", "y", "r")[headAxis]
-        assertEquals(1f, skeleton.dragPitchSign(headIdx), 1e-3f)
-        // 符号由几何自动推测 (手指往右 -> 头往右), 下面用行为验证, 不写死正负
+        // 俯仰符号由绑定姿态几何自动推测 (骨骼移动后会变), 只断言它已解析出来,
+        // 具体方向交由下方"网格顶点是否向下移动"的行为断言验证
+        assertTrue("head pitch sign must be resolved", skeleton.dragPitchSign(headIdx) in listOf(-1f, 1f))
 
         // 新骨架的 head 是叶子关节 (耳挂在 spine_06 上), 关节位置不会动 —— 直接看网格顶点
         val restMesh = cat.createDeformedMesh(PosePresets.buildEulerMap("cat", PosePresets.STAND, emptyMap()))

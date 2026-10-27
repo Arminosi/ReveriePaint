@@ -5016,7 +5016,11 @@ class CanvasTouchView(context: Context) : View(context) {
                                 } else {
                                     lastBoneTapTime = if (hit != null) now else 0L
                                 }
-                                v.active3DSelectedJointName = hit
+                                // 关节位置微调时不因一次未命中就丢失选择:
+                                // 拖拽的按下点常常偏离球心几像素, 清空选择会让拖动退化成旋转模型
+                                if (hit != null || !v.jointPositionEditMode) {
+                                    v.active3DSelectedJointName = hit
+                                }
                                 invalidate()
                             }
                         }

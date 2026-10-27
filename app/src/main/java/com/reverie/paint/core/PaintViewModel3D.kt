@@ -558,6 +558,11 @@ internal fun PaintViewModel.handle3DGesture(deltaX: Float, deltaY: Float) {
         }
         Interaction3DMode.BONE -> {
             val jointName = active3DSelectedJointName
+            android.util.Log.d(
+                "RP_3D_EDIT",
+                "boneDrag joint=$jointName editMode=$jointPositionEditMode dx=$deltaX dy=$deltaY " +
+                    "offsets=${currentLayer3DState?.jointRestOffsets}",
+            )
             // 未选中关节点 (或选中的骨骼已随模型切换而失效) 时，滑动触摸空白处旋转模型整体视角
             val skeleton = if (jointName != null) skeletonForState(state) else null
             val jointIndex = if (jointName != null && skeleton != null) {
@@ -581,8 +586,9 @@ internal fun PaintViewModel.handle3DGesture(deltaX: Float, deltaY: Float) {
                 val ky = JointOffsetSpec.key(jointName, 1)
                 val curX = state.jointRestOffsets[kx] ?: 0f
                 val curY = state.jointRestOffsets[ky] ?: 0f
-                val nextX = (curX + deltaX * 0.1f).coerceIn(-JointOffsetSpec.RANGE, JointOffsetSpec.RANGE)
-                val nextY = (curY - deltaY * 0.1f).coerceIn(-JointOffsetSpec.RANGE, JointOffsetSpec.RANGE)
+                val nextX = (curX + deltaX * 0.03f).coerceIn(-JointOffsetSpec.RANGE, JointOffsetSpec.RANGE)
+                val nextY = (curY - deltaY * 0.03f).coerceIn(-JointOffsetSpec.RANGE, JointOffsetSpec.RANGE)
+                android.util.Log.d("RP_3D_EDIT", "apply nextX=$nextX nextY=$nextY (cur $curX,$curY)")
                 if (kotlin.math.abs(nextX - curX) < 0.01f && kotlin.math.abs(nextY - curY) < 0.01f) return
                 var next = state.jointRestOffsets
                 next = JointOffsetSpec.withOffset(next, jointName, nextX, 0)

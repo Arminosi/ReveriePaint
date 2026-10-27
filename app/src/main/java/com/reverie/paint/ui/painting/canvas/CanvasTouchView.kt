@@ -3215,8 +3215,11 @@ class CanvasTouchView(context: Context) : View(context) {
             tiles?.grid?.width ?: 0, tiles?.grid?.height ?: 0, v.renderW, v.renderH, v.displayBufferInvalid,
         )
         val loading = v.isBlockingLoading
+        val now = android.os.SystemClock.uptimeMillis()
         strokeFbMask = FrontBufferReadyGate.conditionMask(tilesFinal, loading)
-        strokeFbDecision = FrontBufferReadyGate.decide(tilesFinal, loading, FrontBufferFeatureFlags.readyGate)
+        strokeFbDecision = FrontBufferReadyGate.decide(
+            now, v.frontBufferQuietUntilMs, tilesFinal, loading, FrontBufferFeatureFlags.readyGate,
+        )
         strokeFbReady = FrontBufferReadyGate.isReady(strokeFbDecision)
     }
 

@@ -32,14 +32,18 @@ class FrontBufferReadyGateTest {
     }
 
     @Test
-    fun `decide - ready immediately when tilesFinal and not loading with zero quiet delay`() {
-        assertEquals(READY, FrontBufferReadyGate.decide(tilesFinal = true, loading = false, gateEnabled = true))
-        assertEquals(NOT_READY, FrontBufferReadyGate.decide(tilesFinal = false, loading = false, gateEnabled = true))
-        assertEquals(NOT_READY, FrontBufferReadyGate.decide(tilesFinal = true, loading = true, gateEnabled = true))
-        assertEquals(NOT_READY, FrontBufferReadyGate.decide(tilesFinal = false, loading = true, gateEnabled = true))
+    fun `decide - quiet window gates ready decision`() {
+        // 静默窗口未过 (now < quietUntil): 哪怕 tilesFinal 且 not loading 也返回 NOT_READY
+        assertEquals(NOT_READY, FrontBufferReadyGate.decide(nowMs = 1000L, quietUntilMs = 4200L, tilesFinal = true, loading = false, gateEnabled = true))
+        // 静默窗口已过 (now >= quietUntil): tilesFinal 且 not loading 返回 READY
+        assertEquals(READY, FrontBufferReadyGate.decide(nowMs = 4200L, quietUntilMs = 4200L, tilesFinal = true, loading = false, gateEnabled = true))
+        assertEquals(READY, FrontBufferReadyGate.decide(nowMs = 5000L, quietUntilMs = 4200L, tilesFinal = true, loading = false, gateEnabled = true))
+        // 条件不满足仍然 NOT_READY
+        assertEquals(NOT_READY, FrontBufferReadyGate.decide(nowMs = 5000L, quietUntilMs = 4200L, tilesFinal = false, loading = false, gateEnabled = true))
+        assertEquals(NOT_READY, FrontBufferReadyGate.decide(nowMs = 5000L, quietUntilMs = 4200L, tilesFinal = true, loading = true, gateEnabled = true))
 
         // gateEnabled = false (调试开关关) 直接放行
-        assertEquals(READY, FrontBufferReadyGate.decide(tilesFinal = false, loading = true, gateEnabled = false))
+        assertEquals(READY, FrontBufferReadyGate.decide(nowMs = 1000L, quietUntilMs = 4200L, tilesFinal = false, loading = true, gateEnabled = false))
 
         assertTrue(FrontBufferReadyGate.isReady(READY))
         assertFalse(FrontBufferReadyGate.isReady(NOT_READY))

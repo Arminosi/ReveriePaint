@@ -6,8 +6,7 @@ package com.reverie.paint.model
 
 /**
  * 前缓冲就绪门控。
- * 真正必要的条件只有: 瓦片已是最终版 (tilesFinal, 不是加载中的低清), 不在加载。
- * 不再有任何静默窗口或预热时间门槛。
+ * 瓦片已是最终版 (tilesFinal, 不是加载中的低清), 不在加载, 且已度过新建/加载画布后的静默窗口。
  */
 internal object FrontBufferReadyGate {
     const val COND_TILES = 1
@@ -34,9 +33,11 @@ internal object FrontBufferReadyGate {
 
     /**
      * 落笔时的判定。[gateEnabled] = false 时完全不检查直接 READY (=0 调试开关)。
+     * 静默窗口未结束时返回 NOT_READY。
      */
-    fun decide(tilesFinal: Boolean, loading: Boolean, gateEnabled: Boolean): Int {
+    fun decide(nowMs: Long, quietUntilMs: Long, tilesFinal: Boolean, loading: Boolean, gateEnabled: Boolean): Int {
         if (!gateEnabled) return READY
+        if (nowMs < quietUntilMs) return NOT_READY
         return if (tilesFinal && !loading) READY else NOT_READY
     }
 

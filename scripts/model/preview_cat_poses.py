@@ -33,38 +33,20 @@ DEFAULT_GLB = os.path.join(ROOT, 'app/src/main/assets/3d_models/anime_cat.glb')
 # 与 PosePresets 猫猫分支同步的预设表 (角度单位: 度; 平移单位: 世界单位)
 #   p = pitch (绕骨骼局部 X), y = yaw (绕局部 Y), r = roll (绕局部 Z)
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# 与 CatPosePresets.kt 完全一致的角度表 (骨骼名 -> (pitch, yaw, roll))
+# 由 scripts/model/cat_pose_solver.py 生成; 改姿态请改求解器再重新生成, 不要手改这里
+# ---------------------------------------------------------------------------
 PRESETS = {
-    # 站姿: 尾巴微卷上扬, 其余全零 = 绑定姿态
-    'stand': {},
-    # 端坐: 骨盆坐到后脚上, 脊柱立起, 前腿竖直支撑, 后腿折在体侧, 尾巴上翘
-    # (cat_pose_solver.py 解出; 与 PosePresets.kt 的 SIT 一致)
-    'sit': dict(hip=-6.7, spine=-35.7, chest=-12.2, neck=54.9, head=-27.1,
-                flsh=54.7, frsh=54.7,
-                hlleg=-74.4, hrleg=-74.3, hlshank=119.2, hrshank=119.2,
-                hlfoot=-105.3, hrfoot=-105.3, tailp=30, tailside=20),
-    # 农民揣 (卧姿): 躯干沉伏, 前肢收拢于胸下, 后肢折进腹下, 尾巴贴体
-    'loaf': dict(hip=-12, spine=-4, chest=8, head=-6,
-                 flsh=42, flleg=-68, flpaw=26, hlleg=-52, hlshank=70, hlfoot=-22,
-                 tailp=-25, tailside=30),
-    'walk': dict(hip=3, spine=-3, chest=3, neck=2, head=2,
-                 flsh=-12, flleg=-18, flpaw=10, frsh=10, frleg=14, frpaw=-6,
-                 hlleg=12, hlshank=-8, hrleg=-10, hrshank=10, tailp=25, tailside=12),
-    # 趴伏入睡: 全身趴到地面, 前腿折进胸下, 头歪向一侧搁在前爪之间, 尾巴绕到体侧
-    'curl': dict(hip=11.3, spine=-11.7, chest=-46.2, neck=61.9, head=-32.1, headyaw=32,
-                 flsh=74.6, frsh=74.6, flleg=32.9, frleg=32.9, flpaw=-60.8, frpaw=-60.8,
-                 hlleg=32.0, hrleg=32.0, hlshank=7.3, hrshank=7.3,
-                 hlfoot=-50.6, hrfoot=-50.6, tailp=-18, tailside=62),
-    'pounce': dict(hip=14, spine=-6, chest=-10, neck=-6, head=6,
-                   flsh=-18, flleg=8, flpaw=8, hlleg=-20, hlshank=35, hlfoot=-10,
-                   tailp=10, tailside=18),
-    'rear': dict(hip=-20, spine=-8, chest=-10, neck=-6, head=-12,
-                 flsh=-55, flleg=-35, flpaw=-10, hlleg=10, hlshank=-10,
-                 tailp=-20, tailside=10),
-    # 回首张望: 头转向侧面, 尾巴甩向另一侧
-    'look': dict(hip=-4, spine=-4, chest=-2, neck=4, headyaw=45, tailp=20, tailside=30),
-    'stretch': dict(hip=10, spine=-8, chest=-18, neck=-5, head=18,
-                    flsh=-25, flleg=-10, flpaw=15, hlleg=15, hlshank=-10, hlfoot=5,
-                    tailp=40, tailside=0),
+    'stand': {'tail_01': (8.0, 0.0, 0.0), 'tail_02': (10.0, 0.0, 0.0), 'tail_03': (8.0, 0.0, 0.0), 'tail_04': (5.0, 0.0, 0.0), 'tail_05': (2.0, 0.0, 0.0)},
+    'sit': {'carpus_L': (8.0, 0.0, 0.0), 'carpus_R': (8.0, 0.0, 0.0), 'chest': (-4.0, 0.0, 0.0), 'elbow_L': (12.0, 0.0, 0.0), 'elbow_R': (12.0, 0.0, 0.0), 'head': (10.0, 0.0, 0.0), 'hip_L': (-64.0, 0.0, 0.0), 'hip_R': (-64.0, 0.0, 0.0), 'hock_L': (-100.0, 0.0, 0.0), 'hock_R': (-100.0, 0.0, 0.0), 'knee_L': (78.0, 0.0, 0.0), 'knee_R': (78.0, 0.0, 0.0), 'meta_L': (30.0, 0.0, 0.0), 'meta_R': (30.0, 0.0, 0.0), 'neck': (-6.0, 0.0, 0.0), 'root': (-10.0, 0.0, 0.0), 'scapula_L': (12.0, 0.0, 0.0), 'scapula_R': (12.0, 0.0, 0.0), 'shoulder_L': (14.0, 0.0, 0.0), 'shoulder_R': (14.0, 0.0, 0.0), 'spine_01': (-12.0, 0.0, 0.0), 'spine_02': (-12.0, 0.0, 0.0), 'spine_03': (-8.0, 0.0, 0.0), 'tail_01': (20.0, 0.0, 0.0), 'tail_02': (25.0, 0.0, 0.0), 'tail_03': (20.0, 0.0, 0.0), 'tail_04': (12.0, 0.0, 0.0), 'tail_05': (6.0, 0.0, 0.0)},
+    'loaf': {'carpus_L': (-15.0, 0.0, 0.0), 'carpus_R': (-15.0, 0.0, 0.0), 'chest': (2.0, 0.0, 0.0), 'elbow_L': (-45.0, 0.0, 0.0), 'elbow_R': (-45.0, 0.0, 0.0), 'head': (4.0, 0.0, 0.0), 'hip_L': (-70.0, 0.0, 0.0), 'hip_R': (-70.0, 0.0, 0.0), 'hock_L': (-110.0, 0.0, 0.0), 'hock_R': (-110.0, 0.0, 0.0), 'knee_L': (85.0, 0.0, 0.0), 'knee_R': (85.0, 0.0, 0.0), 'meta_L': (35.0, 0.0, 0.0), 'meta_R': (35.0, 0.0, 0.0), 'neck': (-2.0, 0.0, 0.0), 'root': (-6.0, 0.0, 0.0), 'scapula_L': (-25.0, 0.0, 0.0), 'scapula_R': (-25.0, 0.0, 0.0), 'shoulder_L': (45.0, 0.0, 0.0), 'shoulder_R': (45.0, 0.0, 0.0), 'spine_01': (-6.0, 0.0, 0.0), 'spine_02': (-6.0, 0.0, 0.0), 'spine_03': (-4.0, 0.0, 0.0), 'tail_01': (22.0, 0.0, 0.0), 'tail_02': (28.0, 0.0, 0.0), 'tail_03': (22.0, 0.0, 0.0), 'tail_04': (14.0, 0.0, 0.0), 'tail_05': (6.0, 0.0, 0.0)},
+    'stretch': {'carpus_L': (-10.0, 0.0, 0.0), 'carpus_R': (-10.0, 0.0, 0.0), 'chest': (-6.0, 0.0, 0.0), 'elbow_L': (-26.0, 0.0, 0.0), 'elbow_R': (-26.0, 0.0, 0.0), 'head': (12.0, 0.0, 0.0), 'hip_L': (-18.0, 0.0, 0.0), 'hip_R': (-18.0, 0.0, 0.0), 'hock_L': (-12.0, 0.0, 0.0), 'hock_R': (-12.0, 0.0, 0.0), 'knee_L': (22.0, 0.0, 0.0), 'knee_R': (22.0, 0.0, 0.0), 'meta_L': (6.0, 0.0, 0.0), 'meta_R': (6.0, 0.0, 0.0), 'neck': (-8.0, 0.0, 0.0), 'root': (6.0, 0.0, 0.0), 'scapula_L': (-24.0, 0.0, 0.0), 'scapula_R': (-24.0, 0.0, 0.0), 'shoulder_L': (28.0, 0.0, 0.0), 'shoulder_R': (28.0, 0.0, 0.0), 'spine_01': (6.0, 0.0, 0.0), 'spine_02': (6.0, 0.0, 0.0), 'spine_03': (4.0, 0.0, 0.0), 'tail_01': (16.0, 0.0, 0.0), 'tail_02': (22.0, 0.0, 0.0), 'tail_03': (16.0, 0.0, 0.0), 'tail_04': (8.0, 0.0, 0.0), 'tail_05': (3.0, 0.0, 0.0)},
+    'walk': {'carpus_L': (6.0, 0.0, 0.0), 'carpus_R': (-4.0, 0.0, 0.0), 'chest': (-1.0, 0.0, 0.0), 'elbow_L': (-16.0, 0.0, 0.0), 'elbow_R': (12.0, 0.0, 0.0), 'head': (2.0, 0.0, 0.0), 'hip_L': (10.0, 0.0, 0.0), 'hip_R': (-8.0, 0.0, 0.0), 'hock_L': (8.0, 0.0, 0.0), 'hock_R': (-6.0, 0.0, 0.0), 'knee_L': (-12.0, 0.0, 0.0), 'knee_R': (10.0, 0.0, 0.0), 'meta_L': (-4.0, 0.0, 0.0), 'meta_R': (4.0, 0.0, 0.0), 'neck': (-2.0, 0.0, 0.0), 'root': (2.0, 0.0, 0.0), 'scapula_L': (-10.0, 0.0, 0.0), 'scapula_R': (8.0, 0.0, 0.0), 'shoulder_L': (14.0, 0.0, 0.0), 'shoulder_R': (-10.0, 0.0, 0.0), 'spine_01': (2.0, 0.0, 0.0), 'spine_02': (1.0, 0.0, 0.0), 'spine_03': (1.0, 0.0, 0.0), 'tail_01': (18.0, 0.0, 0.0), 'tail_02': (20.0, 0.0, 0.0), 'tail_03': (16.0, 0.0, 0.0), 'tail_04': (10.0, 0.0, 0.0), 'tail_05': (5.0, 0.0, 0.0)},
+    'curl': {'carpus_L': (-20.0, 0.0, 0.0), 'carpus_R': (-20.0, 0.0, 0.0), 'chest': (6.0, 0.0, 0.0), 'elbow_L': (-55.0, 0.0, 0.0), 'elbow_R': (-55.0, 0.0, 0.0), 'head': (-18.0, 28.0, 0.0), 'hip_L': (-75.0, 0.0, 0.0), 'hip_R': (-75.0, 0.0, 0.0), 'hock_L': (-120.0, 0.0, 0.0), 'hock_R': (-120.0, 0.0, 0.0), 'knee_L': (95.0, 0.0, 0.0), 'knee_R': (95.0, 0.0, 0.0), 'meta_L': (40.0, 0.0, 0.0), 'meta_R': (40.0, 0.0, 0.0), 'neck': (8.0, 0.0, 0.0), 'root': (8.0, 0.0, 0.0), 'scapula_L': (-35.0, 0.0, 0.0), 'scapula_R': (-35.0, 0.0, 0.0), 'shoulder_L': (55.0, 0.0, 0.0), 'shoulder_R': (55.0, 0.0, 0.0), 'spine_01': (-8.0, 0.0, 0.0), 'spine_02': (-8.0, 0.0, 0.0), 'spine_03': (-4.0, 0.0, 0.0), 'tail_01': (30.0, 0.0, 0.0), 'tail_02': (35.0, 0.0, 0.0), 'tail_03': (28.0, 0.0, 0.0), 'tail_04': (18.0, 0.0, 0.0), 'tail_05': (8.0, 0.0, 0.0)},
+    'pounce': {'carpus_L': (-12.0, 0.0, 0.0), 'carpus_R': (-12.0, 0.0, 0.0), 'chest': (-8.0, 0.0, 0.0), 'elbow_L': (-34.0, 0.0, 0.0), 'elbow_R': (-34.0, 0.0, 0.0), 'head': (8.0, 0.0, 0.0), 'hip_L': (-40.0, 0.0, 0.0), 'hip_R': (-40.0, 0.0, 0.0), 'hock_L': (-60.0, 0.0, 0.0), 'hock_R': (-60.0, 0.0, 0.0), 'knee_L': (52.0, 0.0, 0.0), 'knee_R': (52.0, 0.0, 0.0), 'meta_L': (20.0, 0.0, 0.0), 'meta_R': (20.0, 0.0, 0.0), 'neck': (-6.0, 0.0, 0.0), 'root': (10.0, 0.0, 0.0), 'scapula_L': (-20.0, 0.0, 0.0), 'scapula_R': (-20.0, 0.0, 0.0), 'shoulder_L': (34.0, 0.0, 0.0), 'shoulder_R': (34.0, 0.0, 0.0), 'spine_01': (8.0, 0.0, 0.0), 'spine_02': (6.0, 0.0, 0.0), 'spine_03': (2.0, 0.0, 0.0), 'tail_01': (12.0, 0.0, 0.0), 'tail_02': (16.0, 0.0, 0.0), 'tail_03': (12.0, 0.0, 0.0), 'tail_04': (8.0, 0.0, 0.0), 'tail_05': (4.0, 0.0, 0.0)},
+    'rear': {'carpus_L': (-8.0, 0.0, 0.0), 'carpus_R': (-8.0, 0.0, 0.0), 'chest': (-2.0, 0.0, 0.0), 'elbow_L': (-18.0, 0.0, 0.0), 'elbow_R': (-18.0, 0.0, 0.0), 'head': (4.0, 0.0, 0.0), 'hip_L': (-8.0, 0.0, 0.0), 'hip_R': (-8.0, 0.0, 0.0), 'hock_L': (-8.0, 0.0, 0.0), 'hock_R': (-8.0, 0.0, 0.0), 'knee_L': (10.0, 0.0, 0.0), 'knee_R': (10.0, 0.0, 0.0), 'meta_L': (4.0, 0.0, 0.0), 'meta_R': (4.0, 0.0, 0.0), 'neck': (-6.0, 0.0, 0.0), 'root': (-8.0, 0.0, 0.0), 'scapula_L': (-30.0, 0.0, 0.0), 'scapula_R': (-30.0, 0.0, 0.0), 'shoulder_L': (-25.0, 0.0, 0.0), 'shoulder_R': (-25.0, 0.0, 0.0), 'spine_01': (-8.0, 0.0, 0.0), 'spine_02': (-6.0, 0.0, 0.0), 'spine_03': (-4.0, 0.0, 0.0), 'tail_01': (-10.0, 0.0, 0.0), 'tail_02': (-8.0, 0.0, 0.0), 'tail_03': (-4.0, 0.0, 0.0), 'tail_04': (-2.0, 0.0, 0.0), 'tail_05': (0.0, 0.0, 0.0)},
+    'look': {'chest': (0.0, 0.0, 0.0), 'head': (0.0, 42.0, 0.0), 'neck': (4.0, 18.0, 0.0), 'root': (-2.0, 0.0, 0.0), 'spine_01': (-2.0, 0.0, 0.0), 'spine_02': (-1.0, 0.0, 0.0), 'spine_03': (0.0, 0.0, 0.0), 'tail_01': (14.0, 0.0, 0.0), 'tail_02': (18.0, 0.0, 0.0), 'tail_03': (20.0, 0.0, 0.0), 'tail_04': (16.0, 0.0, 0.0), 'tail_05': (10.0, 0.0, 0.0)},
 }
 
 # 美术标定的整体升降: 已清空 —— 根骨平移会被贴地精确抵消, 所有姿态走几何自动贴地
@@ -268,7 +250,11 @@ class Rig:
 
 
 def pose_map_dict(d):
-    g = lambda k: float(d.get(k, 0.0))
+    def g(k):
+        v = d.get(k, 0.0)
+        if isinstance(v, (list, tuple)):
+            v = v[0]
+        return float(v)
     tail_p = float(d.get('tailp', 35.0))
     tail_side = float(d.get('tailside', 8.0))
     vals = {
@@ -300,6 +286,16 @@ def pose_map_dict(d):
 
 def pose_map(preset):
     return pose_map_dict(PRESETS[preset])
+
+
+def pose_map_rig(preset, rig):
+    """预设既支持语义键 (hip/spine/...), 也支持直接写骨骼名 (spine_01/tail_03/...)"""
+    d = PRESETS[preset]
+    m = pose_map_dict(d)
+    for k, v in d.items():
+        if k in rig.index:
+            m[k] = (float(v[0]) if isinstance(v, (list, tuple)) else float(v), 0.0, 0.0)
+    return m
 
 
 def translations_for(preset):
@@ -336,27 +332,42 @@ scene.render.resolution_x = 420
 scene.render.resolution_y = 360
 scene.world.color = (0.95, 0.95, 0.96)
 
-CAMERAS = {{
-    'side':    ((3.6, 0.0, 0.15), (0, 0, -0.02)),
-    'quarter': ((2.6, -2.4, 1.15), (0, 0, -0.02)),
-    'front':   ((0.0, -3.6, 0.25), (0, 0, -0.02)),
-    'top':     ((0.0, -0.35, 3.4), (0, 0, -0.05)),
-}}
+import mathutils
+
+def fit_camera(cam, objs, view):
+    # 按物体包围盒自动构图: 换资产/换姿态都不用手调相机
+    pts = []
+    for o in objs:
+        for c in o.bound_box:
+            pts.append(o.matrix_world @ mathutils.Vector(c))
+    lo = mathutils.Vector((min(p.x for p in pts), min(p.y for p in pts), min(p.z for p in pts)))
+    hi = mathutils.Vector((max(p.x for p in pts), max(p.y for p in pts), max(p.z for p in pts)))
+    center = (lo + hi) / 2
+    size = max(hi.x - lo.x, hi.y - lo.y, hi.z - lo.z)
+    dirs = {{
+        'side':    mathutils.Vector((1.0, 0.0, 0.18)),
+        'quarter': mathutils.Vector((0.75, -0.66, 0.30)),
+        'front':   mathutils.Vector((0.0, -1.0, 0.16)),
+        'top':     mathutils.Vector((0.02, -0.08, 1.0)),
+    }}
+    d = dirs[view].normalized()
+    cam.location = center + d * (size * 2.15)
+    look_at(cam, center)
 
 for name, view in JOBS:
     clear()
-    bpy.ops.mesh.primitive_plane_add(size=6, location=(0, 0, GROUND_Z))
+    bpy.ops.mesh.primitive_plane_add(size=12, location=(0, 0, GROUND_Z))
     bpy.context.object.color = (0.42, 0.44, 0.47, 1)
-    bpy.ops.object.camera_add(location=CAMERAS[view][0])
+    bpy.ops.object.camera_add(location=(3.4, 0.0, 0.2))
     cam = bpy.context.object
     cam.data.lens = 55
-    look_at(cam, CAMERAS[view][1])
     scene.camera = cam
     bpy.ops.wm.obj_import(filepath=OUT_DIR + '/' + name + '.obj', forward_axis='Y', up_axis='Z')
     obj = bpy.context.selected_objects[0]
     obj.color = (0.86, 0.84, 0.82, 1)
     for poly in obj.data.polygons:
         poly.use_smooth = False
+    fit_camera(cam, [obj], view)
     scene.render.filepath = OUT_DIR + '/' + name + '_' + view + '.png'
     bpy.ops.render.render(write_still=True)
 print('PREVIEW DONE')
@@ -400,7 +411,7 @@ def main():
 
     jobs = []
     for preset in args.presets.split(','):
-        eul = pose_map(preset)
+        eul = pose_map_rig(preset, rig)
         tr = translations_for(preset)
         raw = rig.deformed(eul, tr)
         auto = rig.rest_min - float(raw[:, 1].min())

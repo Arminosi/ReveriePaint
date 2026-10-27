@@ -308,10 +308,26 @@ class Skeleton3D(
             // --- 水平拖拽 ---
             val semantic = semanticKeys[i]
             if (semantic == "head" || semantic == "neck") {
-                // 转头: 绕局部 Y 扭转, 用"正前方"探针定符号
-                swingAxes[i] = 1
-                val dx = screenDeltaX(axY, probes[1])
-                swingSigns[i] = if (abs(dx) < 1e-5f) 1f else if (dx > 0f) 1f else -1f
+                // 转头 = 绕"世界上方向"转。不能写死局部 Y: 旧资产的 Head 骨朝上 (局部 Y = 上),
+                // 而重绑后的猫头骨朝前 (局部 Y = 脸朝向), 绕它转只会让脑袋沿吻轴打滚。
+                // 这里机器人无关地挑"世界方向最竖直"的那根局部轴。
+                var axis = 1
+                var bestUp = -1f
+                for (a in 0..2) {
+                    val ax = when (a) { 0 -> axX; 1 -> axY; else -> axZ }
+                    val up = abs(ax[1])
+                    if (up > bestUp) { bestUp = up; axis = a }
+                }
+                swingAxes[i] = axis
+                val ax = when (axis) { 0 -> axX; 1 -> axY; else -> axZ }
+                // 探针不能与被转的轴平行 (a × a = 0 会让符号恒为正), 取与轴不平行的两个探针里位移最大的
+                var bestDx = 0f
+                for (p in 0 until 3) {
+                    if (p == axis) continue
+                    val dx = screenDeltaX(ax, probes[p])
+                    if (abs(dx) > abs(bestDx)) bestDx = dx
+                }
+                swingSigns[i] = if (abs(bestDx) < 1e-5f) 1f else if (bestDx > 0f) 1f else -1f
                 continue
             }
 

@@ -31,7 +31,7 @@ object PosePresets {
 
     /** 姿态面板里由语义分支消费的键: 兜底解析必须跳过, 否则同一角度会被施加两次 */
     private val CAT_SEMANTIC_KEYS = setOf(
-        "cat_head_pitch", "cat_head_yaw", "cat_spine_arch", "cat_spine_mid",
+        "cat_head_pitch", "cat_head_yaw", "cat_spine_arch",
         "cat_fl_leg", "cat_fr_leg", "cat_hl_leg", "cat_hr_leg",
         "cat_tail_pitch", "cat_tail_yaw",
     )
@@ -170,133 +170,64 @@ object PosePresets {
     // ------------------------------------------------------------------
 
     private fun buildCatPose(b: Builder, posePreset: String, jointAngles: Map<String, Float>) {
-        // 猫猫骨骼约定 (重绑管线 scripts/model/build_cat_glb.py)。局部 X 全部指向世界 +X，
-        // 实测符号 (glTF: +Y 上, +Z 脸朝前, +X 猫右侧):
-        //   Hips/Spine pitch > 0 = 前半身下沉      Head pitch > 0 = 低头
-        //   前肢 shoulder/leg pitch > 0 = 爪子后摆  后肢 thigh 后移 / shank 折起 / foot 后移
-        //   尾骨 pitch > 0 = 上翘, 左右摆走 roll (绕局部 Z, 绕局部 Y 只是沿骨轴扭转)
-        // 数值由离线 IK 拟合得出: 目标是把四只爪子和骨盆压到同一水平面 (见 fit 脚本),
-        // 拟合后 侧视图上四爪贴地、躯干角度正确, 不再是"腿在空中划水"。
-        var hipP = 0f; var headP = 0f; var spineArch = 0f; var spineMid = 0f
-        var chestP = 0f; var neckP = 0f
-        var flSh = 0f; var frSh = 0f; var flLeg = 0f; var frLeg = 0f
-        var flPaw = 0f; var frPaw = 0f
-        var hlLeg = 0f; var hrLeg = 0f
-        var hlShank = 0f; var hrShank = 0f
-        var hlFoot = 0f; var hrFoot = 0f
-        var tailP = 35f; var tailSide = 8f
-
-        when (posePreset.lowercase()) {
-            // 端坐: 骨盆坐到后脚上, 脊柱立起, 前腿竖直支撑, 后腿折在体侧, 尾巴上翘
-            // 数值由 scripts/model/cat_pose_solver.py 按"前爪与后踝同高 + 前腿世界仰角不变"解出
-            SIT -> {
-                hipP = -6.7f; spineArch = -35.7f; chestP = -12.2f; neckP = 54.9f; headP = -27.1f
-                flSh = 54.7f; frSh = 54.7f
-                hlLeg = -74.4f; hrLeg = -74.3f
-                hlShank = 119.2f; hrShank = 119.2f
-                hlFoot = -105.3f; hrFoot = -105.3f
-                tailP = 30f; tailSide = 20f
-            }
-            // 农民揣 (卧姿): 躯干沉伏, 前肢收拢于胸下, 后肢折进腹下, 尾巴贴体
-            LOAF -> {
-                hipP = -12f; spineArch = -4f; chestP = 8f; headP = -6f
-                flSh = 42f; frSh = 42f; flLeg = -68f; frLeg = -68f; flPaw = 26f; frPaw = 26f
-                hlLeg = -52f; hrLeg = -52f
-                hlShank = 70f; hrShank = 70f
-                hlFoot = -22f; hrFoot = -22f
-                tailP = -25f; tailSide = 30f
-            }
-            // 行走: 四足对角换步 (左前 + 右后 同相), 躯干轻微起伏, 尾巴平衡摆动
-            WALK -> {
-                hipP = 3f; spineArch = -3f; chestP = 3f; neckP = 2f; headP = 2f
-                flSh = -12f; flLeg = -18f; flPaw = 10f
-                frSh = 10f; frLeg = 14f; frPaw = -6f
-                hlLeg = 12f; hlShank = -8f
-                hrLeg = -10f; hrShank = 10f
-                tailP = 25f; tailSide = 12f
-            }
-            // 趴伏入睡: 全身趴到地面, 前腿折进胸下, 头搁在前爪之间, 尾巴绕到体侧
-            // (这个模型腿长颈长, 团不成一个球; 贴地的趴睡是几何上能做到的最接近的睡姿)
-            CURL -> {
-                hipP = 11.3f; spineArch = -11.7f; chestP = -46.2f; neckP = 61.9f; headP = -32.1f
-                flSh = 74.6f; frSh = 74.6f; flLeg = 32.9f; frLeg = 32.9f
-                flPaw = -60.8f; frPaw = -60.8f
-                hlLeg = 32.0f; hrLeg = 32.0f
-                hlShank = 7.3f; hrShank = 7.3f
-                hlFoot = -50.6f; hrFoot = -50.6f
-                tailP = -18f; tailSide = 62f
-            }
-            // 伏击准备: 前半身压低, 后躯蓄力, 前爪前探, 尾巴水平微摆
-            POUNCE -> {
-                hipP = 14f; spineArch = -6f; chestP = -10f; neckP = -6f; headP = 6f
-                flSh = -18f; frSh = -18f; flLeg = 8f; frLeg = 8f; flPaw = 8f; frPaw = 8f
-                hlLeg = -20f; hrLeg = -20f
-                hlShank = 35f; hrShank = 35f
-                hlFoot = -10f; hrFoot = -10f
-                tailP = 10f; tailSide = 18f
-            }
-            // 立身伸爪: 前肢抬起前探, 后肢蹬地, 上身立起抬头
-            REAR -> {
-                hipP = -20f; spineArch = -8f; chestP = -10f; neckP = -6f; headP = -12f
-                flSh = -55f; frSh = -55f; flLeg = -35f; frLeg = -35f; flPaw = -10f; frPaw = -10f
-                hlLeg = 10f; hrLeg = 10f
-                hlShank = -10f; hrShank = -10f
-                tailP = -20f; tailSide = 10f
-            }
-            // 回首张望: 头转向侧面, 脊柱轻微反向, 尾巴甩向另一侧
-            LOOK -> {
-                hipP = -4f; spineArch = -4f; chestP = -2f; neckP = 4f
-                tailP = 20f; tailSide = 30f
-            }
-            // 伸懒腰: 前肢伸展, 胸口低伏压低, 后躯高翘, 头抬起, 尾巴翘卷
-            STRETCH -> {
-                hipP = 10f; spineArch = -8f; chestP = -18f; neckP = -5f; headP = 18f
-                flSh = -25f; frSh = -25f; flLeg = -10f; frLeg = -10f; flPaw = 15f; frPaw = 15f
-                hlLeg = 15f; hrLeg = 15f
-                hlShank = -10f; hrShank = -10f
-                hlFoot = 5f; hrFoot = 5f
-                tailP = 40f; tailSide = 0f
+        // 预设角度全部来自 CatPosePresets.TABLE (由 scripts/model/cat_pose_solver.py 生成)。
+        // 新骨架 (2026-10 重绑): 躯干 5 段 root/spine_01..03/chest、颈 1 段、尾 6 段、四肢各 5 段。
+        CatPosePresets.TABLE[posePreset.lowercase()]?.forEach { (bone, a) ->
+            if (a[0] != 0f || a[1] != 0f || a[2] != 0f) {
+                b.addTo(bone, 0, a[0])
+                b.addTo(bone, 1, a[1])
+                b.addTo(bone, 2, a[2])
             }
         }
 
-        headP += (jointAngles["cat_head_pitch"] ?: 0f)
-        var headY = (jointAngles["cat_head_yaw"] ?: 0f)
-        spineArch += (jointAngles["cat_spine_arch"] ?: 0f)
-        spineMid += (jointAngles["cat_spine_mid"] ?: 0f)
-        flLeg += (jointAngles["cat_fl_leg"] ?: 0f)
-        frLeg += (jointAngles["cat_fr_leg"] ?: 0f)
-        hlLeg += (jointAngles["cat_hl_leg"] ?: 0f)
-        hrLeg += (jointAngles["cat_hr_leg"] ?: 0f)
-        tailP += (jointAngles["cat_tail_pitch"] ?: 0f)
-        tailSide += (jointAngles["cat_tail_yaw"] ?: 0f)
+        // 语义滑杆: 面板上的一个自由度摊到相关骨骼上, 不做"一根骨硬掰"
+        fun slider(key: String): Float = jointAngles[key] ?: 0f
 
-        b.joint("Hips", "hips", hipP, 0f, 0f)
-        b.joint("Spine", "spine", spineArch, 0f, 0f)
-        b.joint("spine_mid", "spine_mid", spineMid, 0f, 0f)
-        b.joint("Chest", "chest", chestP, 0f, 0f)
-        b.joint("Neck", "neck", neckP, 0f, 0f)
-        if (posePreset.equals(LOOK, ignoreCase = true)) headY = 45f
-        // 趴睡时头要歪向一侧 (枕在前爪上), 不然正对前方像"低头罚站"
-        if (posePreset.equals(CURL, ignoreCase = true)) headY += 32f
-        b.joint("Head", "head", headP, headY, 0f)
-        b.joint("l_front_shoulder", "frontleg", flSh, 0f, 0f)
-        b.joint("r_front_shoulder", "R_frontleg", frSh, 0f, 0f)
-        b.joint("leftFrontLeg", "LeftFrontLeg", flLeg, 0f, 0f, "l_front_leg", "frontleg0")
-        b.joint("rightFrontLeg", "RightFrontLeg", frLeg, 0f, 0f, "r_front_leg", "R_frontleg0")
-        b.joint("l_front_paw", "frontleg1", flPaw, 0f, 0f, "frontleg2")
-        b.joint("r_front_paw", "R_frontleg1", frPaw, 0f, 0f, "R_frontleg2")
-        b.joint("leftHindLeg", "LeftHindLeg", hlLeg, 0f, 0f, "l_hind_thigh", "backleg")
-        b.joint("rightHindLeg", "RightHindLeg", hrLeg, 0f, 0f, "r_hind_thigh", "R_backleg")
-        b.joint("l_hind_shank", "backleg0", hlShank, 0f, 0f)
-        b.joint("r_hind_shank", "R_backleg0", hrShank, 0f, 0f)
-        b.joint("l_hind_foot", "backleg1", hlFoot, 0f, 0f, "backleg2")
-        b.joint("r_hind_foot", "R_backleg1", hrFoot, 0f, 0f, "R_backleg2")
-        // 尾骨链: 第一根跟随滑杆, 后面几节按固定比例递进, 形成自然的卷曲
-        b.joint("Tail1", "tail1", tailP, 0f, tailSide, "tail")
-        b.joint("Tail2", "tail2", 26f + tailP * 0.25f, 0f, tailSide * 0.8f, "tailstart")
-        b.joint("Tail3", "tail3", 20f + tailP * 0.2f, 0f, tailSide * 0.6f)
-        b.joint("Tail4", "tail4", 14f + tailP * 0.15f, 0f, tailSide * 0.4f)
-        b.joint("tail5", null, 10f + tailP * 0.1f, 0f, tailSide * 0.2f)
+        slider("cat_head_pitch").let { if (it != 0f) b.addTo("head", 0, it) }
+        // 新骨架的头骨朝前, 局部 Y 是脸朝向: 左右转头要绕局部 Z (roll), 绕 Y 只是歪头
+        slider("cat_head_yaw").let { if (it != 0f) b.addTo("head", 2, it) }
+
+        // 弓背/塌腰: 沿脊柱逐段递减, 形成弧线而不是折角
+        val arch = slider("cat_spine_arch")
+        if (arch != 0f) {
+            b.addTo("spine_01", 0, arch * 0.40f)
+            b.addTo("spine_02", 0, arch * 0.40f)
+            b.addTo("spine_03", 0, arch * 0.30f)
+            b.addTo("chest", 0, arch * 0.20f)
+        }
+
+        // 四肢: 每侧摊到两段关节
+        val fl = slider("cat_fl_leg")
+        if (fl != 0f) {
+            b.addTo("shoulder_L", 0, fl * 0.5f)
+            b.addTo("elbow_L", 0, fl * 0.5f)
+        }
+        val fr = slider("cat_fr_leg")
+        if (fr != 0f) {
+            b.addTo("shoulder_R", 0, fr * 0.5f)
+            b.addTo("elbow_R", 0, fr * 0.5f)
+        }
+        val hl = slider("cat_hl_leg")
+        if (hl != 0f) {
+            b.addTo("hip_L", 0, hl * 0.5f)
+            b.addTo("knee_L", 0, hl * 0.5f)
+        }
+        val hr = slider("cat_hr_leg")
+        if (hr != 0f) {
+            b.addTo("hip_R", 0, hr * 0.5f)
+            b.addTo("knee_R", 0, hr * 0.5f)
+        }
+
+        // 尾巴: 6 段按衰减系数联动 (俯仰 + 左右摆走 roll, 绕骨轴扭转没用)
+        val tailP = slider("cat_tail_pitch")
+        val tailSide = slider("cat_tail_yaw")
+        if (tailP != 0f || tailSide != 0f) {
+            for (i in 0 until 5) {
+                val decay = 1f - i * 0.18f
+                if (tailP != 0f) b.addTo("tail_%02d".format(i + 1), 0, tailP * decay)
+                if (tailSide != 0f) b.addTo("tail_%02d".format(i + 1), 2, tailSide * decay * 0.8f)
+            }
+        }
     }
 
     // ------------------------------------------------------------------

@@ -90,12 +90,26 @@ class SkeletonPoseTest {
     // ------------------------------------------------------------------
 
     @Test
-    fun `cat rig has a mid spine joint that actually bends the torso`() {
+    fun `cat rig is the re-rigged 36 joint quadruped skeleton`() {
         val cat = catModel()
         val skeleton = cat.skeleton!!
-        val idx = skeleton.joints.indexOfFirst { it.name == "spine_mid" }
-        assertTrue("asset must carry the spine_mid joint (scripts/model/add_spine_mid.py)", idx >= 0)
-        // 静止姿态下权重和必须为 1, 否则躯干会被缩放
+        val names = skeleton.joints.map { it.name }.toSet()
+        // 躯干必须是 5 段 (旧资产只有 Hips/Spine/Chest 三段, 蜷缩只能靠顶点弯曲硬掰)
+        for (bone in listOf("root", "spine_01", "spine_02", "spine_03", "chest",
+                            "neck", "head", "muzzle")) {
+            assertTrue("missing torso bone: $bone", names.contains(bone))
+        }
+        // 尾 6 段 (旧 5 段太长, 绕不成圈); 四肢各 5 段
+        for (i in 1..6) assertTrue("missing tail_%02d".format(i), names.contains("tail_%02d".format(i)))
+        for (side in listOf("_L", "_R")) {
+            for (bone in listOf("scapula", "shoulder", "elbow", "carpus", "toe_front",
+                                "hip", "knee", "hock", "meta", "toe_hind")) {
+                assertTrue("missing limb bone: $bone$side", names.contains("$bone$side"))
+            }
+        }
+        assertTrue("old rig bone Chest must be gone", !names.contains("Chest"))
+
+        // 权重必须归一 (否则躯干会被缩放)
         val weights = cat.jointWeights
         assertNotNull("cat rig must be skinned", weights)
         var worst = 0f
@@ -105,9 +119,12 @@ class SkeletonPoseTest {
             worst = maxOf(worst, abs(sum - 1f))
         }
         assertTrue("weight sums must be normalized (worst=$worst)", worst < 1e-3f)
-        // 脊柱中段俯仰必须真的改变躯干顶点 (资产若退回两段脊柱, 这条会失败)
+
+        // 脊柱中段俯仰必须真的带动躯干顶点
         val rest = cat.createDeformedMesh(emptyMap())
-        val bent = cat.createDeformedMesh(mapOf("spine_mid" to floatArrayOf(24f, 0f, 0f)))
+        val bent = cat.createDeformedMesh(
+            mapOf("spine_02" to floatArrayOf(18f, 0f, 0f), "spine_03" to floatArrayOf(18f, 0f, 0f)),
+        )
         var moved = 0
         for (i in rest.positions.indices step 3) {
             val d = abs(rest.positions[i] - bent.positions[i]) +
@@ -115,8 +132,37 @@ class SkeletonPoseTest {
                 abs(rest.positions[i + 2] - bent.positions[i + 2])
             if (d > 1e-3f) moved++
         }
-        assertTrue("spine_mid bend should move torso vertices (moved=$moved)",
+        assertTrue("spine bend should move torso vertices (moved=$moved)",
             moved > cat.baseMesh.vertexCount / 20)
+    }
+
+    @Test
+    fun `cat sit preset folds the hind legs instead of standing`() {
+        val cat = catModel()
+        val skeleton = cat.skeleton!!
+        val sit = PosePresets.buildEulerMap("cat", PosePresets.SIT, emptyMap())
+        val stand = PosePresets.buildEulerMap("cat", PosePresets.STAND, emptyMap())
+        // 后肢必须真的折起来: 髋 + 膝 相对静止姿态都有明显角度
+        for (bone in listOf("hip_L", "knee_L", "hock_L")) {
+            val a = sit[bone] ?: floatArrayOf(0f, 0f, 0f)
+            val b = stand[bone] ?: floatArrayOf(0f, 0f, 0f)
+            assertTrue("$bone should fold in SIT (sit=${a[0]} stand=${b[0]})",
+                abs(a[0] - b[0]) > 30f)
+        }
+        // 贴地后的轮廓高度: 坐姿的重心明显低于站姿 (身体坐在后腿上)
+        fun groundedHeight(preset: String): Float {
+            val shift = PosePresets.groundShiftForPreset(cat, "cat", preset)
+            val mesh = cat.createDeformedMesh(
+                PosePresets.buildEulerMap("cat", preset, emptyMap()), null, null, shift,
+            )
+            var maxY = -Float.MAX_VALUE
+            for (i in 1 until mesh.positions.size step 3) maxY = maxOf(maxY, mesh.positions[i])
+            return maxY - cat.restMinY
+        }
+        val standH = groundedHeight(PosePresets.STAND)
+        val sitH = groundedHeight(PosePresets.SIT)
+        assertTrue("sitting silhouette must be lower (stand=$standH sit=$sitH)", sitH < standH)
+        assertNotNull(skeleton)
     }
 
     @Test
@@ -190,27 +236,28 @@ class SkeletonPoseTest {
     fun `head drag turns around the bone axis with finger-consistent signs`() {
         val cat = catModel()
         val skeleton = cat.skeleton!!
-        val headIdx = skeleton.joints.indexOfFirst { it.name == "Head" }
+        val headIdx = skeleton.joints.indexOfFirst { it.name == "head" }
         assertTrue("Head joint exists", headIdx >= 0)
 
-        // 头颈横向拖拽 = 转头 (绕局部 Y 扭转), 纵向拖拽 = 低头/抬头
-        assertEquals(1, skeleton.dragSwingAxis(headIdx))
+        // 头颈横向拖拽 = 转头 (绕"世界竖直"的那根局部轴, 新骨架头骨朝前 -> 局部 Z)
+        assertEquals(2, skeleton.dragSwingAxis(headIdx))
         assertEquals(1f, skeleton.dragPitchSign(headIdx), 1e-3f)
-        assertEquals(1f, skeleton.dragSwingSign(headIdx), 1e-3f)
+        // 符号由几何自动推测 (手指往右 -> 头往右), 下面用行为验证, 不写死正负
 
         val rest = PosePresets.buildEulerMap("cat", PosePresets.STAND, emptyMap())
         val muzzleRest = worldJoint(cat, rest, "muzzle")
 
         // 手指向下拖拽 -> pitch 为正 -> 口吻 (muzzle) 世界 Y 下降
-        val downDrag = PosePresets.buildEulerMap("cat", PosePresets.STAND, mapOf("Head_p" to 20f))
+        val downDrag = PosePresets.buildEulerMap("cat", PosePresets.STAND, mapOf("head_p" to 20f))
         val muzzleDown = worldJoint(cat, downDrag, "muzzle")
         assertTrue(
             "drag down should pitch the head down (muzzle Y ${muzzleRest[1]} -> ${muzzleDown[1]})",
             muzzleDown[1] < muzzleRest[1] - 1e-3f,
         )
 
-        // 手指向右拖拽 -> yaw 为正 -> 口吻世界 X 向右 (+X)
-        val rightDrag = PosePresets.buildEulerMap("cat", PosePresets.STAND, mapOf("Head_y" to 20f))
+        // 手指向右拖拽 -> 按手势换算出的角度 -> 口吻世界 X 向右 (+X)
+        val rightAngle = 20f * skeleton.dragSwingSign(headIdx)
+        val rightDrag = PosePresets.buildEulerMap("cat", PosePresets.STAND, mapOf("head_r" to rightAngle))
         val muzzleRight = worldJoint(cat, rightDrag, "muzzle")
         assertTrue(
             "drag right should turn the head right (muzzle X ${muzzleRest[0]} -> ${muzzleRight[0]})",
@@ -222,28 +269,28 @@ class SkeletonPoseTest {
     fun `limb drag uses a visible swing axis instead of pure twist`() {
         val cat = catModel()
         val skeleton = cat.skeleton!!
-        val legIdx = skeleton.joints.indexOfFirst { it.name == "l_front_leg" }
-        assertTrue("l_front_leg exists", legIdx >= 0)
+        val legIdx = skeleton.joints.indexOfFirst { it.name == "elbow_L" }
+        assertTrue("elbow_L exists", legIdx >= 0)
 
         // 前腿竖直朝下: 绕骨轴 (局部 Y) 旋转只是自转, 屏幕上几乎不动 -> 必须换到横向摆动轴
         assertEquals(2, skeleton.dragSwingAxis(legIdx))
         assertEquals(-1f, skeleton.dragSwingSign(legIdx), 1e-3f)
 
         val rest = PosePresets.buildEulerMap("cat", PosePresets.STAND, emptyMap())
-        val pawRest = worldJoint(cat, rest, "l_front_paw")
+        val pawRest = worldJoint(cat, rest, "toe_front_L")
 
         // 水平拖拽 +30px, 换算角度 = 30 * 0.6 * sign
         val angle = 30f * 0.6f * skeleton.dragSwingSign(legIdx)
-        val dragMap = PosePresets.buildEulerMap("cat", PosePresets.STAND, mapOf("l_front_leg_r" to angle))
-        val pawDrag = worldJoint(cat, dragMap, "l_front_paw")
+        val dragMap = PosePresets.buildEulerMap("cat", PosePresets.STAND, mapOf("elbow_L_r" to angle))
+        val pawDrag = worldJoint(cat, dragMap, "toe_front_L")
         assertTrue(
             "drag right should swing the paw right (paw X ${pawRest[0]} -> ${pawDrag[0]})",
             pawDrag[0] > pawRest[0] + 1e-3f,
         )
 
         // 对照: 同样的角度若加在骨轴 (Y) 上, 爪子的横向位移应小一个数量级
-        val twistMap = PosePresets.buildEulerMap("cat", PosePresets.STAND, mapOf("l_front_leg_y" to angle))
-        val pawTwist = worldJoint(cat, twistMap, "l_front_paw")
+        val twistMap = PosePresets.buildEulerMap("cat", PosePresets.STAND, mapOf("elbow_L_y" to angle))
+        val pawTwist = worldJoint(cat, twistMap, "toe_front_L")
         val swingDx = abs(pawDrag[0] - pawRest[0])
         val twistDx = abs(pawTwist[0] - pawRest[0])
         assertTrue("swing ($swingDx) should dominate twist ($twistDx)", swingDx > twistDx * 3f)

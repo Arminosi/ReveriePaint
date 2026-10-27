@@ -134,7 +134,52 @@ python3 scripts/model/preview_cat_poses.py --presets sit,curl --views side,quart
 - 骨骼名不变 (`earend` / `R_earend`), 既有工程与测试无需迁移;
 - 之后拖耳骨 = 绕耳根摆动, 覆盖层那两根线缩回耳内。
 
-## 10. 脊柱中段骨 spine_mid (2026-10 资产重绑)
+## 11. 猫猫骨架重绑 (2026-10, 网格不变只换骨架)
+
+网格保持原样 (Meshy 导出的猫, 画风与细节都不动), 只重做骨架与权重 —— 出问题的一直是骨架,
+不是模型。脚本 `scripts/model/rerig_cat.py` (Blender 无头运行)。
+
+**新骨架 36 关节**:
+
+```
+root → spine_01 → spine_02 → spine_03 → chest → neck → head → muzzle
+                                              │       └ ear_L / ear_R
+   ├ hip_L → knee_L → hock_L → meta_L → toe_hind_L
+   ├ hip_R → ...
+   ├ tail_01 ... tail_06
+   └ (前肢挂在 chest)
+       scapula_L → shoulder_L → elbow_L → carpus_L → toe_front_L
+       scapula_R → ...
+```
+
+- 躯干 5 段: 蜷缩/弓背由 5 段分担, 单骨只转 8~20 度, 不再靠一根骨硬掰;
+- 颈只有 1 段 (旧资产颈骨 0.41 长, 是"看着惊悚"的主因之一);
+- 尾 6 段 (旧 5 段太长, 绕不成圈); 前肢补了 scapula / carpus, 后肢补了 meta;
+- 脚尖有骨: `toe_front_L/R` 与 `toe_hind_L/R` 各自带 500~680 的权重和, 爪子可以单独调;
+- 所有骨局部 X 对齐世界 +X (`align_roll`), App 的俯仰才落在矢状面上。
+
+**蒙皮**: Blender 的 Bone Heat 自动权重在这个资产上整体求解失败 (9550 顶点全零,
+报 "failed to find solution for one or more bones"), 因此用 `到骨段距离 1/(d+0.03)³ 取前 4
++ 22 轮网格平滑 + 颈部淡出 + 权重归一化`, 与旧资产同一套已验证算法。
+
+**效果 (离线实测, 与 App 逐位一致)**:
+
+| 姿态 | 轮廓高度 | 边长拉伸 p99 |
+|---|---|---|
+| 站姿 | 1.138 | 1.07 |
+| 端坐 (后腿深折: 髋 -64 / 膝 +78 / 跗 -100) | 1.136 | 1.52 |
+| 农民揣 | 0.925 | 1.63 |
+| 蜷缩 | 0.897 | 1.76 |
+
+旧资产同类姿态 p99 在 2.3 以上 (髋/肩关节被撕开), 所以"后腿没弯下去""看着惊悚"的本质是
+**骨架结构 + 权重**, 不是模型。
+
+**注册表**: 预设角度在 `model/CatPosePresets.kt` (9 个预设 × 骨骼 → [pitch,yaw,roll]),
+由求解器生成; `PosePresets.buildCatPose` 现在只是"查表 + 语义滑杆叠加", 不再手写 if/when。
+面板语义键: `cat_head_pitch` / `cat_head_yaw` (新骨架头骨朝前 → 转头绕局部 Z) / `cat_spine_arch`
+(摊到脊柱 4 段) / 四肢各键摊到两段关节 / `cat_tail_pitch` / `cat_tail_yaw` (6 段递减联动)。
+
+## 12. 脊柱中段骨 spine_mid (上一轮, 已被 §11 取代)
 
 原骨架躯干只有 `Hips → Spine → Chest` 两个旋转轴心, 且 Chest 的权重被肩骨抢走, 蜷缩/趴伏只能
 靠程序化顶点弯曲 (那条路径会按 cosθ 缩放截面, 实机表现为"躯干被拉长变形", 已废弃)。

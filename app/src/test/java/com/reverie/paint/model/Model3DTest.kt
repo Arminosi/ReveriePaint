@@ -345,12 +345,13 @@ class Model3DTest {
             // 猫猫骨骼契约: 姿态面板/预设依赖这些关节名 (缺一个就是资产被换坏了)
             val catJoints = skinnedCat.skeleton!!.joints.map { it.name }.toSet()
             for (required in listOf(
-                "Hips", "Spine", "Chest", "Neck", "Head",
-                "tail1", "tail2", "tail3", "tail4",
-                "l_front_shoulder", "l_front_leg", "l_front_paw",
-                "r_front_shoulder", "r_front_leg", "r_front_paw",
-                "l_hind_thigh", "l_hind_shank", "l_hind_foot",
-                "r_hind_thigh", "r_hind_shank", "r_hind_foot",
+                // 2026-10 重绑后的 36 关节骨架 (scripts/model/rerig_cat.py)
+                "root", "spine_01", "spine_02", "spine_03", "chest", "neck", "head", "muzzle",
+                "tail_01", "tail_02", "tail_03", "tail_04", "tail_05", "tail_06",
+                "scapula_L", "shoulder_L", "elbow_L", "carpus_L", "toe_front_L",
+                "scapula_R", "shoulder_R", "elbow_R", "carpus_R", "toe_front_R",
+                "hip_L", "knee_L", "hock_L", "meta_L", "toe_hind_L",
+                "hip_R", "knee_R", "hock_R", "meta_R", "toe_hind_R",
             )) {
                 assertTrue("Cat rig is missing joint '$required'", catJoints.contains(required))
             }

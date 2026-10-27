@@ -331,14 +331,18 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
         if (!hold) {
             held = false
             strokeHoles = null
-            uiClips = UiClipSnapshot.EMPTY
+            synchronized(pendingLock) {
+                uiClips = UiClipSnapshot.EMPTY
+            }
             cursorR = 0f
             tipWidth = 0f
             symCursorCount = 0
             armCatchUp()
             return false
         }
-        uiClips = clips
+        synchronized(pendingLock) {
+            uiClips = clips
+        }
         strokeWantsOverlayExtras = wantsExtras
         tipWidth = 0f
         symCursorCount = 0
@@ -350,9 +354,13 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
         return true
     }
 
-    /** 笔画中途 UI 槽位变化时更新裁剪快照 (UI 线程; 渲染线程通过 @Volatile 读取)。 */
+    /** 笔画中途 UI 槽位变化时更新裁剪快照 (UI 线程; 与 pendingLock 互斥同步)。 */
     fun updateActiveUiClips(clips: UiClipSnapshot) {
-        if (held) uiClips = clips
+        if (held) {
+            synchronized(pendingLock) {
+                uiClips = clips
+            }
+        }
     }
 
     /** 笔画中途 UI 槽位变化且与已画墨相交时, 更新裁剪快照并在原层把相交差集重新烘焙 (UI 线程). */
@@ -405,7 +413,9 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
     /** 松开前缓冲 (抬笔、取消、让位给变换等)。任一线程可调。 */
     fun release() {
         held = false
-        uiClips = UiClipSnapshot.EMPTY
+        synchronized(pendingLock) {
+            uiClips = UiClipSnapshot.EMPTY
+        }
         cursorR = 0f
         tipWidth = 0f
         symCursorCount = 0

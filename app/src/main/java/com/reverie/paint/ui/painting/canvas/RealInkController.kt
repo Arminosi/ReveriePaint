@@ -677,8 +677,15 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
      * 全部成功才清空积压; 任何一步失败都保留积压并返回 false (调用方据此让主画布兜底)。
      */
     private fun presentPending(tiles: PublishedTiles, final: Boolean = false): Boolean {
-        if (!wantsHold()) {
-            if (RealInkHoldPolicy.shouldReleaseOnReject(held, wantsHold = false)) release()
+        val rejectCode = wantsHoldRejectReason()
+        if (rejectCode != REJECT_NONE) {
+            if (RealInkHoldPolicy.shouldReleaseOnReject(held, wantsHold = false)) {
+                android.util.Log.i(
+                    "RealInkController",
+                    "ev=present_pending_reject reason=${rejectReasonToString(rejectCode)} seq=$currentStrokeSeq held=$held",
+                )
+                releaseAndCatchUp()
+            }
             return false
         }
         val overlay = view.frontBufferOverlay ?: return false

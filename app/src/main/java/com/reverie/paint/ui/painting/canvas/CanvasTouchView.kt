@@ -3639,7 +3639,7 @@ class CanvasTouchView(context: Context) : View(context) {
             bmpW = bw,
             bmpH = bh,
         )
-        if (force) {
+        if (force && !realInk.held) {
             realInk.pose = pose
             return
         }

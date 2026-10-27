@@ -356,7 +356,7 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
             // 旧缓冲 (含本笔已上屏的增量墨) 已丢弃: 松开, 窗口全量接管这一笔, 与关低延迟同图。
             if (ctl.held) {
                 Log.i(TAG, "ev=surface_changed_release seq=${ctl.currentStrokeSeq}")
-                ctl.releaseAndCatchUpSafe()
+                ctl.releaseAndCatchUp()
             } else {
                 ctl.release()
             }
@@ -455,12 +455,20 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
                     } finally {
                         resetInkQueue()
                         // 系统要求重画 (尺寸/可见性变化) 时前缓冲会被隐藏: 若这时还按住真墨,
-                        // 松开它并让主画布接管, 否则按住期间主画布不刷新就是一段空白。
+                        // 立即在当前 GL 线程释放以阻断写墨，并将追赶排队到 UI 线程调度
                         val ctl = realInk
                         if (ctl != null && ctl.held) {
-                            Log.i(TAG, "ev=multi_buffered_redraw_release seq=${ctl.currentStrokeSeq}")
-                            ctl.releaseAndCatchUpSafe()
-                            targetTouchView?.postInvalidate()
+                            val seq = ctl.currentStrokeSeq
+                            Log.i(TAG, "ev=multi_buffered_redraw_release seq=$seq")
+                            ctl.release()
+                            targetTouchView?.let { tv ->
+                                tv.post {
+                                    if (!ctl.held && ctl.currentStrokeSeq == seq) {
+                                        ctl.armCatchUp()
+                                    }
+                                    tv.invalidate()
+                                }
+                            }
                         }
                     }
                 }

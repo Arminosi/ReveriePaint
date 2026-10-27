@@ -441,17 +441,7 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
         }
     }
 
-    /**
-     * 线程安全的追赶释放: 若在非 UI 线程触发 (例如 GL 线程的 multiBuffered 回调或 Surface 回调),
-     * post 回 UI 线程安全调度 scheduleRender, 避免并发争用与断墨。
-     */
-    fun releaseAndCatchUpSafe() {
-        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
-            releaseAndCatchUp()
-        } else {
-            view.post { releaseAndCatchUp() }
-        }
-    }
+
 
     /**
      * 视图画完一帧之后调用 (UI 线程, drawCanvas 末尾): 这一帧已经包含追赶的像素, 等它真正

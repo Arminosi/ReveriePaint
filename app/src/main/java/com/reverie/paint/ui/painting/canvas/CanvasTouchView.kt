@@ -3232,7 +3232,8 @@ class CanvasTouchView(context: Context) : View(context) {
             frontBufferOverlay?.clearPreview()
         }
         rebuildUiExclusionSnapshot()
-        ensureViewTransform()
+        // 落笔时无条件强制刷新最新位姿，杜绝上一笔 held 期间微动 (<0.5px) 导致 pose 过期
+        ensureViewTransform(forcePublishPose = true)
         latchFrontBufferReady(v)
         val has3DVisible = v.layers.any { it.visible && v.active3DLayers.containsKey(it.id) }
         val hasCheckerboard = checkerboardPaint != null
@@ -3594,7 +3595,7 @@ class CanvasTouchView(context: Context) : View(context) {
     }
 
     /** 刷新缓存的视图变换 (参数未变化时内部直接返回, 几乎零开销) */
-    private fun ensureViewTransform() {
+    private fun ensureViewTransform(forcePublishPose: Boolean = false) {
         val v = vm
         // 瓦片网格生效时位图空间就是网格尺寸 (displayBitmap 此时可能是旧整图或参考窗口快照)
         val grid = v?.displayTiles?.drawable()?.grid
@@ -3618,11 +3619,11 @@ class CanvasTouchView(context: Context) : View(context) {
             canvasFlipX,
             canvasFlipY,
         )
-        if (dirty || realInk.pose == null) publishCanvasPose(bmpW, bmpH)
+        if (dirty || forcePublishPose || realInk.pose == null) publishCanvasPose(bmpW, bmpH, force = forcePublishPose)
     }
 
     /** 与 onDraw 同一套位图→屏幕变换的快照, 渲染线程烤真墨时只读它。 */
-    private fun publishCanvasPose(bmpW: Int, bmpH: Int) {
+    private fun publishCanvasPose(bmpW: Int, bmpH: Int, force: Boolean = false) {
         val bw = maxOf(1, bmpW)
         val bh = maxOf(1, bmpH)
         val pose = CanvasPose(
@@ -3637,6 +3638,10 @@ class CanvasTouchView(context: Context) : View(context) {
             bmpW = bw,
             bmpH = bh,
         )
+        if (force) {
+            realInk.pose = pose
+            return
+        }
         val old = realInk.pose
         if (pose != old) {
             // 按住期间 pose 变了 (如 Compose 的 viewW/viewH/翻转在运笔中写进来): 四角屏幕位移 >= 0.5px 或尺寸变化才释放 (plan 四.4).

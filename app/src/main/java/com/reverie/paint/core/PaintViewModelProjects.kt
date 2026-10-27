@@ -447,14 +447,6 @@ internal fun PaintViewModel.loadProject(p: com.reverie.paint.model.Project) {
         renderW = preW
         renderH = preH
     }
-    if (currentPage != Page.PAINTING) {
-        frontBufferQuietUntilMs = FrontBufferQuiet.untilMs(
-            alreadyPainting = false,
-            nowUptimeMs = android.os.SystemClock.uptimeMillis(),
-            quietMs = PaintViewModel.NEW_CANVAS_FRONT_BUFFER_QUIET_MS,
-            existingUntilMs = frontBufferQuietUntilMs,
-        )
-    }
     // Navigate to painting page first, then show loading overlay while reading native file
     currentPage = Page.PAINTING
     isBlockingLoading = true
@@ -537,6 +529,10 @@ internal fun PaintViewModel.loadProject(p: com.reverie.paint.model.Project) {
                 active3DLayers = emptyMap()
             }
             isBlockingLoading = false
+            frontBufferQuietUntilMs = FrontBufferQuiet.onDocumentLoaded(
+                android.os.SystemClock.uptimeMillis(),
+                PaintViewModel.NEW_CANVAS_FRONT_BUFFER_QUIET_MS,
+            )
             startPaintingTimer()
             val curPreset = brushPresetIndex
             if (curPreset >= 0) {
@@ -1438,8 +1434,10 @@ internal fun PaintViewModel.startPainting(
             docName = actualName
             checkBrushSizeLimit()
             // 加载层关掉之后用户才能落笔。前缓冲要再静默一段时间，见 frontBufferQuietUntilMs。
-            frontBufferQuietUntilMs =
-                android.os.SystemClock.uptimeMillis() + PaintViewModel.NEW_CANVAS_FRONT_BUFFER_QUIET_MS
+            frontBufferQuietUntilMs = FrontBufferQuiet.onDocumentLoaded(
+                android.os.SystemClock.uptimeMillis(),
+                PaintViewModel.NEW_CANVAS_FRONT_BUFFER_QUIET_MS,
+            )
             isBlockingLoading = false
             startPaintingTimer()
             val curPreset = brushPresetIndex

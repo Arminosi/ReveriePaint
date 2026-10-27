@@ -27,6 +27,7 @@ import com.reverie.paint.R
 import com.reverie.paint.core.stylus.StylusAudioType
 import com.reverie.paint.model.*
 import com.reverie.paint.perf.PerfHud
+import com.reverie.paint.ui.painting.canvas.FrontBufferFeatureFlags
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -5024,10 +5025,10 @@ class PaintViewModel : ViewModel() {
 
     /**
      * 前缓冲真墨当前是否处于按住状态 (P7 / L2)。
-     * 受 `debug.reverie.fb_powersave_exempt` (默认 1) 控制。
+     * 受 [FrontBufferFeatureFlags.powersaveExempt] (`debug.reverie.fb_powersave_exempt`, 默认 1) 控制。
      */
     internal fun realInkHeld(): Boolean {
-        if (PerfTrace.debugPropInt("debug.reverie.fb_powersave_exempt", 1) == 0) return false
+        if (!FrontBufferFeatureFlags.powersaveExempt) return false
         return realInkSink?.holding == true
     }
 
@@ -5592,7 +5593,7 @@ class PaintViewModel : ViewModel() {
             val minIntervalMs = renderScheduleMode.minRenderIntervalMs
             val nowMs = android.os.SystemClock.uptimeMillis()
             val elapsed = nowMs - lastStrokeRenderFinishUptimeMs
-            val shouldThrottle = shouldThrottleStroke(minIntervalMs, elapsed, realInkHeld())
+            val shouldThrottle = minIntervalMs > 0L && elapsed < minIntervalMs && !realInkHeld()
 
             if (!shouldThrottle) {
                 if (strokeThrottleRenderScheduled) {

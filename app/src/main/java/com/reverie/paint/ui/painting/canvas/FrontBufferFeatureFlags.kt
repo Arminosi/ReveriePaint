@@ -62,4 +62,9 @@ internal object FrontBufferFeatureFlags {
     val midStrokeRefreshMs: Long by lazy {
         PerfTrace.debugPropInt("debug.reverie.fb_mid_refresh_ms", 0).toLong().coerceAtLeast(0L)
     }
+
+    /** L2: 省电模式下按住真墨期间免节流 (默认 1 开)。 */
+    val powersaveExempt: Boolean by lazy {
+        PerfTrace.debugPropInt("debug.reverie.fb_powersave_exempt", 1) != 0
+    }
 }

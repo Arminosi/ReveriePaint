@@ -1167,7 +1167,7 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
             returnPending(snapCount, seq)
             return false
         }
-        if (baked > 0) {
+        if (LandDiag.enabled && baked > 0) {
             LandDiag.noteCompose(
                 final, baked, n, screenRects, bmpRects, packXY,
                 slotBitmap.width, slotBitmap.height,
@@ -1352,6 +1352,7 @@ internal class RealInkController(private val view: CanvasTouchView) : RealInkSin
     }
 
     private fun saveLandSlot(bmp: Bitmap, screenRects: IntArray, packXY: IntArray) {
+        if (!LandDiag.enabled) return
         val w = (screenRects[2] - screenRects[0]).coerceAtLeast(1)
         val h = (screenRects[3] - screenRects[1]).coerceAtLeast(1)
         val x = packXY[0].coerceIn(0, (bmp.width - 1).coerceAtLeast(0))

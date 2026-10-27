@@ -15,6 +15,16 @@ import java.util.concurrent.atomic.AtomicInteger
 internal object LandDiag {
     private const val TAG = "LandDiag"
 
+    val enabled: Boolean by lazy {
+        try {
+            val cls = Class.forName("android.os.SystemProperties")
+            val m = cls.getMethod("getInt", String::class.java, Int::class.javaPrimitiveType)
+            (m.invoke(null, "debug.reverie.landdiag", 0) as? Int ?: 0) == 1
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
     @Volatile
     var armed: Boolean = false
 
@@ -39,6 +49,7 @@ internal object LandDiag {
 
     /** 新的一笔按住开始。清掉上一笔没打出来的矩形。 */
     fun beginHold() {
+        if (!enabled) return
         synchronized(gate) {
             clearPacketsLocked()
             armed = true
@@ -50,6 +61,7 @@ internal object LandDiag {
      * 断档 = 新矩形离当前笔迹包围盒超过 [CLUSTER_PAD_PX]，中间没有连上。
      */
     fun endHold() {
+        if (!enabled) return
         val summary: String
         val lines: List<String>
         synchronized(gate) {
@@ -80,6 +92,7 @@ internal object LandDiag {
 
     /** 这一笔最多存两张槽位图：笔迹拉过 400px 时一张，抬笔包一张。 */
     fun takeShot(finalPacket: Boolean): Boolean {
+        if (!enabled) return false
         synchronized(gate) {
             if (!armed) return false
             if (finalPacket) {
@@ -108,7 +121,7 @@ internal object LandDiag {
         slotW: Int,
         slotH: Int,
     ) {
-        if (!armed || baked <= 0) return
+        if (!enabled || !armed || baked <= 0) return
         val n = baked.coerceAtMost(MAX_INK_RECTS)
         val screen = IntArray(n * 4)
         val bmp = IntArray(n * 4)
@@ -246,18 +259,19 @@ internal object LandDiag {
     }
 
     fun noteRender(inPlace: Int, torn: Boolean) {
-        if (!armed) return
+        if (!enabled || !armed) return
         if (inPlace > 0) inPlaceAccum.addAndGet(inPlace)
         if (torn) tornAccum.incrementAndGet()
     }
 
     /** 按住期间的 invalidate / postInvalidate。同一帧只保留第一次调用栈。 */
     fun noteInvalidate(trigger: String) {
-        if (!armed) return
+        if (!enabled || !armed) return
         if (invCount.getAndIncrement() == 0) firstTrigger = trigger
     }
 
     fun shortCaller(): String {
+        if (!enabled) return ""
         val stack = Throwable().stackTrace
         for (i in 2 until stack.size) {
             val e = stack[i]
@@ -278,6 +292,7 @@ internal object LandDiag {
     }
 
     fun holdDraw(drewTiles: Boolean, generation: Int, tileRev: Long, interacting: Boolean) {
+        if (!enabled) return
         val ip = inPlaceAccum.getAndSet(0)
         val torn = tornAccum.getAndSet(0)
         val n = invCount.getAndSet(0)

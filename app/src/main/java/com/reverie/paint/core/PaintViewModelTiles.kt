@@ -256,7 +256,7 @@ internal fun PaintViewModel.doRenderTiles(w: Int, h: Int) {
             )
     sink?.finishFrame(kept)
     sink?.onTileFrameEnd(tileRevision)
-    LandDiag.noteRender(inPlaceCount, tornInPlace)
+    if (LandDiag.enabled && LandDiag.armed) LandDiag.noteRender(inPlaceCount, tornInPlace)
     notifyCanvasFramePublished(keptOnFrontBuffer = kept)
     // 被撕裂的那张瓦片在前缓冲上是完整的, 但主画布的纹理可能是半张: 补一次失效让 HWUI 重传。
     if (kept && tornInPlace) invalidateCanvasFromRender()

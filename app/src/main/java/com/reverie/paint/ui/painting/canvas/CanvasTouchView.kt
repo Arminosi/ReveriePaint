@@ -2306,17 +2306,17 @@ class CanvasTouchView(context: Context) : View(context) {
      * 标尺本体在 debug 专属源集里 ([PerfHud]), 正式版是空实现。
      */
     override fun invalidate() {
-        if (LandDiag.armed) LandDiag.noteInvalidate(LandDiag.shortCaller())
+        if (LandDiag.enabled && LandDiag.armed) LandDiag.noteInvalidate(LandDiag.shortCaller())
         super.invalidate()
     }
 
     override fun postInvalidate() {
-        if (LandDiag.armed) LandDiag.noteInvalidate("post:" + LandDiag.shortCaller())
+        if (LandDiag.enabled && LandDiag.armed) LandDiag.noteInvalidate("post:" + LandDiag.shortCaller())
         super.postInvalidate()
     }
 
     override fun postInvalidateOnAnimation() {
-        if (LandDiag.armed) LandDiag.noteInvalidate("postOnAnim:" + LandDiag.shortCaller())
+        if (LandDiag.enabled && LandDiag.armed) LandDiag.noteInvalidate("postOnAnim:" + LandDiag.shortCaller())
         super.postInvalidateOnAnimation()
     }
 
@@ -2573,7 +2573,7 @@ class CanvasTouchView(context: Context) : View(context) {
                     releaseLargeBitmapTiles()
                 }
                 drawDisplayTiles(canvas, tiles)
-                if (LandDiag.armed) {
+                if (LandDiag.enabled && LandDiag.armed) {
                     LandDiag.holdDraw(true, v.displayTiles.generation, drawnRev, isInteracting)
                 }
                 // 液化上屏用的整图快照 (只在液化等待上屏/参考窗口开着时才存在)

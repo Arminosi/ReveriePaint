@@ -75,6 +75,10 @@ fun PoseAdjustmentPanel(
         onDismiss()
         return
     }
+    var showJointOffset by remember { mutableStateOf(false) }
+    if (showJointOffset) {
+        JointOffsetPanel(vm = vm, onDismiss = { showJointOffset = false })
+    }
 
     val config = LocalConfiguration.current
     val isPhone = config.screenWidthDp < 600 || config.screenWidthDp < config.screenHeightDp
@@ -252,6 +256,22 @@ fun PoseAdjustmentPanel(
                 // 重置所有关节微调
                 Box(
                     contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Morandi.panelHi)
+                        .clickable { showJointOffset = true }
+                        .padding(horizontal = 8.dp, vertical = 5.dp),
+                ) {
+                    Text(
+                        text = "关节位置",
+                        color = Morandi.accent,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+
+                // 重置所有关节角度
+                Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(10.dp))
                         .background(Morandi.panelHi)

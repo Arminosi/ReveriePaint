@@ -90,7 +90,7 @@ class SkeletonPoseTest {
     // ------------------------------------------------------------------
 
     @Test
-    fun `cat rig is the UniRig 40 joint quadruped skeleton plus 3 added joints`() {
+    fun `cat rig is the UniRig 40 joint quadruped skeleton plus lumbar`() {
         val cat = catModel()
         val skeleton = cat.skeleton!!
         val names = skeleton.joints.map { it.name }.toSet()
@@ -108,7 +108,7 @@ class SkeletonPoseTest {
             }
         }
         assertTrue("old rig bone Chest must be gone", !names.contains("Chest"))
-        assertEquals("joint count", 43, skeleton.count)
+        assertEquals("joint count", 41, skeleton.count)
 
         // 权重必须归一 (否则躯干会被缩放)
         val weights = cat.jointWeights

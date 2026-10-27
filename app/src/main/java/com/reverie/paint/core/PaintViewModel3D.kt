@@ -35,6 +35,8 @@ private data class DeformKey(
     val modelType: String,
     val posePreset: String,
     val jointAngles: Map<String, Float>,
+    /** 关节静止位置偏移的签名 —— 不含它会导致改绑骨后骨架点/网格不刷新 */
+    val restOffsets: String = "",
 )
 
 /** 静态形变结果 LRU (烘焙/导出/撤销回放复用), 按浮点元素总量限容 */
@@ -175,7 +177,12 @@ internal fun PaintViewModel.deformState(state: Model3DState, buffer: DeformBuffe
  * 获取形变结果 (带缓存)。用于烘焙/导出/线稿等非逐帧路径。
  */
 internal fun PaintViewModel.getDeformedForState(state: Model3DState): Deformed3D {
-    val key = DeformKey(state.modelType, state.posePreset, state.jointAngles)
+    val restSig = if (state.jointRestOffsets.isEmpty()) {
+        ""
+    } else {
+        state.jointRestOffsets.entries.sortedBy { it.key }.joinToString(",") { "${it.key}=${it.value}" }
+    }
+    val key = DeformKey(state.modelType, state.posePreset, state.jointAngles, restSig)
     synchronized(deformCacheLock) { deformCache[key]?.let { return it } }
 
     val result = deformState(state, null)

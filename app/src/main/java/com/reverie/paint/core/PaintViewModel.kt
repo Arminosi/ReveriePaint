@@ -6286,6 +6286,12 @@ class PaintViewModel : ViewModel() {
     var active3DSelectedJointName by mutableStateOf<String?>(null)
     /** 骨骼拖拽锁定的旋转轴: -1 = 未锁定, 0 = 俯仰环(X), 1 = 偏转环(Y) */
     var active3DBoneAxis by mutableStateOf(-1)
+    /**
+     * 关节位置微调模式: 打开后画布上拖拽选中的关节 = 移动它的位置 (竖直), 而不是旋转。
+     * 用于修正自动绑定的关节点偏差 —— 用户直接看着网格拖, 比数值滑杆直观得多。
+     * 状态不进作品文件 (纯编辑期开关), 导出走 [com.reverie.paint.perf.JointOffsetExport]。
+     */
+    var jointPositionEditMode by mutableStateOf(false)
     var live3DPreviewBitmap by mutableStateOf<android.graphics.Bitmap?>(null)
     var isInteracting3D by mutableStateOf(false)
     var show3DModelPicker by mutableStateOf(false)

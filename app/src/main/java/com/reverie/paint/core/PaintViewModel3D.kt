@@ -541,6 +541,22 @@ internal fun PaintViewModel.handle3DGesture(deltaX: Float, deltaY: Float) {
                 update3DState(state.copy(rotX = newRotX, rotY = newRotY))
                 return
             }
+            // 关节位置微调模式: 同一套"点中选择 + 拖拽"交互, 但改的是位置而不是角度。
+            // 竖直拖拽 = 沿骨骼局部 Y 平移 (与 PosePresets.buildTranslations 的 _ty 约定一致,
+            // 存储单位 1/100 模型单位, 因此每像素 0.1 = 0.001 模型单位)。
+            if (jointPositionEditMode) {
+                val key = JointOffsetSpec.key(jointName, 1)
+                val cur = state.jointAngles[key] ?: 0f
+                val next = (cur - deltaY * 0.1f).coerceIn(-JointOffsetSpec.RANGE, JointOffsetSpec.RANGE)
+                if (kotlin.math.abs(next - cur) < 0.01f) return
+                // 不逐帧压撤销栈 (与既有骨骼旋转拖拽一致): 撤销一次即恢复到拖拽前
+                update3DState(
+                    state.copy(
+                        jointAngles = state.jointAngles + (key to next),
+                    ),
+                )
+                return
+            }
             // 点中轴环后只改该轴, 手感与环一致
             val lockedAxis = active3DBoneAxis
             if (lockedAxis >= 0) {

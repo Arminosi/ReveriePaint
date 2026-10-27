@@ -259,12 +259,36 @@ fun PoseAdjustmentPanel(
                     modifier = Modifier
                         .clip(RoundedCornerShape(10.dp))
                         .background(Morandi.panelHi)
+                        .clickable {
+                            // 可视化微调: 打开后直接在画布上点关节拖动即可改位置
+                            val next = !vm.jointPositionEditMode
+                            vm.jointPositionEditMode = next
+                            if (next) {
+                                vm.active3DInteractionMode = com.reverie.paint.model.Interaction3DMode.BONE
+                                onDismiss()
+                            }
+                        }
+                        .padding(horizontal = 8.dp, vertical = 5.dp),
+                ) {
+                    Text(
+                        text = if (vm.jointPositionEditMode) "微调中 · 点此退出" else "关节位置",
+                        color = Morandi.accent,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+
+                // 数值微调 (备用入口: 需要精确到 0.5 时用)
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Morandi.panelHi)
                         .clickable { showJointOffset = true }
                         .padding(horizontal = 8.dp, vertical = 5.dp),
                 ) {
                     Text(
-                        text = "关节位置",
-                        color = Morandi.accent,
+                        text = "数值",
+                        color = Morandi.subText,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Medium,
                     )

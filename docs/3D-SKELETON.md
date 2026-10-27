@@ -207,3 +207,89 @@ root → spine_01 → spine_02 → spine_03 → chest → neck → head → muzz
 2. 双骨解析 IK (拖手/拖脚带动整条链) —— 需要在 `Skeleton3D` 上加链求解并处理翻滚轴的自由度;
 3. 姿态切换过渡插值 (目前是瞬切);
 4. 蒙皮权重在加载后做一次邻域平滑, 减少大角度下的蝴蝶结与塌陷。
+
+## 13. UniRig 骨架 + 用户微调 + 重算蒙皮 (2026-10 末, 当前主线)
+
+本节记录一次完整的"自动绑定 → 人工调点 → 重算蒙皮"闭环, 以及途中排掉的错误方向。
+教训密度很高, 改资产前建议先读完。
+
+### 13.1 资产现状
+
+`app/src/main/assets/3d_models/anime_cat.glb` = **原网格 (未改一个顶点) + 43 关节骨架 + 重算权重**
+
+| 项 | 值 |
+|---|---|
+| 关节 | 43 = UniRig 预测 40 + 手工增补 3 (`lumbar` / `forearm_L` / `forearm_R`) |
+| 权重 | UniRig Colab 完整配置预测 (32768 采样点) + 顶点迁移 + 串扰清理 |
+| 自检 | 权重和恒 1.0; `world × inverseBind = I` 偏差 0.0000; 左右串扰 0 |
+
+关节命名: `root`, `lumbar`, `spine_01..06`, `head`, `ear_L/R`(+`ear_tip_*`),
+`tail_01..08`, `scapula/shoulder/forearm/elbow/carpus/toe_front` ×L/R,
+`hip/knee/hock/meta/toe_hind` ×L/R。**没有** `muzzle` / `chest` / `neck`。
+
+### 13.2 完整流水线 (脚本都在 `build/rigless/`)
+
+```
+① 网页拖关节   joint-editor.html   (three.js 单文件, 浏览器里点球拖动)
+                  ↓ 导出 joint_offsets.json (每个关节的世界偏移)
+② 烘焙位置     bake_offsets.py     改局部 translation + 全部重算 IB
+                  ↓ anime_cat_v1x.glb
+③ 骨架转 npz   make_skeleton_npz.py   glTF Y-up → Blender Z-up, 并按拓扑序重排
+                  ↓ predict_skeleton.npz (43 关节)
+④ 算权重       Colab: unirig_skin_colab.ipynb (32768 采样点, T4)
+                  ↓ predict_skin.npz
+⑤ 迁移到顶点   apply_skin.py       KD 最近邻 12 点 + 4 轮边平滑
+⑥ 清理串扰     clean_weights.py    过远剔除 + 左右分侧
+                  ↓ 最终 GLB
+```
+
+本地 4 GB 显存也能跑 ④ 的低配版 (`inference_skin_lowmem.yaml`: num_samples 8192 / grid 128),
+但质量与完整版基本持平 —— **瓶颈不在采样密度**。
+
+### 13.3 七个坑 (按踩到的顺序)
+
+1. **glTF 节点的 `matrix` 不能直接删**: 烘焙位置时若节点用 `matrix` 存变换, 只写
+   `translation` 会把旋转一起丢掉 → 子树整体转向、头颈乱飞、前肢硬转折。
+   必须先分解出 (T, R, S) 再只替换 T。
+2. **子骨改挂父级后必须重写局部矩阵**: 否则整段偏移半个骨长 (IB 偏差 0.14)。
+3. **改任意关节后要重算全部 IB**: 父骨一动, 所有后代的世界矩阵都变。
+4. **VEC4 float 的字节步长是 16 不是 4**: 写 WEIGHTS_0 时用错会让权重互相覆盖 (和变 4.0)。
+5. **UniRig 要求父索引 < 子索引**: 后插入的关节直接放末尾会报
+   `new order does not form a tree`, 必须按拓扑序重排并记录索引映射。
+6. **采样点权重迁移会左右串扰**: 最近邻在两腿内侧会跨边取点, 表现为"拉左腿右趾跟着动"
+   (实测 29 个顶点位移最大 0.136)。用 `clean_weights.py` 的"过远剔除 + 左右分侧"解决。
+7. **App 侧改关节位置时要区分两种语义**:
+   - 姿态平移 (`_tx/_ty/_tz`, 进 `PosePresets.buildTranslations`) → 会带着顶点走, **网格变形**
+   - 绑定位置偏移 (`Skeleton3D.withRestOffsets`) → 只挪旋转轴心, **静止网格不变**
+   另外 `DeformKey`/形变缓存必须把偏移算进缓存键, 否则"拖了没反应"。
+
+### 13.4 排掉的错误方向 (都有实测数据)
+
+| 假设 | 结论 |
+|---|---|
+| 换更好的骨架能解决端坐/蜷缩 | ❌ 自搭 36 骨 / spine_mid / UniRig 三套骨架撞同一堵墙 |
+| 换 DQS 蒙皮能解决 | ❌ 深折 1.70→1.70、2.19→2.27, 无改善 (拉伸来自权重跨度, 不是扭转塌陷) |
+| 距离权重能替代 UniRig | ❌ p99 从 1.70 恶化到 53 |
+| Blender Bone Heat 自动权重 | ❌ 该网格 100% 顶点拿不到权重 (`failed to find solution`) |
+| 降采样能提升权重质量 | ❌ 32768 与 8192 采样点结果几乎相同 |
+
+### 13.5 姿态指标 (边长拉伸 p99, 判据 ≤1.35 为佳)
+
+| 预设 | p99 | | 预设 | p99 |
+|---|---|---|---|---|
+| 站 | 1.05 | | 端坐 | 1.30 |
+| 农民揣 | 1.32 | | 蜷缩 | 1.27 |
+
+**深折角是硬约束**: 猫的臀部是整块厚体积、股骨埋在体内, 折到接近水平必然互穿;
+任何绑法/算法都只能规避。真正的"坐到底/团成球"需要改网格比例, 用户已否决改网格。
+
+### 13.6 快速复跑
+
+```bash
+# 位置: 浏览器打开 build/rigless/joint-editor.html (python3 -m http.server 8765)
+python3 build/rigless/bake_offsets.py      # 烘焙导出的 joint_offsets.json
+python3 build/rigless/make_skeleton_npz.py # 生成 UniRig 输入 npz
+# 权重: Colab 跑 unirig_skin_colab.ipynb → 下载 predict_skin.npz
+SKIN=~/下载/predict_skin.npz DST=build/rigless/out.glb python3 build/rigless/apply_skin.py
+SRC=build/rigless/out.glb DST=build/rigless/final.glb python3 build/rigless/clean_weights.py
+```

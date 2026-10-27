@@ -51,9 +51,9 @@ internal object FrontBufferFeatureFlags {
     val clearDelayFrames: Int by lazy { PerfTrace.debugPropInt("debug.reverie.fb_clear_delay", 0).coerceIn(0, 8) }
 
     /**
-     * 1a: 吸附导引线笔画按住 (前缓冲孔外画导引线)。默认 1 开 (用户倾向)。
+     * 1a: 吸附导引线笔画按住 (前缓冲孔外画导引线)。默认 0 (compose 路径由 isCompose=true 放行)。
      */
-    val snapHold: Boolean by lazy { PerfTrace.debugPropInt("debug.reverie.fb_snap_hold", 1) != 0 }
+    val snapHold: Boolean by lazy { PerfTrace.debugPropInt("debug.reverie.fb_snap_hold", 0) != 0 }
 
     /** 蚂蚁线进 compose (默认 1 开)。 */
     val composeAnts: Boolean by lazy { PerfTrace.debugPropInt("debug.reverie.fb_compose_ants", 1) != 0 }

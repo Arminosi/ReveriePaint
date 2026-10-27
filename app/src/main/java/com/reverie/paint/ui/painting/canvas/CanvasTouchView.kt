@@ -3654,15 +3654,6 @@ class CanvasTouchView(context: Context) : View(context) {
                 }
             } else {
                 realInk.pose = pose
-                // 视图位姿改变且不在按住中: 立即提前在后台构建孔洞掩码，确保首笔落笔时掩码已就绪
-                val v = vm
-                if (v != null && !localIsTouching && FrontBufferFeatureFlags.holeMode != FrontBufferHolePolicy.MODE_OFF) {
-                    if (composeApplies(v, pose)) {
-                        composeDecorFor(v, pose)
-                    } else {
-                        holeMasks.scheduleIfStale(v, pose, settled = true, immediate = true)
-                    }
-                }
             }
         }
     }
@@ -5258,8 +5249,9 @@ class CanvasTouchView(context: Context) : View(context) {
                     removeCallbacks(continuousRedoRunnable)
                     val durationMs = nowMs - touchDownTimeMs
                     isInteracting = false
+                    val settled = fitAnimator?.isRunning != true && snapAnimator?.isRunning != true
                     val gestureUpPose = realInk.pose
-                    if (gestureUpPose != null && !realInk.held && FrontBufferFeatureFlags.holeMode != FrontBufferHolePolicy.MODE_OFF) {
+                    if (settled && v.frontBufferPredictionEnabled && gestureUpPose != null && !realInk.held && FrontBufferFeatureFlags.holeMode != FrontBufferHolePolicy.MODE_OFF) {
                         if (composeApplies(v, gestureUpPose)) {
                             composeDecorFor(v, gestureUpPose)
                         } else {

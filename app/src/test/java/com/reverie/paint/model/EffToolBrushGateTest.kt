@@ -21,4 +21,15 @@ class EffToolBrushGateTest {
         // SMUDGE / SMUDGE -> false
         assertFalse(RealInkHoldPolicy.isRealInkTool(Tool.SMUDGE, Tool.SMUDGE))
     }
+
+    @Test
+    fun `eraser and smudge can hold real ink`() {
+        // 画笔、橡皮与涂抹恢复真墨按住支持 (e474ec11 行为)
+        assertTrue(RealInkHoldPolicy.isHoldToolSupported(Tool.BRUSH))
+        assertTrue(RealInkHoldPolicy.isHoldToolSupported(Tool.ERASER))
+        assertTrue(RealInkHoldPolicy.isHoldToolSupported(Tool.SMUDGE))
+        // 非笔画类工具不按住
+        assertFalse(RealInkHoldPolicy.isHoldToolSupported(Tool.LASSO))
+        assertFalse(RealInkHoldPolicy.isHoldToolSupported(Tool.FILL))
+    }
 }

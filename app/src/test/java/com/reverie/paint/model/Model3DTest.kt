@@ -345,9 +345,10 @@ class Model3DTest {
             // 猫猫骨骼契约: 姿态面板/预设依赖这些关节名 (缺一个就是资产被换坏了)
             val catJoints = skinnedCat.skeleton!!.joints.map { it.name }.toSet()
             for (required in listOf(
-                // 2026-10 重绑后的 36 关节骨架 (scripts/model/rerig_cat.py)
-                "root", "spine_01", "spine_02", "spine_03", "chest", "neck", "head", "muzzle",
-                "tail_01", "tail_02", "tail_03", "tail_04", "tail_05", "tail_06",
+                // UniRig 自动绑定的 40 关节骨架 (见 docs/3D-SKELETON.md)
+                "root", "spine_01", "spine_02", "spine_03", "spine_04", "spine_05", "spine_06", "head",
+                "ear_L", "ear_tip_L", "ear_R", "ear_tip_R",
+                "tail_01", "tail_02", "tail_03", "tail_04", "tail_05", "tail_06", "tail_07", "tail_08",
                 "scapula_L", "shoulder_L", "elbow_L", "carpus_L", "toe_front_L",
                 "scapula_R", "shoulder_R", "elbow_R", "carpus_R", "toe_front_R",
                 "hip_L", "knee_L", "hock_L", "meta_L", "toe_hind_L",

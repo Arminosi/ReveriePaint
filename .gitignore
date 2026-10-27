@@ -23,3 +23,4 @@ aqtinstall.log
 # Python 脚本缓存 (scripts/model/*)
 __pycache__/
 *.pyc
+third_party/UniRig/

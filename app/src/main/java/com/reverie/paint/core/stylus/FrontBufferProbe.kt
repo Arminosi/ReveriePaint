@@ -119,7 +119,7 @@ object FrontBufferProbe {
         return resolveHoldAllowed(
             cached = cachedResult,
             probeDone = probeFinished,
-            probeResult = (preservedContent == true && probeSource == SOURCE_PROBE),
+            probeResult = (preservedContent == true),
         )
     }
 
@@ -130,16 +130,16 @@ object FrontBufferProbe {
         val result =
             runCatching { reflectPreservedContentSupport() }
                 .getOrElse { e ->
-                    Log.w(TAG, "preserved-content probe failed: ${e.message}")
+                    Log.w(TAG, "preserved-content probe failed, fallback to allowed: ${e.message}")
                     probeSource = SOURCE_PROBE_FAILED
-                    false
+                    true
                 }
         if (probeSource != SOURCE_PROBE_FAILED) probeSource = SOURCE_PROBE
         preservedContent = result
         probeFinished = true
         Log.i(TAG, "preserve_probe supported=$result source=$probeSource sdk=${Build.VERSION.SDK_INT}")
 
-        if (prefs != null && probeSource == SOURCE_PROBE) {
+        if (prefs != null) {
             val key = getCacheKey()
             if (!prefs.contains(key) || prefs.getBoolean(key, !result) != result) {
                 prefs.edit().putBoolean(key, result).apply()

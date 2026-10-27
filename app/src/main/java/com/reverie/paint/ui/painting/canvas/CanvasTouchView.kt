@@ -259,6 +259,7 @@ class CanvasTouchView(context: Context) : View(context) {
         }
 
     // 滤镜实时调节与手势驱动
+    @Volatile
     var filterSessionActive: Boolean = false
     var onFilterSlideDelta: ((Float) -> Unit)? = null
     var onFilterHoldingCompare: ((Boolean) -> Unit)? = null

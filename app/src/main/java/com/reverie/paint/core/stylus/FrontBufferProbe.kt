@@ -59,11 +59,14 @@ object FrontBufferProbe {
     private var cachedResult: Boolean? = null
 
     @Volatile
+    private var probeStarted = false
+
+    @Volatile
     private var probeFinished = false
 
     private fun getCacheKey(): String {
         val fp = try { Build.FINGERPRINT ?: "unknown" } catch (_: Throwable) { "unknown" }
-        return "fb_probe_v1_${fp.hashCode().toString(16)}"
+        return "fb_probe_v2_${fp.hashCode().toString(16)}"
     }
 
     /**
@@ -91,7 +94,10 @@ object FrontBufferProbe {
      */
     fun warmUpPreservedContentCheck(context: android.content.Context? = null) {
         if (Build.VERSION.SDK_INT < MIN_SUPPORTED_API) return
-        if (probeFinished) return
+        synchronized(this) {
+            if (probeStarted) return
+            probeStarted = true
+        }
 
         val ctx = context ?: com.reverie.paint.core.FontManager.appContext
         val prefs = try {

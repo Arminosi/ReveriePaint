@@ -158,7 +158,13 @@ internal class FrontBufferDecorRecorder(private val view: CanvasTouchView) {
      * 按当前状态录一份; 什么都不可见时返回 null。[forMask] = true 时录孔洞掩码的源:
      * 蚂蚁线画成覆盖全部虚线相位的实线 ([CanvasDecorDraw.drawSelectionAntsMask]), 其余与窗口同一函数。
      */
-    fun record(v: PaintViewModel, pose: CanvasPose, isTransform: Boolean, forMask: Boolean = false): FrontBufferDecor? {
+    fun record(
+        v: PaintViewModel,
+        pose: CanvasPose,
+        isTransform: Boolean,
+        forMask: Boolean = false,
+        antsPhase: Float = 0f,
+    ): FrontBufferDecor? {
         val w = view.width
         val h = view.height
         hasKey = true
@@ -220,7 +226,7 @@ internal class FrontBufferDecorRecorder(private val view: CanvasTouchView) {
                                         if (forMask) {
                                             with(CanvasDecorDraw) { drawSelectionAntsMask(outline!!, pose.scale) }
                                         } else {
-                                            with(CanvasDecorDraw) { drawSelectionAnts(outline!!, pose.scale, 0f) }
+                                            with(CanvasDecorDraw) { drawSelectionAnts(outline!!, pose.scale, antsPhase) }
                                         }
                                     }
                                     drawDrawingGuides(

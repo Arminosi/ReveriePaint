@@ -14,13 +14,22 @@ package com.reverie.paint.model
 class UiClipSnapshot private constructor(
     private val flat: FloatArray,
     val count: Int,
+    private val slotOrdinals: IntArray? = null,
 ) {
     init {
         require(count >= 0) { "count must be >= 0" }
         require(flat.size >= count * 4) { "flat too small: ${flat.size} < ${count * 4}" }
+        if (slotOrdinals != null) {
+            require(slotOrdinals.size >= count) { "slotOrdinals too small: ${slotOrdinals.size} < $count" }
+        }
     }
 
     val isEmpty: Boolean get() = count == 0
+
+    fun slotOrdinal(index: Int): Int {
+        if (index !in 0 until count) return -1
+        return slotOrdinals?.get(index) ?: -1
+    }
 
     /** 与 [l, t, r, b] 是否有交叠；边界相等视为相交。 */
     fun intersects(l: Float, t: Float, r: Float, b: Float): Boolean {
@@ -116,6 +125,13 @@ class UiClipSnapshot private constructor(
             if (flat[i] != other.flat[i]) return false
             i++
         }
+        if (slotOrdinals != null && other.slotOrdinals != null) {
+            var s = 0
+            while (s < count) {
+                if (slotOrdinals[s] != other.slotOrdinals[s]) return false
+                s++
+            }
+        }
         return true
     }
 
@@ -163,10 +179,10 @@ class UiClipSnapshot private constructor(
          * 接管一个刚分配、不会再被外部修改的数组，避免二次复制。
          * 仅供同包/同模块的构建器使用。
          */
-        internal fun fromOwned(flat: FloatArray, count: Int): UiClipSnapshot {
+        internal fun fromOwned(flat: FloatArray, count: Int, slotOrdinals: IntArray? = null): UiClipSnapshot {
             if (count == 0) return EMPTY
             require(flat.size == count * 4) { "owned array size ${flat.size} != ${count * 4}" }
-            return UiClipSnapshot(flat, count)
+            return UiClipSnapshot(flat, count, slotOrdinals)
         }
     }
 }

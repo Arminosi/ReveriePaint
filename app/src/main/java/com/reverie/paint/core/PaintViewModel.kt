@@ -27,6 +27,7 @@ import com.reverie.paint.R
 import com.reverie.paint.core.stylus.StylusAudioType
 import com.reverie.paint.model.*
 import com.reverie.paint.perf.PerfHud
+import com.reverie.paint.ui.painting.canvas.FrontBufferFeatureFlags
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -1983,7 +1984,7 @@ class PaintViewModel : ViewModel() {
     var stylusAudioType by mutableStateOf(StylusAudioType.PENCIL)
     var stylusStrokePredictionEnabled by mutableStateOf(false)
     /**
-     * 前缓冲预测 (本次低延迟技术的总开关, 默认关 = 仅 OEM 尾线)。
+     * 前缓冲预测 (本次低延迟技术的总开关, 默认关防止机型不适配, 用户可在设置中随时手动开启)。
      * 开启时启用: 卡尔曼运动预测 + 墨迹空窗回填 + 前缓冲直出 + 光标跟随 + 悬停前瞻;
      * 关闭时回到上游原版行为 (仅"超低延迟笔迹预测"开关的 OEM 硬件尾线)。
      *
@@ -1994,9 +1995,8 @@ class PaintViewModel : ViewModel() {
     var frontBufferPredictionEnabled by mutableStateOf(false)
 
     /**
-     * 新建画布后，前缓冲在这段 uptime 之前不贴真墨、也不贴 #81 预览。
-     * Tab S9 实测：画布刚出来的约 3 秒内落笔，笔迹会裂开并叠一层错位副本；等过这段再画则正常。
-     * 尺寸对齐挡不住，因为这段时间里缓冲宽高已经等于 View。
+     * 新建画布后，前缓冲在这段 uptime 之前不贴真墨、也不按住前缓冲。
+     * 画布刚出来的约 3 秒内落笔，若系统/HWUI 重排未稳定，笔迹可能分裂；等过这段再画则正常。
      */
     @Volatile
     var frontBufferQuietUntilMs: Long = 0L
@@ -3963,6 +3963,7 @@ class PaintViewModel : ViewModel() {
 
     fun syncSettingsFromPrefs() {
         if (::appContext.isInitialized) {
+            com.reverie.paint.core.stylus.FrontBufferProbe.warmUpPreservedContentCheck(appContext)
             // Toolbar choices must restore even when no brush parameter cache has been saved yet.
             loadPinnedTools()
             val prefs = appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
@@ -4067,13 +4068,13 @@ class PaintViewModel : ViewModel() {
             stylusAudioVolume = prefs.getFloat("stylusAudioVolume", 0.6f)
             stylusAudioType = StylusAudioType.fromOrdinal(prefs.getInt("stylusAudioType", StylusAudioType.PENCIL.ordinal))
             samsungSideButtonErase = prefs.getBoolean("samsungSideButtonErase", true)
-            // 首次安装 (预测开关都没存过) 默认不走 APP 前缓冲算法, 只保留用户主动打开的权利;
+            // 首次安装 (预测开关都没存过) 默认关闭低延迟，防止某些机型不适配；
             // 存过的老用户保留原选择与原默认 (不改他们已有的体验)。
             val predictionPrefSaved = prefs.contains("stylusStrokePredictionEnabled") ||
                 prefs.contains("frontBufferPredictionEnabled") ||
                 prefs.contains("stylusFrontBufferPreviewEnabled")
-            stylusStrokePredictionEnabled = prefs.getBoolean("stylusStrokePredictionEnabled", predictionPrefSaved)
-            // 迁移: 旧版"前缓冲笔尖直出"独立开关升级为"前缓冲预测"总开关, 保留老用户选择
+            stylusStrokePredictionEnabled = prefs.getBoolean("stylusStrokePredictionEnabled", false)
+            // 迁移: 旧版"前缓冲笔尖直出"独立开关升级为"前缓冲预测"总开关, 保留老用户选择, 未存过时默认关闭 (false)
             frontBufferPredictionEnabled = prefs.getBoolean(
                 "frontBufferPredictionEnabled",
                 prefs.getBoolean("stylusFrontBufferPreviewEnabled", false),
@@ -5087,6 +5088,22 @@ class PaintViewModel : ViewModel() {
     @Volatile
     internal var realInkSink: RealInkSink? = null
 
+    /**
+     * 前缓冲真墨当前是否处于按住状态 (P7 / L2)。
+     * 受 [FrontBufferFeatureFlags.powersaveExempt] (`debug.reverie.fb_powersave_exempt`, 默认 1) 控制。
+     */
+    internal fun realInkHeld(): Boolean {
+        if (!FrontBufferFeatureFlags.powersaveExempt) return false
+        return realInkSink?.holding == true
+    }
+
+    /**
+     * 瓦片/整图渲染修订号 (单调递增, 永不归零)。
+     * 每次主画布发布新瓦片或整图帧前自增, UI 线程绘制前读取, 用于抬笔追赶门控。
+     */
+    @Volatile
+    var tileRevision: Long = 0L
+
     var stylusDriver: com.reverie.paint.core.stylus.StylusDriver? = null
 
     /** 应用是否处于前台 (由 MainActivity 的 onResume/onPause 维护)。 */
@@ -5315,6 +5332,13 @@ class PaintViewModel : ViewModel() {
 
         /** 真墨由前缓冲直出时的上屏延迟估计 (单缓冲, 绕过 HWUI/SF 的排队)。 */
         const val FRONT_BUFFER_PRESENT_MS = 4L
+
+        /**
+         * 笔迹渲染节流判定 (P7 / L2): 按住真墨前缓冲时 ([held]) 永远不节流 ([minIntervalMs] 视为 0),
+         * 以保证省电模式下运笔延迟与性能模式一致; 其余情况与原逻辑一致。
+         */
+        fun shouldThrottleStroke(minIntervalMs: Long, elapsed: Long, held: Boolean): Boolean =
+            !held && minIntervalMs > 0L && elapsed < minIntervalMs
         const val STROKE_BATCH_CAPACITY = 256
         const val STROKE_SAMPLE_STRIDE = 6
 
@@ -5637,7 +5661,7 @@ class PaintViewModel : ViewModel() {
             val minIntervalMs = renderScheduleMode.minRenderIntervalMs
             val nowMs = android.os.SystemClock.uptimeMillis()
             val elapsed = nowMs - lastStrokeRenderFinishUptimeMs
-            val shouldThrottle = minIntervalMs > 0L && elapsed < minIntervalMs
+            val shouldThrottle = minIntervalMs > 0L && elapsed < minIntervalMs && !realInkHeld()
 
             if (!shouldThrottle) {
                 if (strokeThrottleRenderScheduled) {
@@ -6010,7 +6034,7 @@ class PaintViewModel : ViewModel() {
                 doRender()
             }
         pendingRenderRunnable = r
-        val delay = if (renderScheduleMode == com.reverie.paint.model.RenderScheduleMode.POWER_SAVER) 16L else 0L
+        val delay = if (renderScheduleMode == com.reverie.paint.model.RenderScheduleMode.POWER_SAVER && !realInkHeld()) 16L else 0L
         if (delay > 0L) {
             h.postDelayed(r, delay)
         } else {
@@ -6196,7 +6220,9 @@ class PaintViewModel : ViewModel() {
         // 否则 (光标/预测笔迹/旋转/大脏区等) 自动回退为整屏重绘。
         // Compose 观察者只在回放页或参考窗口打开时通知。整图帧与瓦片帧共用这一出口。
         // 整图路径不呈现真墨, 但要回报"这一帧没留在前缓冲上", 抬笔后的追赶清除才不会悬着。
+        tileRevision++
         realInkSink?.finishFrame(false)
+        realInkSink?.onTileFrameEnd(tileRevision)
         notifyCanvasFramePublished()
     }
 
@@ -6444,6 +6470,8 @@ class PaintViewModel : ViewModel() {
     /** Layer thumbnails keyed by layer index (updated on the render thread). */
     val layerThumbs: Map<Int, Bitmap> = layerThumbStates
     internal var lastThumbRefreshNs = 0L
+    internal var pendingThumbLayerIds: MutableSet<Long>? = null
+    internal var pendingThumbRefreshAll: Boolean = false
     val blendModes =
         listOf(
             "normal" to "正常",

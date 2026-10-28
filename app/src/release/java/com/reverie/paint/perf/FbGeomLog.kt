@@ -101,4 +101,10 @@ internal object FbGeomLog {
 
     fun composeIdentityCheck(slot: Bitmap, packXY: IntArray, rects: IntArray, count: Int, docInner: IntArray) {
     }
+
+    fun clipRebuild(seq: Long, version: Int, deltaCount: Int, hasInkBounds: Boolean, rebake: Boolean) {
+    }
+
+    fun poseRelease(reason: String, seq: Long, uptimeMs: Long) {
+    }
 }

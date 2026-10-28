@@ -1,3 +1,7 @@
+/*
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
 package com.reverie.paint.model
 
 import org.junit.Assert.assertEquals
@@ -35,5 +39,14 @@ class FrontBufferQuietTest {
             existingUntilMs = 5000L,
         )
         assertEquals(5000L, result)
+    }
+
+    @Test
+    fun `onDocumentLoaded schedules quiet window from load completion`() {
+        val result = FrontBufferQuiet.onDocumentLoaded(
+            nowUptimeMs = 5000L,
+            quietMs = 3200L,
+        )
+        assertEquals(8200L, result)
     }
 }

@@ -20,6 +20,7 @@ import com.reverie.paint.model.HoleMaskGrid
  * adb shell setprop debug.reverie.fb_snap_hold 1       # 1a: 吸附线笔画也按住 (默认 0 = 走常规路径, 严格同图)
  * adb shell setprop debug.reverie.fb_strict 1          # 严格同一性: 关预测笔尖 (默认 1)
  * adb shell setprop debug.reverie.fb_clear_delay 0     # 抬笔清前缓冲再多等的帧数
+ * adb shell setprop debug.reverie.fb_mid_refresh_ms 100 # 运笔中渐进刷新已落定瓦片的最小间隔 (ms, 默认 0=关)
  * ```
  */
 internal object FrontBufferFeatureFlags {
@@ -50,9 +51,20 @@ internal object FrontBufferFeatureFlags {
     val clearDelayFrames: Int by lazy { PerfTrace.debugPropInt("debug.reverie.fb_clear_delay", 0).coerceIn(0, 8) }
 
     /**
-     * 1a: 吸附导引线笔画按住 (前缓冲孔外画导引线)。默认关: 两个表面无法原子同步, 抬笔/E 交还/笔画中
-     * 导引线跨孔边界可能有 1 帧错位, 且前缓冲经 SurfaceFlinger 叠加的半透明导引线与窗口直接混合有
-     * ±1 舍入差, 不能保证逐像素同图。
+     * 1a: 吸附导引线笔画按住 (前缓冲孔外画导引线)。默认 0 (compose 路径由 isCompose=true 放行)。
      */
     val snapHold: Boolean by lazy { PerfTrace.debugPropInt("debug.reverie.fb_snap_hold", 0) != 0 }
+
+    /** 蚂蚁线进 compose (默认 1 开)。 */
+    val composeAnts: Boolean by lazy { PerfTrace.debugPropInt("debug.reverie.fb_compose_ants", 1) != 0 }
+
+    /** D3: 运笔中渐进刷新已落定瓦片的节流间隔 (ms), 默认 0 (关闭)。 */
+    val midStrokeRefreshMs: Long by lazy {
+        PerfTrace.debugPropInt("debug.reverie.fb_mid_refresh_ms", 0).toLong().coerceAtLeast(0L)
+    }
+
+    /** L2: 省电模式下按住真墨期间免节流 (默认 1 开)。 */
+    val powersaveExempt: Boolean by lazy {
+        PerfTrace.debugPropInt("debug.reverie.fb_powersave_exempt", 1) != 0
+    }
 }

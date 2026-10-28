@@ -524,7 +524,11 @@ internal fun PaintViewModel.touchMove(
     queueStrokeMove(effX, effY, effP, inputEventTimeMs, safeTiltX, safeTiltY, safeRotation)
 }
 
-internal fun PaintViewModel.touchEnd(render: Boolean = true, deferOverrideRestore: Boolean = false) {
+internal fun PaintViewModel.touchEnd(
+    render: Boolean = true,
+    deferOverrideRestore: Boolean = false,
+    strokeSeq: Long = -1L,
+) {
     stopAirbrush()
     disarmStrokeStartKick()
     lastStrokeEndElapsedMs = android.os.SystemClock.elapsedRealtime()
@@ -617,13 +621,16 @@ internal fun PaintViewModel.touchEnd(render: Boolean = true, deferOverrideRestor
     if (render) {
         runCore(after = {
             scheduleRender(immediate = true)
-            refreshLayerThumbs()
+            val targetIds = if (currentLayerIndex >= 0) {
+                findLayerAndAncestorIds(currentLayerIndex).takeIf { it.isNotEmpty() }
+            } else null
+            refreshLayerThumbs(onlyLayerIds = targetIds)
         }) {
             drainPendingStrokeBatchOnRenderThread()
             drainMirrorBatchesOnRenderThread()
             ReverieCoreBridge.touchStrokeEnd()
             // 收尾点已全部交给引擎: 松开前缓冲, 接下来的帧照常失效主画布追平。
-            realInkSink?.onStrokeCommitted()
+            realInkSink?.onStrokeCommitted(strokeSeq)
             engineMirrorSeq = 0
             if (hadOverride && !deferOverrideRestore) {
                 val engineRestored = ReverieCoreBridge.endPresetOverrideSnapshot()
@@ -641,7 +648,7 @@ internal fun PaintViewModel.touchEnd(render: Boolean = true, deferOverrideRestor
             drainMirrorBatchesOnRenderThread()
             ReverieCoreBridge.touchStrokeEnd()
             // 收尾点已全部交给引擎: 松开前缓冲, 接下来的帧照常失效主画布追平。
-            realInkSink?.onStrokeCommitted()
+            realInkSink?.onStrokeCommitted(strokeSeq)
             engineMirrorSeq = 0
             if (hadOverride && !deferOverrideRestore) {
                 val engineRestored = ReverieCoreBridge.endPresetOverrideSnapshot()

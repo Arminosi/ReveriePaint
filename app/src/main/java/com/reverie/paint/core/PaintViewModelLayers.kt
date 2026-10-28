@@ -6,6 +6,7 @@ package com.reverie.paint.core
 
 import android.graphics.Bitmap
 import com.reverie.paint.R
+import com.reverie.paint.model.SettledTilePolicy
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
@@ -87,12 +88,50 @@ internal fun PaintViewModel.engineBusy(): Boolean =
     // 覆盖面更广), hQueued 则覆盖渲染线程消息队列里还压着的任务
     pendingCoreOps.get() > 0 || hQueued() > 0
 
+internal fun PaintViewModel.findLayerAndAncestorIds(targetIndex: Int): Set<Long> {
+    val list = layers
+    val indices = SettledTilePolicy.findLayerAndAncestorIndices(
+        targetIndex = targetIndex,
+        layerCount = list.size,
+        depth = { list[it].depth },
+        isGroup = { list[it].isGroup },
+    )
+    return indices.mapNotNull { list.getOrNull(it)?.id }.toSet()
+}
+
+internal fun PaintViewModel.updatePendingThumbIds(onlyLayerIds: Set<Long>?) {
+    if (onlyLayerIds == null) {
+        pendingThumbRefreshAll = true
+        pendingThumbLayerIds = null
+    } else if (!pendingThumbRefreshAll) {
+        if (pendingThumbLayerIds == null) pendingThumbLayerIds = mutableSetOf()
+        pendingThumbLayerIds?.addAll(onlyLayerIds)
+    }
+}
+
+internal fun PaintViewModel.consumePendingThumbIds(): Set<Long>? {
+    if (pendingThumbRefreshAll) {
+        pendingThumbRefreshAll = false
+        pendingThumbLayerIds = null
+        return null
+    }
+    val ids = pendingThumbLayerIds
+    pendingThumbLayerIds = null
+    return ids
+}
+
 /** (Re)generate layer thumbnails on the render thread. Debounced; triggers
  *  inside the window keep postponing the refresh until the user pauses. */
-internal fun PaintViewModel.refreshLayerThumbs(force: Boolean = false) {
+internal fun PaintViewModel.refreshLayerThumbs(
+    force: Boolean = false,
+    onlyLayerIds: Set<Long>? = null,
+) {
+    // 门控必须用 layerThumbsVisible (面板 dock 或快捷图层小窗任一可见),
+    // 否则打开工程后只有小窗开着时缩略图不刷新 -> 小窗空白 (见 7705b483)。
     if (!force && !layerThumbsVisible) {
         return
     }
+    updatePendingThumbIds(onlyLayerIds)
     // 正在落笔/液化/滤镜: 推迟到引擎空闲再刷, 别和笔画抢渲染线程
     if (!force && engineBusy()) {
         val vm = this
@@ -104,14 +143,14 @@ internal fun PaintViewModel.refreshLayerThumbs(force: Boolean = false) {
                     if (!vm.layerThumbsVisible) return@launch
                     if (!vm.engineBusy()) {
                         lastThumbRefreshNs = System.nanoTime()
-                        vm.doRefreshLayerThumbs()
+                        vm.doRefreshLayerThumbs(vm.consumePendingThumbIds())
                         return@launch
                     }
                 }
                 // 一直没闲下来也要刷一次, 否则面板会长期停留在旧缩略图
                 if (vm.layerThumbsVisible) {
                     lastThumbRefreshNs = System.nanoTime()
-                    vm.doRefreshLayerThumbs()
+                    vm.doRefreshLayerThumbs(vm.consumePendingThumbIds())
                 }
             }
         return
@@ -124,21 +163,21 @@ internal fun PaintViewModel.refreshLayerThumbs(force: Boolean = false) {
                 delay(THUMB_REFRESH_DEBOUNCE_MS)
                 lastThumbRefreshNs = System.nanoTime()
                 if (layerThumbsVisible) {
-                    doRefreshLayerThumbs()
+                    doRefreshLayerThumbs(consumePendingThumbIds())
                 }
             }
         return
     }
     lastThumbRefreshNs = now
-    doRefreshLayerThumbs()
+    doRefreshLayerThumbs(consumePendingThumbIds())
 }
 
-private fun PaintViewModel.doRefreshLayerThumbs() {
+private fun PaintViewModel.doRefreshLayerThumbs(onlyLayerIds: Set<Long>? = null) {
     if (isRefreshingThumbs) {
         // 上一轮还在引擎线程上渲染: 直接 return 会把这次请求吞掉, 面板就停在
         // 旧/空缩略图上直到下一次有人触发 (典型场景: 打开工程时面板已开, 面板
         // 打开触发的刷新与 loadRevp 抢同一个引擎队列)。记一个待办, 等当前这轮
-        // 收尾后补跑一次。
+        // 收尾后补跑一次。渐进刷新 (onlyLayerIds) 的待办集合由 consume 侧合并。
         thumbRefreshPending = true
         return
     }
@@ -154,6 +193,10 @@ private fun PaintViewModel.doRefreshLayerThumbs() {
             val n = ReverieCoreBridge.layerCount()
             if (n <= 0) return@runCore
             for (i in 0 until n) {
+                if (onlyLayerIds != null) {
+                    val id = ReverieCoreBridge.layerId(i)
+                    if (id !in onlyLayerIds) continue
+                }
                 // Rule 3 (Double-buffering): always allocate an independent back-buffer Bitmap (12KB)
                 // so the background engine thread never writes into a Bitmap actively drawn by UI/GPU
                 val bmp = Bitmap.createBitmap(56, 56, Bitmap.Config.ARGB_8888)

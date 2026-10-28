@@ -59,6 +59,8 @@ class UiPanelOcclusionTracker {
     private var nextTokenValue = 1
     private var versionValue = 0
     private var evadedMaskValue = 0
+    private var cachedSnapshotVersion = -1
+    private var cachedSnapshot: UiClipSnapshot = UiClipSnapshot.EMPTY
 
     /**
      * 槽位状态变化回调，只在 UI 线程触发。
@@ -336,14 +338,23 @@ class UiPanelOcclusionTracker {
      * 裙边（见类 KDoc 的保守裁剪说明）。
      */
     fun snapshot(): UiClipSnapshot {
+        if (cachedSnapshotVersion == versionValue) {
+            return cachedSnapshot
+        }
         var n = 0
         for (ordinal in SLOTS.indices) {
             if (currentTokens[ordinal] != 0) n++
         }
-        if (n == 0) return UiClipSnapshot.EMPTY
+        if (n == 0) {
+            cachedSnapshotVersion = versionValue
+            cachedSnapshot = UiClipSnapshot.EMPTY
+            return UiClipSnapshot.EMPTY
+        }
 
         val out = FloatArray(n * 4)
+        val slots = IntArray(n)
         var w = 0
+        var slotIdx = 0
         for (ordinal in SLOTS.indices) {
             if (currentTokens[ordinal] == 0) continue
             val i = ordinal * 4
@@ -351,9 +362,13 @@ class UiPanelOcclusionTracker {
             out[w + 1] = slotClipBounds[i + 1]
             out[w + 2] = slotClipBounds[i + 2]
             out[w + 3] = slotClipBounds[i + 3]
+            slots[slotIdx++] = ordinal
             w += 4
         }
-        return UiClipSnapshot.fromOwned(out, n)
+        val s = UiClipSnapshot.fromOwned(out, n, slots)
+        cachedSnapshotVersion = versionValue
+        cachedSnapshot = s
+        return s
     }
 
     /** 点是否命中任一激活槽位的本体 bounds。 */

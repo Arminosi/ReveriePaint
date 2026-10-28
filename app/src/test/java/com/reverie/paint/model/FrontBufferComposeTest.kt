@@ -27,7 +27,8 @@ class FrontBufferComposeTest {
         assertTrue(FrontBufferCompose.isAxisAligned(pose(0f, 0f, 1f)))
         assertTrue(FrontBufferCompose.isAxisAligned(pose(0f, 0f, 1f, rot = 360f)))
         assertFalse(FrontBufferCompose.isAxisAligned(pose(0f, 0f, 1f, rot = 90f)))
-        assertFalse(FrontBufferCompose.isAxisAligned(pose(0f, 0f, 1f, sx = -1f)))
+        assertTrue(FrontBufferCompose.isAxisAligned(pose(0f, 0f, 1f, sx = -1f)))
+        assertFalse(FrontBufferCompose.isAxisAligned(pose(0f, 0f, 1f, rot = 90f, sx = -1f)))
     }
 
     @Test
@@ -50,7 +51,8 @@ class FrontBufferComposeTest {
         val out = IntArray(4)
         repeat(2000) {
             val s = listOf(0.13f, 0.5f, 1f, 1.7f, 4f, 9.3f)[rnd.nextInt(6)]
-            val p = pose(rnd.nextFloat() * 1200f - 100f, rnd.nextFloat() * 900f - 50f, s)
+            val sx = listOf(1f, -1f)[rnd.nextInt(2)]
+            val p = pose(rnd.nextFloat() * 1200f - 100f, rnd.nextFloat() * 900f - 50f, s, sx = sx)
             val l = rnd.nextInt(-50, 1200)
             val t = rnd.nextInt(-50, 900)
             val r = l + rnd.nextInt(1, 300)
@@ -67,9 +69,11 @@ class FrontBufferComposeTest {
             val ib = minOf(b.toFloat(), db)
             if (ir - il > 1e-2f && ib - it2 > 1e-2f) {
                 assertTrue(ok)
-                val sl = (out[0] - p.halfW) * s + p.centerX
+                val s0 = (out[0] - p.halfW) * s * p.signX + p.centerX
+                val s1 = (out[2] - p.halfW) * s * p.signX + p.centerX
+                val sl = minOf(s0, s1)
+                val sr = maxOf(s0, s1)
                 val st = (out[1] - p.halfH) * s + p.centerY
-                val sr = (out[2] - p.halfW) * s + p.centerX
                 val sb = (out[3] - p.halfH) * s + p.centerY
                 assertTrue(sl <= il + 1e-2f && st <= it2 + 1e-2f && sr >= ir - 1e-2f && sb >= ib - 1e-2f)
                 assertTrue(out[0] >= 0 && out[1] >= 0 && out[2] <= p.bmpW && out[3] <= p.bmpH)

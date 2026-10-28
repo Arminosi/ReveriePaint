@@ -597,11 +597,26 @@ class UiPanelOcclusionTrackerTest {
         tracker.update(UiPanelSlot.QUICK_COLOR, t, 100f, 100f, 300f, 300f, padH = 18f, padT = 12f, padB = 26f)
         val held = tracker.snapshot()
         tracker.setEvaded(UiPanelSlot.QUICK_COLOR, true)
-        // 移动: 孔径跟随新 bounds, 与按住时的快照不等 -> 交还主画布。
+        // 移动: 孔径跟随新 bounds, 与按住时的快照不等
         tracker.update(UiPanelSlot.QUICK_COLOR, t, 120f, 100f, 320f, 300f, padH = 18f, padT = 12f, padB = 26f)
         val moved = tracker.snapshot()
         assertFalse(held == moved)
         assertEquals(120f - 18f, moved.left(0))
+
+        // 新契约: 快照不等时计算对称差 delta, 与墨相交才 REBAKE, 不相交只 KEEP_UPDATE, 永远不 release (plan 四.1/四.3)
+        val delta = com.reverie.paint.ui.painting.canvas.clipDelta(held, moved)
+        assertFalse(delta.isEmpty())
+
+        // 1. 相交墨: REBAKE 且保持 held (不释放)
+        val intersectingInk = com.reverie.paint.ui.painting.canvas.ClipRect(90f, 90f, 150f, 150f)
+        val actionIntersect = com.reverie.paint.ui.painting.canvas.clipChangeAction(delta, intersectingInk)
+        assertEquals(com.reverie.paint.ui.painting.canvas.ClipChangeAction.REBAKE, actionIntersect)
+
+        // 2. 不相交墨: KEEP_UPDATE 且保持 held (只更新 clips, 不释放)
+        val nonIntersectingInk = com.reverie.paint.ui.painting.canvas.ClipRect(500f, 500f, 600f, 600f)
+        val actionNonIntersect = com.reverie.paint.ui.painting.canvas.clipChangeAction(delta, nonIntersectingInk)
+        assertEquals(com.reverie.paint.ui.painting.canvas.ClipChangeAction.KEEP_UPDATE, actionNonIntersect)
+
         // 收起: 槽位清除后快照里不再有该孔。
         tracker.clear(UiPanelSlot.QUICK_COLOR, t)
         val collapsed = tracker.snapshot()

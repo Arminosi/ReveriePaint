@@ -101,11 +101,13 @@ internal fun PaintViewModel.registerMemoryPressureCallbacks() {
                 // 正在播放的动画进度甚至进程本身
                 if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
                     releaseReclaimableCaches(aggressive = level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL)
+                    realInkSink?.trimMemory()
                 }
             }
 
             override fun onLowMemory() {
                 releaseReclaimableCaches(aggressive = true)
+                realInkSink?.trimMemory()
             }
 
             override fun onConfigurationChanged(newConfig: Configuration) = Unit

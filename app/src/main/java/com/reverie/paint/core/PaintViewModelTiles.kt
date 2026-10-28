@@ -100,6 +100,7 @@ internal fun PaintViewModel.doRenderTiles(w: Int, h: Int) {
     var anyFull = false
     // 就地写期间 onDraw 恰好画了这张瓦片: HWUI 可能上传了写到一半的像素, 本帧要补一次主画布失效。
     var tornInPlace = false
+    var inPlaceCount = 0
     var retryNeeded = false
     val written = st.written
     val cols = grid.cols
@@ -121,6 +122,7 @@ internal fun PaintViewModel.doRenderTiles(w: Int, h: Int) {
         // onDraw 画过的位图不在任何 DisplayList 里, 占住 (CAS 到 WRITING) 之后就地写。
         val inPlace =
             validOld && drawn.compareAndSet(idx, PublishedTiles.TILE_UNDRAWN, PublishedTiles.TILE_WRITING)
+        if (inPlace) inPlaceCount++
         val dst = if (inPlace) old!! else st.obtainSpare(tw, th, idx)
         val spareVersion = if (inPlace) -1L else st.obtainedSpareVersion
         val prevVersion = ledger.version(idx)
@@ -236,6 +238,7 @@ internal fun PaintViewModel.doRenderTiles(w: Int, h: Int) {
     }
 
     publishTileSnapshotIfNeeded(grid, tiles)
+    tileRevision++
     // 前缓冲真墨: 运笔按住时把本帧离散脏区从瓦片烤好贴上前缓冲, 接住了就不失效主画布。
     val sink = realInkSink
     val published = st.published
@@ -252,6 +255,8 @@ internal fun PaintViewModel.doRenderTiles(w: Int, h: Int) {
                 anyFull,
             )
     sink?.finishFrame(kept)
+    sink?.onTileFrameEnd(tileRevision)
+    if (LandDiag.enabled && LandDiag.armed) LandDiag.noteRender(inPlaceCount, tornInPlace)
     notifyCanvasFramePublished(keptOnFrontBuffer = kept)
     // 被撕裂的那张瓦片在前缓冲上是完整的, 但主画布的纹理可能是半张: 补一次失效让 HWUI 重传。
     if (kept && tornInPlace) invalidateCanvasFromRender()
@@ -284,6 +289,7 @@ internal fun PaintViewModel.doRenderTiles(w: Int, h: Int) {
 
 /** 瓦片路径的"这一帧没有新像素"收尾 (与整图路径保持同样的重试/液化语义)。 */
 private fun PaintViewModel.onTileRenderNoWork() {
+    realInkSink?.onTileFrameEnd(tileRevision)
     if (ReverieCoreBridge.renderPendingDirty()) {
         renderFollowUpPending = true
         renderHandler?.postDelayed({ doRender() }, 4L)
@@ -354,6 +360,7 @@ internal fun PaintViewModel.clearDisplayTileGrid() {
  * 渲染线程, 与渲染帧串行。
  */
 internal fun PaintViewModel.discardTileGridForDocumentSwitch() {
+    realInkSink?.onDocumentDiscarded()
     val st = displayTiles
     val gen = st.requestDiscard()
     val rh = renderHandler

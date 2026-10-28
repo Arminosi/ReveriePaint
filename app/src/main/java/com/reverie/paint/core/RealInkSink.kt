@@ -37,5 +37,17 @@ internal interface RealInkSink {
     fun finishFrame(kept: Boolean)
 
     /** 这一笔已经交给引擎收尾 (touchStrokeEnd 之后), 松开前缓冲, 主画布追平。 */
-    fun onStrokeCommitted()
+    fun onStrokeCommitted(strokeSeq: Long = -1L)
+
+    /** 这一笔是否正在按住前缓冲。 */
+    val holding: Boolean get() = false
+
+    /** 瓦片或整图渲染帧结束 (渲染线程, [rev] = 本帧对应的单调递增渲染修订号)。 */
+    fun onTileFrameEnd(rev: Long) {}
+
+    /** 文档切换 / 画布重建时清空前缓冲真墨 (UI 线程)。 */
+    fun onDocumentDiscarded() {}
+
+    /** 内存紧张时释放前缓冲槽位位图与图层缓存 (渲染线程)。 */
+    fun trimMemory() {}
 }

@@ -72,6 +72,7 @@ class FrontBufferPathPacket(
 ) {
     // ---- 真墨 (渲染线程 CAS 抢占后写入, GL 线程只读) ----
     var ink: Boolean = false
+    var rebake: Boolean = false
 
     /** 烤好的屏幕槽位图, 左上角对齐屏幕 `(slotOriginX, slotOriginY)`。 */
     var inkBitmap: Bitmap? = null
@@ -183,12 +184,10 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
     @Volatile
     var onInkFrameDone: (() -> Unit)? = null
 
-    // 热路径零分配：预分配 8 个槽位的路径包环形缓冲与全局单例 clearPacket
-    private val packetPool = Array(POOL_SIZE) { FrontBufferPathPacket(Path()) }
-    private var poolIndex = 0
+    // 热路径零分配：全局单例 clearPacket
     private val clearPacket = FrontBufferPathPacket(isClear = true)
 
-    // 真墨包单独一池, 与预览包互不抢槽。
+    // 真墨包单独一池。
     private val inkPool = Array(POOL_SIZE) { FrontBufferPathPacket() }
     private var inkPoolIndex = 0
 
@@ -201,17 +200,6 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
     private val gpuPending = arrayOfNulls<FrontBufferPathPacket>(POOL_SIZE)
     private var gpuPendingHead = 0
     private var gpuPendingCount = 0
-
-    private val previewPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeCap = Paint.Cap.ROUND
-        strokeJoin = Paint.Join.ROUND
-    }
-
-    // STAMP 分级: 戳印绘制 (位图缩放盖印, 预分配零分配)
-    private val stampPaint = Paint(Paint.FILTER_BITMAP_FLAG)
-    private val stampDst = RectF()
-    private val previewPathBounds = RectF()
 
     // ---- 以下只在 GL 线程使用 ----
 
@@ -249,6 +237,7 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
     private val composeSrc = Rect()
     private val composeDst = RectF()
     private val composeBounds = Rect()
+    private val rebakeHolesScratch = FloatArray(FrontBufferCompose.MAX_PACKET_RECTS * MAX_UI_CLIPS * 4)
 
     private val screenInkPaint = Paint().apply {
         xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC)
@@ -365,8 +354,16 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
         }
         if (release && ctl != null) {
             // 旧缓冲 (含本笔已上屏的增量墨) 已丢弃: 松开, 窗口全量接管这一笔, 与关低延迟同图。
-            ctl.release()
+            if (ctl.held) {
+                Log.i(TAG, "ev=surface_changed_release seq=${ctl.currentStrokeSeq}")
+                ctl.releaseAndCatchUp()
+            } else {
+                ctl.release()
+            }
             targetTouchView?.postInvalidate()
+        }
+        if (valid && ctl != null && w > 0 && h > 0) {
+            ctl.onSurfaceChanged(w, h)
         }
     }
 
@@ -429,12 +426,6 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
                                 invalidatePrevOverlay()
                             }
                             param.ink -> drawInkPacket(canvas, bufferWidth, bufferHeight, param)
-                            else -> {
-                                // #81 预览: 单缓冲清屏, 只画当前最新的前沿段。
-                                canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
-                                invalidatePrevOverlay()
-                                drawPreviewPacket(canvas, param)
-                            }
                         }
                     } finally {
                         if (param.ink) {
@@ -462,17 +453,22 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
                         clearStrokeLayerDirty()
                         invalidatePrevOverlay()
                     } finally {
-                        // commit 静默点 (与前缓冲绘制同一串行 GL 线程, cancelPending 已执行):
-                        // 所有 pending 包永不到达前缓冲回调, 在此批量释放 inFlight,
-                        // 否则槽位泄漏为永久占用, 打几笔后池枯竭、预览永久消失。
-                        for (p in packetPool) p.inFlight.set(false)
                         resetInkQueue()
                         // 系统要求重画 (尺寸/可见性变化) 时前缓冲会被隐藏: 若这时还按住真墨,
-                        // 松开它并让主画布接管, 否则按住期间主画布不刷新就是一段空白。
+                        // 立即在当前 GL 线程释放以阻断写墨，并将追赶排队到 UI 线程调度
                         val ctl = realInk
                         if (ctl != null && ctl.held) {
+                            val seq = ctl.currentStrokeSeq
+                            Log.i(TAG, "ev=multi_buffered_redraw_release seq=$seq")
                             ctl.release()
-                            targetTouchView?.postInvalidate()
+                            targetTouchView?.let { tv ->
+                                tv.post {
+                                    if (!ctl.held && ctl.currentStrokeSeq == seq) {
+                                        ctl.armCatchUp()
+                                    }
+                                    tv.invalidate()
+                                }
+                            }
                         }
                     }
                 }
@@ -511,153 +507,6 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
             frontRenderer = null
             isRendererInitialized = false
             noteGuideOnScreen(false)
-        }
-    }
-
-    /** #81 预览包的绘制 (戳印或折线)。GL 线程。 */
-    @RequiresApi(Build.VERSION_CODES.Q)
-    private fun drawPreviewPacket(canvas: Canvas, param: FrontBufferPathPacket) {
-        // 2a. STAMP 分级: 逐 dab 盖印真实笔尖位图
-        if (param.stampCount > 0) {
-            val stampBmp = param.stampBitmap
-            val stampN = param.stampCount.coerceAtMost(MAX_STAMPS)
-            if (stampBmp != null && !stampBmp.isRecycled) {
-                var minX = Float.MAX_VALUE
-                var minY = Float.MAX_VALUE
-                var maxX = -Float.MAX_VALUE
-                var maxY = -Float.MAX_VALUE
-                for (i in 0 until stampN) {
-                    val s = param.stampSize[i]
-                    if (s <= 0f) continue
-                    val half = s / 2f
-                    minX = minOf(minX, param.stampX[i] - half)
-                    minY = minOf(minY, param.stampY[i] - half)
-                    maxX = maxOf(maxX, param.stampX[i] + half)
-                    maxY = maxOf(maxY, param.stampY[i] + half)
-                }
-                if (minX <= maxX) {
-                    canvas.save()
-                    // FILTER_BITMAP_FLAG 的双线性采样可能外溢 <1px, 裁剪边界外扩 1px。
-                    clipOutUi(canvas, param, minX - 1f, minY - 1f, maxX + 1f, maxY + 1f)
-                    for (i in 0 until stampN) {
-                        val s = param.stampSize[i]
-                        if (s <= 0f) continue
-                        val cx = param.stampX[i]
-                        val cy = param.stampY[i]
-                        stampPaint.alpha =
-                            (param.stampAlpha[i] * 255f).toInt().coerceIn(0, 255)
-                        val half = s / 2f
-                        stampDst.set(cx - half, cy - half, cx + half, cy + half)
-                        canvas.drawBitmap(stampBmp, null, stampDst, stampPaint)
-                    }
-                    canvas.restore()
-                }
-            }
-            return
-        }
-
-        // 2b. TIER_1/2: 绘制当前最新笔尖前沿段 (单色折线)
-        val path = param.path ?: return
-        path.computeBounds(previewPathBounds, true)
-        val margin = param.strokeWidth.coerceAtLeast(1.5f) / 2f + 1f
-        canvas.save()
-        clipOutUi(
-            canvas, param,
-            previewPathBounds.left - margin, previewPathBounds.top - margin,
-            previewPathBounds.right + margin, previewPathBounds.bottom + margin,
-        )
-        previewPaint.color = param.color
-        previewPaint.strokeWidth = param.strokeWidth.coerceAtLeast(1.5f)
-        canvas.drawPath(path, previewPaint)
-        canvas.restore()
-    }
-
-    /**
-     * 原子占用一个空闲槽位。绘制中的槽位跳过; 池空返回 null, 调用方丢帧
-     * (预览为 best-effort, 下一触控事件 ~4ms 后即到, 丢帧无视觉影响, 绝不阻塞 UI 线程)。
-     */
-    private fun obtainPacket(): FrontBufferPathPacket? {
-        for (i in 0 until POOL_SIZE) {
-            val cand = packetPool[(poolIndex + i) and POOL_MASK]
-            if (cand.inFlight.compareAndSet(false, true)) {
-                poolIndex = (poolIndex + i + 1) and POOL_MASK
-                return cand
-            }
-        }
-        return null
-    }
-
-    /**
-     * 投递最新前沿预览路径至前缓冲渲染线程 (热路径零分配)。
-     */
-    fun renderPreviewPath(path: Path, strokeWidth: Float, color: Int, clips: UiClipSnapshot) {
-        if (!isRendererInitialized) return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            // 先确认渲染器可用再占槽: 否则占了槽却投递失败, inFlight 永久泄漏。
-            @Suppress("UNCHECKED_CAST")
-            val renderer = frontRenderer as? CanvasFrontBufferedRenderer<FrontBufferPathPacket>
-                ?: return
-            val packet = obtainPacket() ?: return // 无空闲槽位: 丢帧
-            try {
-                val targetPath = packet.path ?: Path().also { packet.path = it }
-                targetPath.set(path)
-                packet.strokeWidth = strokeWidth
-                packet.color = color
-                packet.isClear = false
-                packet.stampCount = 0 // 复用槽位: 清除残留戳印
-                packet.ink = false
-                packet.uiClipCount = clips.copyInto(packet.uiClipRects, MAX_UI_CLIPS)
-                hasContent = true
-                renderer.renderFrontBufferedLayer(packet)
-            } catch (t: Throwable) {
-                // 提交失败: 立即释放槽位, 否则泄漏为永久 inFlight
-                packet.uiClipCount = 0
-                packet.inFlight.set(false)
-                Log.w(TAG, "renderPreviewPath error: ${t.message}")
-            }
-        }
-    }
-
-    /**
-     * 投递戳印预览: 沿 dab 点集盖印真实笔尖位图 (STAMP 分级, 水彩/纹理/绘画类)。
-     * 热路径零分配: 点集拷入预分配槽位数组; 位图由 BrushTipStampCache 提供 (已着色)。
-     */
-    fun renderStampPreview(
-        bitmap: Bitmap,
-        xs: FloatArray,
-        ys: FloatArray,
-        sizes: FloatArray,
-        alphas: FloatArray,
-        count: Int,
-        clips: UiClipSnapshot,
-    ) {
-        if (!isRendererInitialized) return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            // 先确认渲染器可用再占槽: 否则占了槽却投递失败, inFlight 永久泄漏。
-            @Suppress("UNCHECKED_CAST")
-            val renderer = frontRenderer as? CanvasFrontBufferedRenderer<FrontBufferPathPacket>
-                ?: return
-            val packet = obtainPacket() ?: return // 无空闲槽位: 丢帧
-            try {
-                val n = count.coerceAtMost(MAX_STAMPS)
-                xs.copyInto(packet.stampX, 0, 0, n)
-                ys.copyInto(packet.stampY, 0, 0, n)
-                sizes.copyInto(packet.stampSize, 0, 0, n)
-                alphas.copyInto(packet.stampAlpha, 0, 0, n)
-                packet.stampBitmap = bitmap
-                packet.stampCount = n
-                packet.path?.rewind()
-                packet.isClear = false
-                packet.ink = false
-                packet.uiClipCount = clips.copyInto(packet.uiClipRects, MAX_UI_CLIPS)
-                hasContent = true
-                renderer.renderFrontBufferedLayer(packet)
-            } catch (t: Throwable) {
-                // 提交失败: 立即释放槽位, 否则泄漏为永久 inFlight
-                packet.uiClipCount = 0
-                packet.inFlight.set(false)
-                Log.w(TAG, "renderStampPreview error: ${t.message}")
-            }
         }
     }
 
@@ -744,6 +593,7 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
         holeHitBits: Int = 0,
         guideKind: Int = DynamicGuidePainter.KIND_NONE,
         guideSeg: FloatArray? = null,
+        rebake: Boolean = false,
     ): Boolean {
         if (!isRendererInitialized) return false
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
@@ -756,6 +606,7 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
         }
         try {
             packet.ink = true
+            packet.rebake = rebake
             packet.isClear = false
             packet.compose = false
             packet.decor = null
@@ -833,6 +684,7 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
         canvasBounds: IntArray,
         docInner: IntArray,
         decor: FrontBufferDecor?,
+        rebake: Boolean = false,
     ): Boolean {
         if (!isRendererInitialized) return false
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
@@ -845,6 +697,7 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
         }
         try {
             packet.ink = true
+            packet.rebake = rebake
             packet.isClear = false
             packet.compose = true
             packet.rectCount = n
@@ -1103,6 +956,9 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
         if (bmp != null && !bmp.isRecycled) {
             val sc = strokeCanvas
             if (layer != null && sc != null) {
+                if (param.rebake) {
+                    clearRebakeHoles(sc, param)
+                }
                 blitInk(sc, param, bmp)
                 for (i in 0 until param.rectCount) {
                     val s = i * 4
@@ -1113,6 +969,9 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
                         param.screenRects[s + 3],
                     )
                 }
+            }
+            if (param.rebake) {
+                clearRebakeHoles(canvas, param)
             }
             canvas.save()
             if (inkL <= inkR) clipOutUi(canvas, param, inkL, inkT, inkR, inkB)
@@ -1210,6 +1069,9 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
             if (sr[s + 2] > r) r = sr[s + 2]
             if (sr[s + 3] > b) b = sr[s + 3]
         }
+        if (param.rebake) {
+            clearRebakeHoles(canvas, param)
+        }
         canvas.save()
         clipOutUi(canvas, param, l.toFloat(), t.toFloat(), r.toFloat(), b.toFloat())
         for (i in 0 until n) {
@@ -1270,6 +1132,32 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
         noteGuideOnScreen(guideOn)
         if (FbGeomLog.identityCheckEnabled) {
             FbGeomLog.composeIdentityCheck(bmp, param.packXY, sr, n, param.docInner)
+        }
+    }
+
+    /**
+     * 重烤包清孔 (GL 线程, 零分配):
+     * 在 clipOutUi 与 SRC blit 之前, 对每个 (包矩形 ∩ 当前 uiClips) 执行 CLEAR 清除旧墨。
+     */
+    private fun clearRebakeHoles(canvas: Canvas, param: FrontBufferPathPacket) {
+        val holeCount = computeRebakeHoles(
+            param.screenRects,
+            param.rectCount,
+            param.uiClipRects,
+            param.uiClipCount,
+            rebakeHolesScratch,
+        )
+        for (h in 0 until holeCount) {
+            val o = h * 4
+            canvas.save()
+            canvas.clipRect(
+                rebakeHolesScratch[o],
+                rebakeHolesScratch[o + 1],
+                rebakeHolesScratch[o + 2],
+                rebakeHolesScratch[o + 3],
+            )
+            canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+            canvas.restore()
         }
     }
 
@@ -1389,12 +1277,7 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
         return holeInkPaint
     }
 
-    private fun isAxisAligned(pose: CanvasPose): Boolean {
-        val rot = pose.rotation % 360f
-        val rotMod = if (rot < 0f) rot + 360f else rot
-        if (rotMod > 0.05f && rotMod < 359.95f) return false
-        return pose.signX > 0f && pose.signY > 0f
-    }
+    private fun isAxisAligned(pose: CanvasPose): Boolean = FrontBufferCompose.isAxisAligned(pose)
 
     /**
      * 第 [s]/4 块屏幕矩形夹进「画布在屏幕上的包围盒」与「本帧烤过的槽位范围」, 结果写进
@@ -1544,6 +1427,15 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
         return created
     }
 
+    /** 内存告警时释放备份层 (不在运笔/追赶时)。只置空引用, 避免在 UI 线程 recycle GL 线程独占位图。 */
+    fun trimStrokeLayer() {
+        if (realInk?.held == true || realInk?.catchUpPending == true) return
+        strokeLayer = null
+        strokeCanvas = null
+        strokeLayerDirty.setEmpty()
+        invalidatePrevOverlay()
+    }
+
     private fun clearStrokeLayerDirty() {
         val sc = strokeCanvas ?: return
         if (strokeLayerDirty.isEmpty) return
@@ -1606,6 +1498,10 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
         if (realInk?.held == true) return
         if (!isRendererInitialized) return
         if (inkOnly && !hasInkContent) return
+        if (realInk?.catchUpPending == true) {
+            // 追赶尚未完成, 保护真墨不被提前清空 (只清预览类内容)
+            if (inkOnly || hasInkContent) return
+        }
         strokeResetPending = true
         if (!hasContent) return
         val ink = hasInkContent
@@ -1629,6 +1525,7 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
      * 释放前缓冲渲染器资源。
      */
     fun release() {
+        realInk?.cancelCatchUp()
         holder.removeCallback(surfaceGeometryCallback)
         surfaceValid = false
         surfaceW = 0

@@ -199,6 +199,8 @@ fun PaintingPage(
 
     var canvasEditMenuOpen by remember { mutableStateOf(false) }
     var canvasEditMenuCustomizeOpen by remember { mutableStateOf(false) }
+    var showExitSaveDialog by remember { mutableStateOf(false) }
+    var showDiscardConfirmDialog by remember { mutableStateOf(false) }
     var isZenMode by remember { mutableStateOf(false) }
 
     // Popup panels
@@ -762,6 +764,11 @@ fun PaintingPage(
                     settingsPanelOpen = settingsPanelOpen,
                     moreToolsOpen = moreToolsOpen,
                     drawingGuidePanelOpen = drawingGuidePanelOpen,
+                    modalDialogOpen = textDialogPos != null ||
+                        showExitSaveDialog || showDiscardConfirmDialog ||
+                        vm.showLowStorageDialog || vm.showToolbarSqueezedDialog ||
+                        canvasEditMenuCustomizeOpen || vm.shadingAssistDialogOpen ||
+                        vm.activeLayerDrag != null,
                 ),
                 drawingGuidePanelOpen = drawingGuidePanelOpen,
                 filterSessionActive = (filterController != null),
@@ -848,9 +855,6 @@ fun PaintingPage(
                 )
             }
         }
-
-        var showExitSaveDialog by remember { mutableStateOf(false) }
-        var showDiscardConfirmDialog by remember { mutableStateOf(false) }
 
         val requestExit: () -> Unit = {
             if (vm.hasUnsavedChanges()) {
@@ -2662,10 +2666,16 @@ private fun TransformIndicatorHud(
     onToggleLock: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // 变换指示器最后一次触发 1.2s 后自动隐藏
+    // 变换指示器最后一次触发 1.2s 后自动隐藏; toast 显示期间不保持可见 (避免 toast 退场后冒出 HUD)
     LaunchedEffect(indicatorState.tick) {
         if (indicatorState.tick > 0) {
             kotlinx.coroutines.delay(1200)
+            indicatorState.visible = false
+        }
+    }
+
+    LaunchedEffect(hasActionToast) {
+        if (hasActionToast) {
             indicatorState.visible = false
         }
     }

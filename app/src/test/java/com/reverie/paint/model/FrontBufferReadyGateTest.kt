@@ -5,59 +5,22 @@
 package com.reverie.paint.model
 
 import com.reverie.paint.model.FrontBufferReadyGate.ALL
-import com.reverie.paint.model.FrontBufferReadyGate.COND_GEOM_STABLE
 import com.reverie.paint.model.FrontBufferReadyGate.COND_NOT_LOADING
-import com.reverie.paint.model.FrontBufferReadyGate.COND_REFRESH
-import com.reverie.paint.model.FrontBufferReadyGate.COND_RENDER_IDLE
 import com.reverie.paint.model.FrontBufferReadyGate.COND_TILES
 import com.reverie.paint.model.FrontBufferReadyGate.NOT_READY
-import com.reverie.paint.model.FrontBufferReadyGate.READY_EVENTS
-import com.reverie.paint.model.FrontBufferReadyGate.READY_FALLBACK
+import com.reverie.paint.model.FrontBufferReadyGate.READY
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class FrontBufferReadyGateTest {
-    private fun mask(
-        tiles: Boolean = true,
-        idle: Boolean = true,
-        stable: Int = 2,
-        hz: Float = 120f,
-        target: Float = 120f,
-        loading: Boolean = false,
-    ) = FrontBufferReadyGate.conditionMask(tiles, idle, stable, hz, target, loading)
-
     @Test
-    fun `all conditions met gives ALL`() {
-        assertEquals(ALL, mask())
-    }
-
-    @Test
-    fun `each condition clears its own bit`() {
-        assertEquals(ALL and COND_TILES.inv(), mask(tiles = false))
-        assertEquals(ALL and COND_RENDER_IDLE.inv(), mask(idle = false))
-        assertEquals(ALL and COND_GEOM_STABLE.inv(), mask(stable = 1))
-        assertEquals(ALL and COND_REFRESH.inv(), mask(hz = 60f))
-        assertEquals(ALL and COND_NOT_LOADING.inv(), mask(loading = true))
-    }
-
-    @Test
-    fun `geometry needs two stable frames`() {
-        assertEquals(0, mask(stable = 0) and COND_GEOM_STABLE)
-        assertEquals(0, mask(stable = 1) and COND_GEOM_STABLE)
-        assertEquals(COND_GEOM_STABLE, mask(stable = 2) and COND_GEOM_STABLE)
-        assertEquals(COND_GEOM_STABLE, mask(stable = 9) and COND_GEOM_STABLE)
-    }
-
-    @Test
-    fun `refresh tolerance and unknown target`() {
-        assertTrue(FrontBufferReadyGate.refreshAtTarget(119.88f, 120f))
-        assertTrue(FrontBufferReadyGate.refreshAtTarget(115f, 120f))
-        assertFalse(FrontBufferReadyGate.refreshAtTarget(90f, 120f))
-        assertFalse(FrontBufferReadyGate.refreshAtTarget(Float.NaN, 120f))
-        assertTrue(FrontBufferReadyGate.refreshAtTarget(60f, 0f))
-        assertTrue(FrontBufferReadyGate.refreshAtTarget(60f, Float.NaN))
+    fun `conditionMask checks tiles and loading`() {
+        assertEquals(ALL, FrontBufferReadyGate.conditionMask(tilesFinal = true, loading = false))
+        assertEquals(COND_TILES, FrontBufferReadyGate.conditionMask(tilesFinal = true, loading = true))
+        assertEquals(COND_NOT_LOADING, FrontBufferReadyGate.conditionMask(tilesFinal = false, loading = false))
+        assertEquals(0, FrontBufferReadyGate.conditionMask(tilesFinal = false, loading = true))
     }
 
     @Test
@@ -69,66 +32,20 @@ class FrontBufferReadyGateTest {
     }
 
     @Test
-    fun `decide - fallback after quiet window regardless of mask or flag`() {
-        assertEquals(READY_FALLBACK, FrontBufferReadyGate.decide(5000, 4200, 0, true))
-        assertEquals(READY_FALLBACK, FrontBufferReadyGate.decide(4200, 4200, 0, false))
-    }
+    fun `decide - quiet window gates ready decision`() {
+        // 静默窗口未过 (now < quietUntil): 哪怕 tilesFinal 且 not loading 也返回 NOT_READY
+        assertEquals(NOT_READY, FrontBufferReadyGate.decide(nowMs = 1000L, quietUntilMs = 4200L, tilesFinal = true, loading = false, gateEnabled = true))
+        // 静默窗口已过 (now >= quietUntil): tilesFinal 且 not loading 返回 READY
+        assertEquals(READY, FrontBufferReadyGate.decide(nowMs = 4200L, quietUntilMs = 4200L, tilesFinal = true, loading = false, gateEnabled = true))
+        assertEquals(READY, FrontBufferReadyGate.decide(nowMs = 5000L, quietUntilMs = 4200L, tilesFinal = true, loading = false, gateEnabled = true))
+        // 条件不满足仍然 NOT_READY
+        assertEquals(NOT_READY, FrontBufferReadyGate.decide(nowMs = 5000L, quietUntilMs = 4200L, tilesFinal = false, loading = false, gateEnabled = true))
+        assertEquals(NOT_READY, FrontBufferReadyGate.decide(nowMs = 5000L, quietUntilMs = 4200L, tilesFinal = true, loading = true, gateEnabled = true))
 
-    @Test
-    fun `decide - early ready only when every condition holds and gate is on`() {
-        assertEquals(READY_EVENTS, FrontBufferReadyGate.decide(1000, 4200, ALL, true))
-        assertEquals(NOT_READY, FrontBufferReadyGate.decide(1000, 4200, ALL, false))
-        assertEquals(NOT_READY, FrontBufferReadyGate.decide(1000, 4200, ALL and COND_REFRESH.inv(), true))
+        // gateEnabled = false (调试开关关) 直接放行
+        assertEquals(READY, FrontBufferReadyGate.decide(nowMs = 1000L, quietUntilMs = 4200L, tilesFinal = false, loading = true, gateEnabled = false))
+
+        assertTrue(FrontBufferReadyGate.isReady(READY))
         assertFalse(FrontBufferReadyGate.isReady(NOT_READY))
-        assertTrue(FrontBufferReadyGate.isReady(READY_EVENTS))
-        assertTrue(FrontBufferReadyGate.isReady(READY_FALLBACK))
-    }
-
-    @Test
-    fun `inferred bits are render idle and refresh`() {
-        assertEquals(COND_RENDER_IDLE or COND_REFRESH, FrontBufferReadyGate.INFERRED)
-    }
-
-    @Test
-    fun `stable frame counter counts consecutive identical signatures`() {
-        val c = StableFrameCounter()
-        assertEquals(0, c.feed(1, 2, 3, 4, 5, 6))
-        assertEquals(1, c.feed(1, 2, 3, 4, 5, 6))
-        assertEquals(2, c.feed(1, 2, 3, 4, 5, 6))
-        assertEquals(0, c.feed(1, 2, 3, 4, 5, 7))
-        assertEquals(1, c.feed(1, 2, 3, 4, 5, 7))
-        assertEquals(0, c.feed(1, 2, 3, 4, 5, 7, 1))
-        c.reset()
-        assertEquals(0, c.stableFrames)
-        assertEquals(0, c.feed(1, 2, 3, 4, 5, 7, 1))
-    }
-
-    @Test
-    fun `stable display mode counts as refresh ready even at 60hz`() {
-        assertTrue(FrontBufferReadyGate.refreshStable(1000L, 800L, true, 60f, 120f))
-        assertFalse(FrontBufferReadyGate.refreshStable(1000L, 900L, true, 120f, 120f))
-        // 监听没挂上: 退回 "到达目标档" 判据
-        assertFalse(FrontBufferReadyGate.refreshStable(1000L, 0L, false, 60f, 120f))
-        assertTrue(FrontBufferReadyGate.refreshStable(1000L, 0L, false, 119f, 120f))
-    }
-
-    @Test
-    fun `stable mask matches the legacy mask bit for bit`() {
-        val legacy = FrontBufferReadyGate.conditionMask(true, true, 2, 120f, 120f, false)
-        val stable = FrontBufferReadyGate.conditionMaskStable(true, true, 2, true, false)
-        assertEquals(legacy, stable)
-        assertEquals(
-            FrontBufferReadyGate.ALL and FrontBufferReadyGate.COND_REFRESH.inv(),
-            FrontBufferReadyGate.conditionMaskStable(true, true, 2, false, false),
-        )
-    }
-
-    @Test
-    fun `render idle needs every flag clear and an idle queue`() {
-        assertTrue(FrontBufferReadyGate.renderIdle(false, false, false, true))
-        assertFalse(FrontBufferReadyGate.renderIdle(false, false, false, false))
-        assertFalse(FrontBufferReadyGate.renderIdle(true, false, false, true))
-        assertFalse(FrontBufferReadyGate.renderIdle(false, true, false, true))
-        assertFalse(FrontBufferReadyGate.renderIdle(false, false, true, true))
     }
 }

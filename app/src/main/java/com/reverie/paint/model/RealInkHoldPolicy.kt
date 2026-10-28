@@ -17,7 +17,34 @@ package com.reverie.paint.model
 internal object RealInkHoldPolicy {
     fun shouldReleaseOnReject(held: Boolean, wantsHold: Boolean): Boolean = held && !wantsHold
 
-    fun shouldBumpEpoch(shown: Boolean): Boolean = shown
+    /**
+     * 判断当前工具是否为低延迟前缓冲预测线/预测器支持的画笔工具。
+     * 预测线只适用于常规笔刷；侧键临时切橡皮或橡皮/涂抹一律不画预测线。
+     */
+    fun isRealInkTool(tool: Tool, effTool: Tool): Boolean =
+        tool == Tool.BRUSH && effTool == Tool.BRUSH
+
+    /**
+     * 判断当前生效工具是否支持真墨按住 (恢复 e474ec11 规则, 支持画笔、橡皮与涂抹)。
+     */
+    fun isHoldToolSupported(effTool: Tool): Boolean =
+        effTool == Tool.BRUSH || effTool == Tool.ERASER || effTool == Tool.SMUDGE
+
+    /**
+     * 前缓冲不透明烘焙与 3D 图层门控支持判定:
+     * - 当无棋盘格背景时, 前缓冲无法执行不透明烘焙 (半透明笔刷会露底/与普通模式不同色)
+     * - 当有可见 3D 图层时, 前缓冲置顶会遮挡 3D 图层
+     * 两种情况均不支持按住真墨, 退回普通模式渲染。
+     */
+    fun bakeSupported(hasCheckerboard: Boolean, has3DVisible: Boolean): Boolean =
+        hasCheckerboard && !has3DVisible
+
+    /**
+     * 抬笔追赶判定: 当且仅当笔已抬起、追赶已激活、目标版本号已落定且窗口已画到或超过目标版本时,
+     * 才允许清空前缓冲。
+     */
+    fun shouldClearAfterDraw(held: Boolean, armed: Boolean, drawnRev: Long, targetRev: Long): Boolean =
+        !held && armed && targetRev != Long.MAX_VALUE && drawnRev >= targetRev
 
     /** 笔刷面板: 未钉住 = 全屏遮罩 (BrushPanel.kt 未钉住分支 `noRippleClickable(onClose)`); 钉住 = PINNED_BRUSH_PANEL 孔径。 */
     fun brushPanelBlocksHold(open: Boolean, pinned: Boolean): Boolean = open && !pinned
@@ -39,6 +66,7 @@ internal object RealInkHoldPolicy {
      * @param settingsPanelOpen 设置半模态
      * @param moreToolsOpen 更多工具半模态
      * @param drawingGuidePanelOpen 绘图辅助悬浮窗 (不挡按住; 参数保留以免接线处漏改)
+     * @param modalDialogOpen 模态对话框/文字输入/全局对话框/图层拖拽浮层等全屏阻挡状态
      */
     fun overlayPanelsBlockHold(
         brushPanelBlocking: Boolean,
@@ -46,10 +74,11 @@ internal object RealInkHoldPolicy {
         colorPanelBlocking: Boolean,
         settingsPanelOpen: Boolean,
         moreToolsOpen: Boolean,
-        drawingGuidePanelOpen: Boolean,
+        drawingGuidePanelOpen: Boolean = false,
+        modalDialogOpen: Boolean = false,
     ): Boolean {
         // drawingGuidePanelOpen 故意不参与: 见 KDoc。
         return brushPanelBlocking || layerPanelBlocking || colorPanelBlocking ||
-            settingsPanelOpen || moreToolsOpen
+            settingsPanelOpen || moreToolsOpen || modalDialogOpen
     }
 }

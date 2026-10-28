@@ -244,6 +244,7 @@ public:
     bool moveLayerDown(int index);
     bool moveLayerOut(int index);
 
+
     // ================= Animation (frame-by-frame: layers as tracks) ========
     // 动画文档: 每个位图图层 = 一条轨道, 每条轨道可持有多个关键帧(帧).
     // 帧数据由 Krita 的 KisRasterKeyframeChannel 持有 (每个关键帧一份

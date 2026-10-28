@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "ReverieCoreInternal.h"
+#include "ReverieCoreLayerExtras.h"
 #include "ReverieCoreColorSpaceHook.h"
 #include <generator/kis_generator.h>
 #include <generator/kis_generator_registry.h>
@@ -117,7 +118,7 @@ bool ReverieCore::setFillLayerPattern(int index, const QByteArray &png)
         return applyFillGeneratorConfig(index, reverieMakePatternConfig(png));
     }
     auto *layer = dynamic_cast<KisPaintLayer *>(node);
-    if (!layer || !node->property("reverie_is_fill").toBool()) {
+    if (!layer || !reverie::layerProperty(&*node, "reverie_is_fill").toBool()) {
         qWarning("Pattern: target is not a fill layer (%d)", index);
         return false;
     }

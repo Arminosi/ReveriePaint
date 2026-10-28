@@ -6,6 +6,7 @@
  * 换色即时生效 (setFilter 触发 generator 重算), 不再依赖 floodFill 补刀。
  */
 #include "ReverieCoreInternal.h"
+#include "ReverieCoreLayerExtras.h"
 
 #include <generator/kis_generator.h>
 #include <generator/kis_generator_registry.h>
@@ -117,7 +118,7 @@ bool ReverieCore::setFillLayerColor(int index, quint32 colorArgb)
         return applyFillGeneratorConfig(index, cfg);
     }
     if (KisPaintLayer *pl = dynamic_cast<KisPaintLayer *>(node.data())) {
-        if (!node->property("reverie_is_fill").toBool()) {
+        if (!reverie::layerProperty(&*node, "reverie_is_fill").toBool()) {
             return false;
         }
         KisPaintDeviceSP dev = pl->paintDevice();
@@ -132,7 +133,7 @@ bool ReverieCore::setFillLayerColor(int index, quint32 colorArgb)
         dev->setDirty(docRect);
         pl->setDirty(docRect);
         pushUndoCommand(txn.endAndTake());
-        node->setProperty("reverie_fill_color", colorArgb);
+        reverie::setLayerProperty(&*node, "reverie_fill_color", colorArgb);
         recompositeProjection();
         markDirty();
         return true;
@@ -158,14 +159,14 @@ quint32 ReverieCore::getFillLayerColor(int index) const
         }
     }
     if (KisPaintLayer *pl = dynamic_cast<KisPaintLayer *>(node.data())) {
-        if (node->property("reverie_is_fill").toBool()) {
+        if (reverie::layerProperty(&*node, "reverie_is_fill").toBool()) {
             if (KisPaintDeviceSP dev = pl->paintDevice()) {
                 KoColor seedCol = dev->pixel(QPoint(0, 0));
                 QColor qSeed;
                 seedCol.toQColor(&qSeed);
                 return qSeed.rgba();
             }
-            QVariant v = node->property("reverie_fill_color");
+            QVariant v = reverie::layerProperty(&*node, "reverie_fill_color");
             if (v.isValid()) {
                 return v.toUInt();
             }

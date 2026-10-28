@@ -8,6 +8,7 @@
  * group 无数据文件), 与 saveRevp/saveKra 的既有条目一一对应。
  */
 #include "ReverieCoreInternal.h"
+#include "ReverieCoreLayerExtras.h"
 #include <QXmlStreamWriter>
 #include <QXmlStreamReader>
 #include <QBuffer>
@@ -57,10 +58,10 @@ void writeCommonAttrs(QXmlStreamWriter &w, const ReverieCore::LayerEntry &e)
     w.writeAttribute("x", QString::number(node ? int(node->x()) : 0));
     w.writeAttribute("y", QString::number(node ? int(node->y()) : 0));
     w.writeAttribute("background", e.background ? "1" : "0");
-    if (node && node->property("reverie_is_fill").toBool()) {
+    if (node && reverie::layerProperty(&*node, "reverie_is_fill").toBool()) {
         w.writeAttribute("is_fill", "1");
-        if (node->property("reverie_fill_color").isValid()) {
-            w.writeAttribute("fill_color", QString::number(node->property("reverie_fill_color").toUInt()));
+        if (reverie::layerProperty(&*node, "reverie_fill_color").isValid()) {
+            w.writeAttribute("fill_color", QString::number(reverie::layerProperty(&*node, "reverie_fill_color").toUInt()));
         }
     }
     if (e.isStrokeLayer || e.nodeType == ReverieCore::NodeTypeStroke) {
@@ -70,7 +71,7 @@ void writeCommonAttrs(QXmlStreamWriter &w, const ReverieCore::LayerEntry &e)
         w.writeAttribute("stroke_pos", QString::number(e.strokePosition));
         w.writeAttribute("stroke_opacity", QString::number(e.strokeOpacity));
     }
-    if (e.nodeType == ReverieCore::NodeTypeTransparencyMask || (node && node->property("reverie_is_transparency_mask").toBool())) {
+    if (e.nodeType == ReverieCore::NodeTypeTransparencyMask || (node && reverie::layerProperty(&*node, "reverie_is_transparency_mask").toBool())) {
         w.writeAttribute("is_transparency_mask", "1");
     }
 }
@@ -115,7 +116,7 @@ void ReverieCore::writeLayersXml(QString *out)
             --openDepth;
         }
         // 预填色颜料层仍保存像素，不能按 generator 重建而丢失后续笔画
-        const bool paintFill = e.node && e.node->property("reverie_is_fill").toBool();
+        const bool paintFill = e.node && reverie::layerProperty(&*e.node, "reverie_is_fill").toBool();
         w.writeStartElement(paintFill ? "paintlayer" : nodeElementName(e.nodeType));
         writeCommonAttrs(w, e);
         if (!e.isGroup && e.nodeType != NodeTypeAdjustment) {
@@ -238,24 +239,24 @@ bool ReverieCore::loadLayersXmlTree(const QByteArray &xmlData, KisImageSP image,
             bg = visible;
         }
         if (dynamic_cast<KisPaintLayer *>(node.data()) && a.value("is_fill") == QLatin1String("1")) {
-            node->setProperty("reverie_is_fill", true);
+            reverie::setLayerProperty(&*node, "reverie_is_fill", true);
             bool okColor = false;
             const quint32 fCol = a.value("fill_color").toString().toUInt(&okColor);
             if (okColor) {
-                node->setProperty("reverie_fill_color", fCol);
+                reverie::setLayerProperty(&*node, "reverie_fill_color", fCol);
             }
         }
         if (a.value("is_stroke") == QLatin1String("1")) {
-            node->setProperty("reverie_is_stroke", true);
-            node->setProperty("reverie_stroke_size", attrInt("stroke_size", 6));
+            reverie::setLayerProperty(&*node, "reverie_is_stroke", true);
+            reverie::setLayerProperty(&*node, "reverie_stroke_size", attrInt("stroke_size", 6));
             bool okColor = false;
             const quint32 sCol = a.value("stroke_color").toString().toUInt(&okColor);
-            node->setProperty("reverie_stroke_color", okColor ? sCol : 0xFF000000u);
-            node->setProperty("reverie_stroke_pos", attrInt("stroke_pos", 0));
-            node->setProperty("reverie_stroke_opacity", attrInt("stroke_opacity", 100));
+            reverie::setLayerProperty(&*node, "reverie_stroke_color", okColor ? sCol : 0xFF000000u);
+            reverie::setLayerProperty(&*node, "reverie_stroke_pos", attrInt("stroke_pos", 0));
+            reverie::setLayerProperty(&*node, "reverie_stroke_opacity", attrInt("stroke_opacity", 100));
         }
         if (a.value("is_transparency_mask") == QLatin1String("1")) {
-            node->setProperty("reverie_is_transparency_mask", true);
+            reverie::setLayerProperty(&*node, "reverie_is_transparency_mask", true);
         }
     };
 
@@ -373,7 +374,7 @@ bool ReverieCore::loadLayersXmlTree(const QByteArray &xmlData, KisImageSP image,
                 }
                 // 在现代架构中，透明度蒙版作为 KisPaintLayer 挂载在图层树中
                 KisPaintLayerSP tmask = new KisPaintLayer(image, nodeName.isEmpty() ? QStringLiteral("蒙版") : nodeName, 255, cs);
-                tmask->setProperty("reverie_is_transparency_mask", true);
+                reverie::setLayerProperty(&*tmask, "reverie_is_transparency_mask", true);
                 // offset 必须先于像素写回 (见 paintlayer 分支说明)
                 applyCommonAttrs(tmask);
                 attrsApplied = true;

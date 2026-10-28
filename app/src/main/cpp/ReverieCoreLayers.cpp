@@ -8,6 +8,7 @@
  * ReverieCoreInternal.h, public API in ReverieCore.h)
  * ============================================================ */
 #include "ReverieCoreInternal.h"
+#include "ReverieCoreLayerExtras.h"
 #include "RenderLockGate.h"
 #include <functional>
 #include <QSet>
@@ -89,7 +90,7 @@ void currentInsertPosition(const QVector<ReverieCore::LayerEntry> &layers, int c
             }
             above = KisNodeSP(e.node);
             // 蒙版绑定保护: 若当前节点紧邻附着蒙版，新图层必须插入在所有附属蒙版上方
-            while (above->nextSibling() && (above->nextSibling()->property("reverie_is_transparency_mask").toBool() || dynamic_cast<KisMask *>(above->nextSibling().data()))) {
+            while (above->nextSibling() && (reverie::layerProperty(&*above->nextSibling(), "reverie_is_transparency_mask").toBool() || dynamic_cast<KisMask *>(above->nextSibling().data()))) {
                 above = above->nextSibling();
             }
             parent = above->parent();
@@ -264,8 +265,8 @@ bool ReverieCore::addLayerWithType(const QString &name, int type, quint32 fillCo
         KisPaintLayerSP paintLayer = new KisPaintLayer(image, finalName, 255, cs);
         if (type == LayerTypeFill) {
             // 保留预填色颜料层实现，用显式标记区分类型，不能依赖可编辑名称
-            paintLayer->setProperty("reverie_is_fill", true);
-            paintLayer->setProperty("reverie_fill_color", (quint32)fillColor);
+            reverie::setLayerProperty(&*paintLayer, "reverie_is_fill", true);
+            reverie::setLayerProperty(&*paintLayer, "reverie_fill_color", (quint32)fillColor);
             QColor qc = QColor::fromRgba(fillColor);
             paintLayer->original()->fill(QRect(0, 0, image->width(), image->height()), KoColor(qc, cs));
             paintLayer->original()->setDirty();
@@ -298,11 +299,11 @@ bool ReverieCore::addLayerWithType(const QString &name, int type, quint32 fillCo
             m_layers[idx].strokePosition = 0;
             m_layers[idx].strokeOpacity = 100;
             if (newNode) {
-                newNode->setProperty("reverie_is_stroke", true);
-                newNode->setProperty("reverie_stroke_size", 6);
-                newNode->setProperty("reverie_stroke_color", 0xFF000000u);
-                newNode->setProperty("reverie_stroke_pos", 0);
-                newNode->setProperty("reverie_stroke_opacity", 100);
+                reverie::setLayerProperty(&*newNode, "reverie_is_stroke", true);
+                reverie::setLayerProperty(&*newNode, "reverie_stroke_size", 6);
+                reverie::setLayerProperty(&*newNode, "reverie_stroke_color", 0xFF000000u);
+                reverie::setLayerProperty(&*newNode, "reverie_stroke_pos", 0);
+                reverie::setLayerProperty(&*newNode, "reverie_stroke_opacity", 100);
             }
         }
     }
@@ -330,24 +331,8 @@ int ReverieCore::copyLayer(int index)
     KisNodeSP cloned = src.node->clone();
     if (!cloned) return -1;
     cloned->setImage(image);
-    // QObject 动态属性不保证随 clone 复制。组内子层也按节点对应传递，不能按名称找旧状态。
-    const std::function<void(KisNodeSP, KisNodeSP)> copyTypeProperties =
-        [&](KisNodeSP source, KisNodeSP target) {
-            for (const char *key : {"reverie_is_fill", "reverie_is_stroke", "reverie_stroke_size",
-                                    "reverie_stroke_color", "reverie_stroke_pos", "reverie_stroke_opacity",
-                                    "reverie_fill_color"}) {
-                const QVariant value = source->property(key);
-                if (value.isValid()) target->setProperty(key, value);
-            }
-            KisNodeSP sourceChild = source->firstChild();
-            KisNodeSP targetChild = target->firstChild();
-            while (sourceChild && targetChild) {
-                copyTypeProperties(sourceChild, targetChild);
-                sourceChild = sourceChild->nextSibling();
-                targetChild = targetChild->nextSibling();
-            }
-        };
-    copyTypeProperties(KisNodeSP(src.node), cloned);
+    // 附加属性 (NodeExtra) 不随 KisNode::clone() 复制, 按节点结构显式搬过去 (含各级子层)
+    reverie::copyLayerProperties(src.node, cloned.data());
 
     // 关键2: 计算全局唯一的副本名称, 避免连续复制时重名造成索引错乱
     QSet<QString> existingNames;
@@ -376,7 +361,7 @@ int ReverieCore::copyLayer(int index)
     // 检查并收集父图层紧邻附属的所有蒙版
     QVector<KisNodeSP> attachedMasks;
     KisNodeSP checkNode = src.node ? src.node->nextSibling() : KisNodeSP();
-    while (checkNode && (checkNode->property("reverie_is_transparency_mask").toBool() || dynamic_cast<KisMask *>(checkNode.data()))) {
+    while (checkNode && (reverie::layerProperty(&*checkNode, "reverie_is_transparency_mask").toBool() || dynamic_cast<KisMask *>(checkNode.data()))) {
         attachedMasks.append(checkNode);
         checkNode = checkNode->nextSibling();
     }
@@ -389,8 +374,8 @@ int ReverieCore::copyLayer(int index)
         KisNodeSP cMask = srcMask->clone();
         if (cMask) {
             cMask->setImage(image);
-            if (srcMask->property("reverie_is_transparency_mask").toBool()) {
-                cMask->setProperty("reverie_is_transparency_mask", true);
+            if (reverie::layerProperty(&*srcMask, "reverie_is_transparency_mask").toBool()) {
+                reverie::setLayerProperty(&*cMask, "reverie_is_transparency_mask", true);
             }
             cMask->setName(QString("%1 %2").arg(srcMask->name().contains("选区") ? "局部选区" : "蒙版").arg(candidateName));
             clonedMasks.append(cMask);
@@ -422,11 +407,11 @@ int ReverieCore::copyLayer(int index)
             m_layers[idx].strokePosition = sPos;
             m_layers[idx].strokeOpacity = sOp;
             if (cloned) {
-                cloned->setProperty("reverie_is_stroke", true);
-                cloned->setProperty("reverie_stroke_size", sSize);
-                cloned->setProperty("reverie_stroke_color", sCol);
-                cloned->setProperty("reverie_stroke_pos", sPos);
-                cloned->setProperty("reverie_stroke_opacity", sOp);
+                reverie::setLayerProperty(&*cloned, "reverie_is_stroke", true);
+                reverie::setLayerProperty(&*cloned, "reverie_stroke_size", sSize);
+                reverie::setLayerProperty(&*cloned, "reverie_stroke_color", sCol);
+                reverie::setLayerProperty(&*cloned, "reverie_stroke_pos", sPos);
+                reverie::setLayerProperty(&*cloned, "reverie_stroke_opacity", sOp);
             }
         }
     }
@@ -652,7 +637,7 @@ void ReverieCore::removeLayer(int index)
         KisNode *n = m_layers[index].node;
         if (n) {
             KisNodeSP sib = n->nextSibling();
-            while (sib && (sib->property("reverie_is_transparency_mask").toBool() || dynamic_cast<KisMask *>(sib.data()))) {
+            while (sib && (reverie::layerProperty(&*sib, "reverie_is_transparency_mask").toBool() || dynamic_cast<KisMask *>(sib.data()))) {
                 undoCmds.append(new KisImageLayerRemoveCommand(image, sib));
                 sib = sib->nextSibling();
             }
@@ -1102,11 +1087,11 @@ void ReverieCore::applyStrokeParamsInternal(int index, int size, quint32 color, 
     e.nodeType = NodeTypeStroke;
 
     if (e.node) {
-        e.node->setProperty("reverie_is_stroke", true);
-        e.node->setProperty("reverie_stroke_size", e.strokeSize);
-        e.node->setProperty("reverie_stroke_color", e.strokeColor);
-        e.node->setProperty("reverie_stroke_pos", e.strokePosition);
-        e.node->setProperty("reverie_stroke_opacity", e.strokeOpacity);
+        reverie::setLayerProperty(&*e.node, "reverie_is_stroke", true);
+        reverie::setLayerProperty(&*e.node, "reverie_stroke_size", e.strokeSize);
+        reverie::setLayerProperty(&*e.node, "reverie_stroke_color", e.strokeColor);
+        reverie::setLayerProperty(&*e.node, "reverie_stroke_pos", e.strokePosition);
+        reverie::setLayerProperty(&*e.node, "reverie_stroke_opacity", e.strokeOpacity);
     }
 
     KisPaintLayer *pl = dynamic_cast<KisPaintLayer *>(e.node);
@@ -1210,7 +1195,7 @@ bool ReverieCore::rasterizeLayerStroke(int index)
     e.isStrokeLayer = false;
     e.nodeType = NodeTypePaint;
     if (e.node) {
-        e.node->setProperty("reverie_is_stroke", false);
+        reverie::setLayerProperty(&*e.node, "reverie_is_stroke", false);
     }
     markDirty();
     return true;

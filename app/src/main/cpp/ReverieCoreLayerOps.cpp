@@ -8,6 +8,7 @@
  * ReverieCoreInternal.h, public API in ReverieCore.h)
  * ============================================================ */
 #include "ReverieCoreInternal.h"
+#include "ReverieCoreLayerExtras.h"
 #include "PixelAlpha.h"
 
 void ReverieCore::flipLayerHorizontal(int index)
@@ -190,7 +191,7 @@ bool ReverieCore::mergeDown(int index)
         return applyMask(index);
     }
     // 若待合并的父图层拥有依附的蒙版，先将蒙版应用至父图层，再执行合并
-    if (e.node && e.node->nextSibling() && e.node->nextSibling()->property("reverie_is_transparency_mask").toBool()) {
+    if (e.node && e.node->nextSibling() && reverie::layerProperty(&*e.node->nextSibling(), "reverie_is_transparency_mask").toBool()) {
         const int maskIdx = indexOfNode(e.node->nextSibling().data());
         if (maskIdx >= 0) {
             applyMask(maskIdx);
@@ -508,11 +509,11 @@ bool ReverieCore::moveLayersRelative(const QVector<int> &fromIndices, int target
     // 确保若移动父图层，其附属的所有蒙版紧随其后成对移动
     QVector<KisNodeSP> finalNodesToMove;
     for (KisNodeSP node : nodesToMove) {
-        const bool isMask = node->property("reverie_is_transparency_mask").toBool() || dynamic_cast<KisMask *>(node.data());
+        const bool isMask = reverie::layerProperty(&*node, "reverie_is_transparency_mask").toBool() || dynamic_cast<KisMask *>(node.data());
         if (!isMask) {
             finalNodesToMove.append(node);
             KisNodeSP sib = node->nextSibling();
-            while (sib && (sib->property("reverie_is_transparency_mask").toBool() || dynamic_cast<KisMask *>(sib.data()))) {
+            while (sib && (reverie::layerProperty(&*sib, "reverie_is_transparency_mask").toBool() || dynamic_cast<KisMask *>(sib.data()))) {
                 if (!finalNodesToMove.contains(sib)) {
                     finalNodesToMove.append(sib);
                 }
@@ -532,7 +533,7 @@ bool ReverieCore::moveLayersRelative(const QVector<int> &fromIndices, int target
     if (placeAbove) {
         // Visually ABOVE target: 若 target 拥有紧随的透明度蒙版，越过蒙版插入在蒙版上方
         KisNodeSP actualTarget = target;
-        if (actualTarget->nextSibling() && actualTarget->nextSibling()->property("reverie_is_transparency_mask").toBool() && !nodesToMove.contains(actualTarget->nextSibling())) {
+        if (actualTarget->nextSibling() && reverie::layerProperty(&*actualTarget->nextSibling(), "reverie_is_transparency_mask").toBool() && !nodesToMove.contains(actualTarget->nextSibling())) {
             actualTarget = actualTarget->nextSibling();
         }
         currentAbove = actualTarget;
@@ -615,7 +616,7 @@ bool ReverieCore::addMaskToLayer(int layerIndex, int maskType)
         // 获得完整的 live stroke、KisPainter 笔刷特性与撤销重做支持
         KisPaintLayerSP tmask = new KisPaintLayer(image, maskName, 255, image->colorSpace());
         if (!tmask) return false;
-        tmask->setProperty("reverie_is_transparency_mask", true);
+        reverie::setLayerProperty(&*tmask, "reverie_is_transparency_mask", true);
         // 初始化全白 (Alpha 255, White): 默认全透光无遮罩
         tmask->paintDevice()->fill(QRect(0, 0, image->width(), image->height()), KoColor(Qt::white, image->colorSpace()));
         tmask->paintDevice()->setDirty();
@@ -680,7 +681,7 @@ bool ReverieCore::removeMask(int layerIndex)
     if (!target) return false;
 
     // Case 1: The selected entry is directly the mask node (KisMask 或 KisPaintLayer 蒙版)
-    const bool isPaintMask = target->property("reverie_is_transparency_mask").toBool();
+    const bool isPaintMask = reverie::layerProperty(&*target, "reverie_is_transparency_mask").toBool();
     if (dynamic_cast<KisMask *>(target) || isPaintMask) {
         // 删除蒙版后切回宿主图层 (即 m_layers 中其前一个图层)
         const int pIdx = qMax(0, layerIndex - 1);
@@ -714,7 +715,7 @@ bool ReverieCore::removeMask(int layerIndex)
 
     KisNodeSP child = target->firstChild();
     while (child) {
-        if (dynamic_cast<KisMask *>(child.data()) || child->property("reverie_is_transparency_mask").toBool()) {
+        if (dynamic_cast<KisMask *>(child.data()) || reverie::layerProperty(&*child, "reverie_is_transparency_mask").toBool()) {
             pushUndoCommand(new KisImageLayerRemoveCommand(image, child));
             recompositeProjection();
             syncLayersFromImage();
@@ -739,7 +740,7 @@ bool ReverieCore::invertMask(int layerIndex)
     if (!target) return false;
 
     KisPaintDeviceSP dev;
-    if (target->property("reverie_is_transparency_mask").toBool()) {
+    if (reverie::layerProperty(&*target, "reverie_is_transparency_mask").toBool()) {
         if (KisPaintLayer *pl = dynamic_cast<KisPaintLayer *>(target)) {
             dev = pl->paintDevice();
         }
@@ -755,7 +756,7 @@ bool ReverieCore::invertMask(int layerIndex)
         // Check if target has a child mask
         KisNodeSP child = target->firstChild();
         while (child) {
-            if (child->property("reverie_is_transparency_mask").toBool()) {
+            if (reverie::layerProperty(&*child, "reverie_is_transparency_mask").toBool()) {
                 if (KisPaintLayer *pl = dynamic_cast<KisPaintLayer *>(child.data())) {
                     dev = pl->paintDevice();
                     break;
@@ -814,10 +815,10 @@ bool ReverieCore::applyMask(int layerIndex)
     KisNodeSP maskNode;
     KisLayerSP parentLayer;
 
-    if (target->property("reverie_is_transparency_mask").toBool() || dynamic_cast<KisMask *>(target)) {
+    if (reverie::layerProperty(&*target, "reverie_is_transparency_mask").toBool() || dynamic_cast<KisMask *>(target)) {
         maskNode = target;
         // 如果 target 是同级上方蒙版，宿主是其下方图层 (layerIndex - 1)
-        if (target->property("reverie_is_transparency_mask").toBool() && layerIndex > 0) {
+        if (reverie::layerProperty(&*target, "reverie_is_transparency_mask").toBool() && layerIndex > 0) {
             parentLayer = dynamic_cast<KisLayer *>(m_layers[layerIndex - 1].node);
         }
         if (!parentLayer) {
@@ -832,7 +833,7 @@ bool ReverieCore::applyMask(int layerIndex)
         } else {
             KisNodeSP child = target->firstChild();
             while (child) {
-                if (child->property("reverie_is_transparency_mask").toBool() || dynamic_cast<KisMask *>(child.data())) {
+                if (reverie::layerProperty(&*child, "reverie_is_transparency_mask").toBool() || dynamic_cast<KisMask *>(child.data())) {
                     maskNode = child;
                     break;
                 }

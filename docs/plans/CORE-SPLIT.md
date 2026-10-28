@@ -196,6 +196,27 @@ Kotlin 侧表现层把 `LayerUiState` 换成「快照 + diff」：`rev` 变了�
 画布立即显示棋盘格、该行眼睛变为关闭态（这张状态由快照供给），再点一次恢复；全程无
 `UnsatisfiedLinkError`/FATAL。
 
+### P2 进展（2026-10-29）：`reverie_*` 影子属性下线
+
+8 个 QObject 动态属性（`reverie_is_fill` / `reverie_fill_color` / `reverie_is_stroke` /
+`reverie_stroke_{size,color,pos,opacity}` / `reverie_is_transparency_mask`）换成一张按节点
+索引的侧表 `reverie::NodeExtra`（`app/src/main/cpp/ReverieCoreLayerExtras.{h,cpp}`）：
+
+| 之前 | 现在 |
+|---|---|
+| `node->setProperty("reverie_*", v)` 散落在 7 个文件 73 处，与 `LayerEntry` 两套 schema | `reverie::setLayerProperty(node, key, v)`，单一结构体字段，schema 只有一处 |
+| `KisNode::clone()` 不复制动态属性，靠调用点手写 lambda 搬 7 个 key（漏了 mask 标记） | `copyLayerProperties()` 按节点结构递归复制全部字段 |
+| 删层后条目靠"地址复用"擦边，谁的属性都对不上 | 给节点挂 `destroyed()` 监听自动回收；撤销删层复用的节点指针因此仍能保住标记 |
+| 换文档可能继承上一份文档的标记 | 文档重置时 `clearLayerProperties()` 整体清空 |
+
+调用点保持原 key 字符串（`layerProperty` / `setLayerProperty`），所以语义与原来逐项一致
+（未设置时仍返回无效 QVariant）；`grep 'setProperty("reverie_' == 0`。
+
+验证：引擎编译通过（`reverie_core` + `reverie_jni`）；真机打开工程、图层面板/缩略图正常；
+新增图层后镜像立即出现新行并选中（走 `rp_doc_snapshot`）。**待人工回归**：填充层换色、
+描边层参数、透明度蒙版、克隆图层后的标记保持 —— 这些路径需要带相应图层的工程，当前
+测试工程只有普通颜料层。
+
 ## 5. 不做的事（避免过度设计）
 
 - 不把 Krita 类型暴露到 C ABI，也不做「C++ 头文件包装层」（那只是换名字）

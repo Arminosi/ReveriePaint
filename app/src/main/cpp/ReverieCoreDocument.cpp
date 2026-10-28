@@ -8,6 +8,7 @@
  * ReverieCoreInternal.h, public API in ReverieCore.h)
  * ============================================================ */
 #include "ReverieCoreInternal.h"
+#include "ReverieCoreLayerExtras.h"
 #include "ReverieCoreColorSpaceHook.h"
 #include "ReverieCoreUndoStore.h"
 #include "RenderLockGate.h"
@@ -96,6 +97,7 @@ bool ReverieCore::newDocument(int width, int height, bool infiniteCanvas)
     // (Android task restore) a new document must not inherit the previous
     // document's stroke buffer / painter / undo snapshots - that left stale
     // devices bound and made painting fail on the second open.
+    reverie::clearLayerProperties();  // 换文档: 附加属性按节点指针索引, 不能跨文档残留
     endStrokeBatch();               // delete m_strokePainter
     m_strokeDevice = nullptr;
     m_strokeSamples.clear();
@@ -449,25 +451,25 @@ void ReverieCore::syncLayersFromImage()
                     entry.strokeColor = old.strokeColor;
                     entry.strokePosition = old.strokePosition;
                     entry.strokeOpacity = old.strokeOpacity;
-                } else if (node->property("reverie_is_stroke").toBool()) {
+                } else if (reverie::layerProperty(&*node, "reverie_is_stroke").toBool()) {
                     entry.isStrokeLayer = true;
-                    entry.strokeSize = node->property("reverie_stroke_size").toInt();
-                    entry.strokeColor = node->property("reverie_stroke_color").toUInt();
-                    entry.strokePosition = node->property("reverie_stroke_pos").toInt();
-                    entry.strokeOpacity = node->property("reverie_stroke_opacity").toInt();
+                    entry.strokeSize = reverie::layerProperty(&*node, "reverie_stroke_size").toInt();
+                    entry.strokeColor = reverie::layerProperty(&*node, "reverie_stroke_color").toUInt();
+                    entry.strokePosition = reverie::layerProperty(&*node, "reverie_stroke_pos").toInt();
+                    entry.strokeOpacity = reverie::layerProperty(&*node, "reverie_stroke_opacity").toInt();
                 }
 
                 if (isGroup) {
                     entry.nodeType = NodeTypeGroup;
                 } else if (dynamic_cast<KisAdjustmentLayer *>(l)) {
                     entry.nodeType = NodeTypeAdjustment;
-                } else if (dynamic_cast<KisGeneratorLayer *>(l) || node->property("reverie_is_fill").toBool()) {
+                } else if (dynamic_cast<KisGeneratorLayer *>(l) || reverie::layerProperty(&*node, "reverie_is_fill").toBool()) {
                     entry.nodeType = NodeTypeFill;
                 } else if (dynamic_cast<KisCloneLayer *>(l)) {
                     entry.nodeType = NodeTypeClone;
                 } else if (entry.isStrokeLayer) {
                     entry.nodeType = NodeTypeStroke;
-                } else if (node->property("reverie_is_transparency_mask").toBool()) {
+                } else if (reverie::layerProperty(&*node, "reverie_is_transparency_mask").toBool()) {
                     entry.nodeType = NodeTypeTransparencyMask;
                     entry.depth = depth + 1;
                 } else {
@@ -487,11 +489,11 @@ void ReverieCore::syncLayersFromImage()
                 }
 
                 if (entry.isStrokeLayer) {
-                    node->setProperty("reverie_is_stroke", true);
-                    node->setProperty("reverie_stroke_size", entry.strokeSize);
-                    node->setProperty("reverie_stroke_color", entry.strokeColor);
-                    node->setProperty("reverie_stroke_pos", entry.strokePosition);
-                    node->setProperty("reverie_stroke_opacity", entry.strokeOpacity);
+                    reverie::setLayerProperty(&*node, "reverie_is_stroke", true);
+                    reverie::setLayerProperty(&*node, "reverie_stroke_size", entry.strokeSize);
+                    reverie::setLayerProperty(&*node, "reverie_stroke_color", entry.strokeColor);
+                    reverie::setLayerProperty(&*node, "reverie_stroke_pos", entry.strokePosition);
+                    reverie::setLayerProperty(&*node, "reverie_stroke_opacity", entry.strokeOpacity);
                 }
                 m_layers.append(entry);
             } else if (KisMask *m = dynamic_cast<KisMask *>(node.data())) {
@@ -574,6 +576,9 @@ void ReverieCore::syncLayersFromImage()
     bumpKeyframeThumbGen();
     // 结构重排可能让"当前层"索引变化, 重放洋葱皮渲染门 (只搬开关, 零开销)
     applyOnionSkinGate(false);
+    // 注意: 这里刻意不裁剪附加属性条目。撤销"删除图层"时 Krita 会复用同一个节点
+    // 指针, 若在删层后的 sync 就把条目裁掉, undo 回来的描边/填充标记就丢了。
+    // 条目只在文档切换/关闭时整体清空 (见 clearLayerProperties)。
 }
 
 void ReverieCore::bumpLayerThumbGen(KisNode *node)

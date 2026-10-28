@@ -8,6 +8,7 @@
  * ReverieCoreInternal.h, public API in ReverieCore.h)
  * ============================================================ */
 #include "ReverieCoreInternal.h"
+#include "ReverieCoreLayerExtras.h"
 #include "ReverieCoreUndoStore.h"
 #include <QXmlStreamReader>
 #include <QXmlStreamWriter>
@@ -2043,7 +2044,7 @@ static bool loadKraNodesDom(const QDomElement &parentElem,
         } else {
             KisPaintLayerSP pl = new KisPaintLayer(image, name, opacity, cs);
             if (isMask) {
-                pl->setProperty("reverie_is_transparency_mask", true);
+                reverie::setLayerProperty(&*pl, "reverie_is_transparency_mask", true);
             }
             // offset 必须先于像素写回生效: LayerPixelLoader 用画布坐标写像素
             // (convertFromQImage), 若 offset 晚到, 内容会被再平移一次 (见 t35 实证)。
@@ -2070,7 +2071,7 @@ static bool loadKraNodesDom(const QDomElement &parentElem,
                 node->setY(el.attribute("y", "0").toInt());
             }
             if (isMask) {
-                node->setProperty("reverie_is_transparency_mask", true);
+                reverie::setLayerProperty(&*node, "reverie_is_transparency_mask", true);
             }
 
             if (KisLayer *l = dynamic_cast<KisLayer *>(node.data())) {
@@ -2158,7 +2159,7 @@ static bool loadKraNodesDom(const QDomElement &parentElem,
                         if (mName.isEmpty()) mName = QStringLiteral("蒙版");
                         const int mOpacity = qBound(0, childMask.attribute("opacity", "255").toInt(), 255);
                         KisPaintLayerSP tmask = new KisPaintLayer(image, mName, mOpacity, cs);
-                        tmask->setProperty("reverie_is_transparency_mask", true);
+                        reverie::setLayerProperty(&*tmask, "reverie_is_transparency_mask", true);
                         // offset 必须先于像素写回 (见上方 paintlayer 分支说明)
                         tmask->setX(childMask.attribute("x", "0").toInt());
                         tmask->setY(childMask.attribute("y", "0").toInt());
@@ -2525,11 +2526,11 @@ bool ReverieCore::loadRevp(const QString &path)
                     m_layers[targetIdx].strokePosition = layerObj.contains("strokePosition") ? layerObj["strokePosition"].toInt(0) : 0;
                     m_layers[targetIdx].strokeOpacity = layerObj.contains("strokeOpacity") ? layerObj["strokeOpacity"].toInt(100) : 100;
                     if (m_layers[targetIdx].node) {
-                        m_layers[targetIdx].node->setProperty("reverie_is_stroke", true);
-                        m_layers[targetIdx].node->setProperty("reverie_stroke_size", m_layers[targetIdx].strokeSize);
-                        m_layers[targetIdx].node->setProperty("reverie_stroke_color", m_layers[targetIdx].strokeColor);
-                        m_layers[targetIdx].node->setProperty("reverie_stroke_pos", m_layers[targetIdx].strokePosition);
-                        m_layers[targetIdx].node->setProperty("reverie_stroke_opacity", m_layers[targetIdx].strokeOpacity);
+                        reverie::setLayerProperty(&*m_layers[targetIdx].node, "reverie_is_stroke", true);
+                        reverie::setLayerProperty(&*m_layers[targetIdx].node, "reverie_stroke_size", m_layers[targetIdx].strokeSize);
+                        reverie::setLayerProperty(&*m_layers[targetIdx].node, "reverie_stroke_color", m_layers[targetIdx].strokeColor);
+                        reverie::setLayerProperty(&*m_layers[targetIdx].node, "reverie_stroke_pos", m_layers[targetIdx].strokePosition);
+                        reverie::setLayerProperty(&*m_layers[targetIdx].node, "reverie_stroke_opacity", m_layers[targetIdx].strokeOpacity);
                     }
                 }
             }

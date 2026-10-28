@@ -166,7 +166,13 @@ lib/libkritadefaultpaintops_static.a` 刷新它再链。
    ninja 会跳过 moc 重生成，报「no member named X in ...」的假错误。用
    `git ls-files -z | xargs -0 touch` 刷新源码时间戳再编（代价是近似全量重编）。
 
-## 6. 版本线
+## 6. 与核心拆分的关系
+
+`docs/plans/CORE-SPLIT.md` 里把应用侧核心拆成独立 `libreverie_core.so`（状态所有权收敛）。
+该工作**不需要** fork 再改 Krita，只换应用侧边界；唯一交叉点是 P2（引擎侧 `reverie_*`
+影子属性并进结构体），届时同样用 `scripts/check_krita_sync.sh` 验证契约不受影响。
+
+## 7. 版本线
 
 - 2026-07-26 之前：基线 `a4d196ef`（6.1.0-prealpha）
 - 2026-10-27：同步到 `72d3b1e3`（6.1.0-prealpha，+529 提交），合并 13 个双方都改过的文件、

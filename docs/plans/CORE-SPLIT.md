@@ -217,6 +217,24 @@ Kotlin 侧表现层把 `LayerUiState` 换成「快照 + diff」：`rev` 变了�
 描边层参数、透明度蒙版、克隆图层后的标记保持 —— 这些路径需要带相应图层的工程，当前
 测试工程只有普通颜料层。
 
+### P1c 复核结论（2026-10-29）：**不做**
+
+原计划"图层增删/属性改走 `rp_cmd_*`"的前提是"Kotlin 先改自己的 state 再通知引擎"。
+复核实际写入路径后确认这个前提不成立 —— 写入早就是**引擎优先**：
+
+```kotlin
+// PaintViewModelLayers.kt: addLayer()
+runCore(after = { clearLayerSelection(); notifyLayerChanged() }) {
+    ReverieCoreBridge.addLayer(defaultName)   // 先动引擎
+}                                             // after: 再从快照刷新镜像
+```
+
+`notifyLayerChanged()` → `syncLayersFromNative()` → 快照，UI 从来不乐观更新。因此把 50 来个写操作
+搬到新的 C ABI 只是换接口形状，行为零变化、回归面反而变大 —— 记为**不做**。
+
+如果将来要让写操作在渲染线程批量执行、免掉 JNI 逐条编组，再回来做 `rp_cmd_*`（届时它是性能需求，
+不是正确性需求）。
+
 ## 5. 不做的事（避免过度设计）
 
 - 不把 Krita 类型暴露到 C ABI，也不做「C++ 头文件包装层」（那只是换名字）

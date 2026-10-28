@@ -20,6 +20,7 @@
 | 0007 | `fix-mypaint-Android-dlopen` | MyPaint 传感器连接改为懒初始化，修复 Android 上 dlopen 阶段崩溃 |
 | 0008 | `fix-build-kis_lockless_stack.h-QtGlobal-Qt-6.6` | `kis_lockless_stack.h` 补 `<QtGlobal>`，修 Qt 6.6.3 下 `Q_DISABLE_COPY` 未定义 |
 | 0009 | `fix-android-kritaui` | Android 视频编码器改用空实现桩（无 MLT/FFmpeg），修复 `libkritaui.so` 链接失败 |
+| 0010 | `docs-REVERIE-PATCHES.md` | 在 fork 根目录加补丁层说明（提交清单 + 稳定契约） |
 
 ## 应用与重建
 
@@ -35,6 +36,11 @@ git am /path/to/ReveriePaint-native/patches/krita/*.patch
 ```bash
 ./scripts/build_native.sh     # 内部走 gradle -PbuildNative + CMake
 ```
+
+## 配套文件
+
+- `HOOKS.md`：按 A/B/C 三类列全每个被改动的上游文件、改了什么、冲突时保谁
+- `hooks.txt`：机器可读的「补丁触碰文件」清单，`scripts/check_krita_sync.sh` 用它判断冲突是否越界
 
 ## 注意
 

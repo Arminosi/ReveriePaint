@@ -28,6 +28,17 @@
 
 ## 2. 同步流程
 
+**第 0 步（必做）**：跑体检脚本，它会做 3-way 合并预演 + 补丁契约检查：
+
+```bash
+./scripts/check_krita_sync.sh          # 默认 ~/Projects/krita-source + origin/master
+./scripts/check_krita_sync.sh --no-fetch --fork reverie-android~3   # 负向自测：应报 LOST
+```
+
+通过后再动手，冲突只会落在 `patches/krita/HOOKS.md` 记录的文件上；不通过就按 HOOKS 的策略处理。
+改完补丁后同样再跑一次，确认契约符号还在（剪切蒙版入口、静态注册、QtGlobal 修补、
+视频编码桩、LibAV 禁用段等 30 项断言）。
+
 ```bash
 cd ~/Projects/krita-source
 git -c tag.gpgSign=false tag -f pre-sync-$(date +%Y%m%d) HEAD   # 安全锚点
@@ -159,4 +170,8 @@ lib/libkritadefaultpaintops_static.a` 刷新它再链。
 
 - 2026-07-26 之前：基线 `a4d196ef`（6.1.0-prealpha）
 - 2026-10-27：同步到 `72d3b1e3`（6.1.0-prealpha，+529 提交），合并 13 个双方都改过的文件、
-  2 处手工解冲突，历史整理为 7 个线性提交并删除 `feat/clipping-mask`
+  2 处手工解冲突，历史整理为线性提交并删除 `feat/clipping-mask`
+- 2026-10-27 晚：补丁层收敛 —— fork 内新增 `REVERIE-PATCHES.md`（10 个提交，含该文档本身），
+  应用仓库新增 `patches/krita/HOOKS.md`（按 A/B/C 分类的逐文件冲突策略）、
+  `patches/krita/hooks.txt`（机器清单）与 `scripts/check_krita_sync.sh`（合并预演 + 30 项契约断言）；
+  预编译库同步到新引擎并在平板 OPD2413 上验证启动渲染正常

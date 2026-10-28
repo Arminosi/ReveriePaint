@@ -120,6 +120,16 @@ object ReverieCoreBridge {
 
     external fun layerCount(): Int
 
+    // ---- 图层只读快照 (P0, 见 docs/plans/CORE-SPLIT.md) ----
+    // 0=关闭 1=比对 2=用快照结果, 由 native 读 debug.reverie.snapshot 决定
+    external fun nativeSnapshotMode(): Int
+
+    /** 快照字节数 (header + n*152), 失败返回 -1 */
+    external fun nativeSnapshotSize(): Int
+
+    /** 把快照写进直接缓冲, 返回 rev; 失败返回 -1 */
+    external fun nativeSnapshotFill(buffer: java.nio.ByteBuffer): Int
+
     external fun layerName(index: Int): String
 
     external fun setLayerBlendMode(

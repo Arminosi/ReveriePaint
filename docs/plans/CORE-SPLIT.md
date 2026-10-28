@@ -110,6 +110,22 @@ Kotlin 侧表现层把 `LayerUiState` 换成「快照 + diff」：`rev` 变了�
 
 估算：P0 1~2 天；P1 每域 0.5~2 天（笔画最重）；P2/P3 各 1~2 天。总计 1~2 周，期间不分叉 UI。
 
+### P0 进展（2026-10-28）
+
+已落地（代码在应用侧，未改动 Krita fork）：
+
+| 文件 | 内容 |
+|---|---|
+| `app/src/main/cpp/reverie_core.h` | C ABI：`rp_doc_get` / `rp_doc_snapshot` / `rp_snapshot_release` / `rp_snapshot_layer`，POD `rp_layer_snapshot`（152 字节定长，字段偏移写死在头文件里，Kotlin 按同偏移解析） |
+| `app/src/main/cpp/ReverieCoreApi.cpp` | 快照实现：逐项复用引擎既有访问器（`layerId/layerName/layerVisible/…/getLayerStrokeParams`），与 Kotlin 旧路径同源，保证可逐字段比对 |
+| `app/src/main/cpp/reverie_jni_snapshot.cpp` | `nativeSnapshotMode/Size/Fill` 三个 JNI 入口，快照写进 DirectByteBuffer，一次调用替代 n×20 次 JNI |
+| `core/LayerSnapshot.kt` | 解析 + 逐字段 diff + 时序统计，日志 tag `ReverieSnapshot` |
+| `PaintViewModel.syncLayersFromNative()` | 探针接入：`debug.reverie.snapshot=1` 只比对，`=2` 用快照结果替换旧路径；关闭时只多一次返回 0 的 JNI 调用 |
+
+验收方式：`adb shell setprop debug.reverie.snapshot 1` 后打开任意工程，看
+`ReverieSnapshot: rev=N equal (legacy=Xus snapshot=Yus)`；出现 `DIFF` 即列出字段差异。
+当前状态：Kotlin / C++ 编译通过、APK 构建通过；真机等价性日志待设备空闲时补验。
+
 ## 5. 不做的事（避免过度设计）
 
 - 不把 Krita 类型暴露到 C ABI，也不做「C++ 头文件包装层」（那只是换名字）

@@ -6319,6 +6319,8 @@ class PaintViewModel : ViewModel() {
     /** Mirror all native layer state into [layers] / [currentLayerIndex].
      * Must run on the main thread after any C++ layer mutation. */
     internal fun syncLayersFromNative() {
+        val probeMode = LayerSnapshotProbe.mode
+        val probeStartNs = if (probeMode != 0) System.nanoTime() else 0L
         val n = ReverieCoreBridge.layerCount()
         // Solo mode is a render-time filter: rows outside the keep set are
         // shown as hidden (eye off) in the panel while solo is active, but the
@@ -6362,7 +6364,20 @@ class PaintViewModel : ViewModel() {
                 ),
             )
         }
-        layers = list
+        if (probeMode == 0) {
+            layers = list
+        } else {
+            val legacyUs = (System.nanoTime() - probeStartNs) / 1000
+            val t0 = System.nanoTime()
+            val page = LayerSnapshotProbe.read()
+            val snapshotUs = (System.nanoTime() - t0) / 1000
+            if (page != null) {
+                LayerSnapshotProbe.reportDiff(page.rev, legacyUs, snapshotUs, LayerSnapshotProbe.diff(list, page))
+                layers = if (probeMode >= 2) page.layers.map(LayerSnapshotProbe::toUiState) else list
+            } else {
+                layers = list
+            }
+        }
         syncStoryboardTrackFromNative()
         currentLayerIndex = ReverieCoreBridge.currentLayerIndex()
         if (selectedLayerIndices.isNotEmpty()) {

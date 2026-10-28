@@ -220,6 +220,8 @@ endif()
 add_library(reverie_jni SHARED
     reverie_jni_core.cpp
     reverie_jni_layers.cpp
+    reverie_jni_snapshot.cpp
+    ReverieCoreApi.cpp
     reverie_jni_filters.cpp
     reverie_jni_selection.cpp
     reverie_jni_brush.cpp

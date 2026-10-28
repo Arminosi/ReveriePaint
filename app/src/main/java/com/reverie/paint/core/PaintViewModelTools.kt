@@ -2287,6 +2287,9 @@ internal fun PaintViewModel.copyOrCutSelection(cut: Boolean, toNewLayer: Boolean
     }
 
     if (toNewLayer) {
+        // 新层插在源层上方, 插入之后索引会整体错位: 缩略图重取按图层 id 走,
+        // 先把源层 id 记下来 (索引到那时已经指向别人了)
+        val srcLayerId = layers.getOrNull(currentLayerIndex)?.id
         var success = false
         runCore(render = true, after = {
             if (!success) {
@@ -2294,6 +2297,15 @@ internal fun PaintViewModel.copyOrCutSelection(cut: Boolean, toNewLayer: Boolean
                 return@runCore
             }
             syncLayersFromNative()
+            // 这一步动了两层的像素: 源层被抠掉一块、新层多了内容。缩略图必须跟着重取,
+            // 否则图层面板 / 快捷图层小窗会停在"抠之前"的旧图上, 新层干脆是空白格 ——
+            // 复制完看着像没生效 (实测 1.6.1 复现)。
+            // 只重取这两层、不做全量强刷: 全量渲染会排在紧随其后的 contentBounds() 前面,
+            // 上百层的大工程能把它的 120ms 预算吃光, 变换框就退回整张画布了。
+            val thumbIds = setOfNotNull(srcLayerId, layers.getOrNull(currentLayerIndex)?.id)
+            if (thumbIds.isNotEmpty()) {
+                refreshLayerThumbs(force = layerThumbsVisible, onlyLayerIds = thumbIds)
+            }
             selectedLayerIndices = emptySet()
             selectionMask = null
             hasSelection = false
@@ -2314,8 +2326,11 @@ internal fun PaintViewModel.copyOrCutSelection(cut: Boolean, toNewLayer: Boolean
             }
         }
     } else {
-        val bounds = contentBounds()
-        if (bounds == null || bounds[2] <= 0 || bounds[3] <= 0) {
+        // 空选区守卫: 选区内一个像素都没有时不要把用户丢进一个空变换会话。
+        // 不能省这一步 —— 变换工具自己也会算一次内容边界, 但它区分不出"选区内没像素",
+        // 会退而在整张画布上开框, 用户一动就把整层都带走了。
+        val contentRect = contentBounds()
+        if (contentRect == null || contentRect[2] <= 0 || contentRect[3] <= 0) {
             showActionToast(R.string.toast_selection_empty_pixels, R.drawable.ic_lasso)
             return
         }

@@ -141,6 +141,29 @@ Kotlin 侧表现层把 `LayerUiState` 换成「快照 + diff」：`rev` 变了�
 稳态已优化为**一次 JNI 调用**：`nativeSnapshotFill` 容量不足时返回 `-needed`，Kotlin 扩容后
 重试，避免每次同步都先查一次大小（`nativeSnapshotSize` 会完整建一次快照，不能放在热路径）。
 
+### P0.5 进展（2026-10-28 晚）：拆成两个 so
+
+`app/src/main/cpp/CMakeLists.txt` 现在是两个 target：
+
+| target | 内容 | 产物 |
+|---|---|---|
+| `reverie_core` | 全部 `ReverieCore*.cpp` + PSD 解码源 + 掩膜渲染定制 + `ReverieCoreApi.cpp`（C ABI）+ `ReverieCoreInstance.cpp`（单例与 Qt 初始化） | `libreverie_core.so` |
+| `reverie_jni` | 8 个 `reverie_jni_*.cpp` + `reverie_jni_snapshot.cpp`，只做 Java 类型 ↔ C/C++ 搬运 | `libreverie_jni.so` |
+
+`reverie_jni` 用 `NEEDED libreverie_core.so` 依赖核心库，两个 .so 都进 APK。
+
+验证（同机、实机）：
+
+| 检查 | 结果 |
+|---|---|
+| `readelf -d libreverie_jni.so` | `NEEDED` 里有 `libreverie_core.so` |
+| 符号归属 | jni 侧 342 个 `Java_com_reverie_*`、core 侧 **0** 个；core 导出 `core()` 与 `rp_doc_snapshot` |
+| 运行时映射 | `/proc/<pid>/maps` 同时出现 `libreverie_jni.so` 与 `libreverie_core.so` |
+| 功能 | 启动、打开工程、图层快照探针仍 `equal`，无 `UnsatisfiedLinkError` |
+| strip 后体积 | jni **234 KB** + core **4.68 MB**（合计与拆前单个 4.8 MB 相当，边界没增加体积） |
+
+这一步纯换边界、未改动任何引擎语义，Krita fork 依然零改动。
+
 ## 5. 不做的事（避免过度设计）
 
 - 不把 Krita 类型暴露到 C ABI，也不做「C++ 头文件包装层」（那只是换名字）

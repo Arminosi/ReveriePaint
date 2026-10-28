@@ -217,17 +217,9 @@ if(NOT REVERIE_MASKING_FLOAT16)
     file(WRITE ${REVERIE_MASK_FACTORY} "${REVERIE_MASK_FACTORY_TEXT}")
 endif()
 
-add_library(reverie_jni SHARED
-    reverie_jni_core.cpp
-    reverie_jni_layers.cpp
-    reverie_jni_snapshot.cpp
-    ReverieCoreApi.cpp
-    reverie_jni_filters.cpp
-    reverie_jni_selection.cpp
-    reverie_jni_brush.cpp
-    reverie_jni_tools.cpp
-    reverie_jni_io.cpp
-    reverie_jni_animation.cpp
+# 核心库: 引擎实现 (不含任何 Java_ 符号)。JNI 层通过 NEEDED 依赖它,
+# 这样「Kotlin <-> 引擎」的边界固定在 C ABI (reverie_core.h) 上。
+add_library(reverie_core SHARED
     ReverieCoreDocument.cpp
     ReverieCoreLayers.cpp
     ReverieCoreLayerOps.cpp
@@ -255,6 +247,8 @@ add_library(reverie_jni SHARED
     ReverieCoreIO.cpp
     ReverieCoreIccData.cpp
     ReverieCoreColorSpaceHook.cpp
+    ReverieCoreApi.cpp
+    ReverieCoreInstance.cpp
     ReverieCrashHandler.cpp
     ${KRITA_SRC_DIR}/plugins/impex/psd/psd_colormode_block.cpp
     ${KRITA_SRC_DIR}/plugins/impex/psd/psd_image_data.cpp
@@ -265,7 +259,20 @@ add_library(reverie_jni SHARED
     ${REVERIE_MASK_FACTORY}
 )
 
-target_include_directories(reverie_jni PRIVATE
+# JNI 薄层: 只做 Java 类型与 C/C++ 之间的搬运
+add_library(reverie_jni SHARED
+    reverie_jni_core.cpp
+    reverie_jni_layers.cpp
+    reverie_jni_snapshot.cpp
+    reverie_jni_filters.cpp
+    reverie_jni_selection.cpp
+    reverie_jni_brush.cpp
+    reverie_jni_tools.cpp
+    reverie_jni_io.cpp
+    reverie_jni_animation.cpp
+)
+
+set(REVERIE_INCLUDE_DIRS
     ${KRITA_INCLUDES}
     ${QT_ANDROID_DIR}/include
     ${QT_ANDROID_DIR}/include/QtCore
@@ -289,37 +296,41 @@ set(LINK_DIRS
     ${DEPS_DIR}/lib
     ${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/${NDK_TARGET_TRIPLE}/24
 )
-target_link_directories(reverie_jni PRIVATE ${LINK_DIRS})
 
-# 16KB page size alignment for Android 15+ compatibility
-target_link_options(reverie_jni PRIVATE "-Wl,-z,max-page-size=16384")
+foreach(_tgt reverie_core reverie_jni)
+    target_include_directories(${_tgt} PRIVATE ${REVERIE_INCLUDE_DIRS})
+    target_link_directories(${_tgt} PRIVATE ${LINK_DIRS})
+    # 16KB page size alignment for Android 15+ compatibility
+    target_link_options(${_tgt} PRIVATE "-Wl,-z,max-page-size=16384")
+    target_link_libraries(${_tgt}
+        ${KRITA_LIBS}
+        ${QT_LIBS}
+        ${DEPS_DIR}/lib/libKF6I18n.so
+        ${DEPS_DIR}/lib/libKF6CoreAddons.so
+        ${DEPS_DIR}/lib/libKF6WidgetsAddons.so
+        ${DEPS_DIR}/lib/libKF6ItemViews.so
+        ${DEPS_DIR}/lib/libKF6Completion.so
+        ${DEPS_DIR}/lib/libKF6GuiAddons.so
+        ${DEPS_DIR}/lib/libKF6ConfigCore.so
+        ${DEPS_DIR}/lib/libmypaint.so
+        ${DEPS_DIR}/lib/libjson-c.so
+        z
+        log
+        android
+        jnigraphics
+    )
+    # Android platform libs
+    target_link_libraries(${_tgt} -lz -lpng16 -lexpat)
+endforeach()
 
-target_link_libraries(reverie_jni
-    ${KRITA_LIBS}
-    ${QT_LIBS}
-    ${DEPS_DIR}/lib/libKF6I18n.so
-    ${DEPS_DIR}/lib/libKF6CoreAddons.so
-    ${DEPS_DIR}/lib/libKF6WidgetsAddons.so
-    ${DEPS_DIR}/lib/libKF6ItemViews.so
-    ${DEPS_DIR}/lib/libKF6Completion.so
-    ${DEPS_DIR}/lib/libKF6GuiAddons.so
-    ${DEPS_DIR}/lib/libKF6ConfigCore.so
-    ${DEPS_DIR}/lib/libmypaint.so
-    ${DEPS_DIR}/lib/libjson-c.so
-    z
-    log
-    android
-    jnigraphics
-)
-
-# Android platform libs
-target_link_libraries(reverie_jni
-    -lz -lpng16 -lexpat
-)
+# JNI 只依赖核心库导出的符号 (core() / ReverieCore / C ABI)
+target_link_libraries(reverie_jni reverie_core)
 
 add_custom_command(TARGET reverie_jni POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         $<TARGET_FILE:reverie_jni>
         ${CMAKE_CURRENT_SOURCE_DIR}/../jniLibs/${ANDROID_ABI}/libreverie_jni.so
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_FILE:reverie_core>
+        ${CMAKE_CURRENT_SOURCE_DIR}/../jniLibs/${ANDROID_ABI}/libreverie_core.so
 )
-

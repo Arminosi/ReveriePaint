@@ -123,8 +123,23 @@ Kotlin 侧表现层把 `LayerUiState` 换成「快照 + diff」：`rev` 变了�
 | `PaintViewModel.syncLayersFromNative()` | 探针接入：`debug.reverie.snapshot=1` 只比对，`=2` 用快照结果替换旧路径；关闭时只多一次返回 0 的 JNI 调用 |
 
 验收方式：`adb shell setprop debug.reverie.snapshot 1` 后打开任意工程，看
-`ReverieSnapshot: rev=N equal (legacy=Xus snapshot=Yus)`；出现 `DIFF` 即列出字段差异。
-当前状态：Kotlin / C++ 编译通过、APK 构建通过；真机等价性日志待设备空闲时补验。
+`ReverieSnapshot: rev=N layers=K equal (legacy=Xus snapshot=Yus)`；出现 `DIFF` 即列出字段差异。
+
+**2026-10-28 真机实测（OPD2413 / Android 16，arm64-v8a）**
+
+| 场景 | 结果 |
+|---|---|
+| 模式 1（只比对） | `rev=2 layers=2 equal (legacy=114~123us snapshot=122~204us)`，23 字段零差异 |
+| 模式 2（用快照当面板数据） | 图层列表/缩略图/可见性/名称全部正常，日志同样 `equal` |
+| 单测 | `SnapshotCodecTest` 3 项（字段偏移、solo 遮蔽、坏魔数/截断拒绝）全过；C 侧 `offsetof` 用 g++ 编出来核对过（sizeof=152，偏移与头文件注释一致） |
+
+性能要诚实说：**小工程（2 层）两条路径都在 0.1~0.2ms，快照并不更快** —— 旧路径每层约
+20 次 JNI（≈3µs/次），新路径一次调用但要拷 POD + 解析；收益随图层数线性放大
+（20 层时旧路径约 1.4ms，新路径仍是「一次调用 + 20 条定长拷贝」）。P0 的真正价值不是这点
+耗时，而是**图层状态从此只有一个生产者**（快照由引擎生成，Kotlin 只解析）。
+
+稳态已优化为**一次 JNI 调用**：`nativeSnapshotFill` 容量不足时返回 `-needed`，Kotlin 扩容后
+重试，避免每次同步都先查一次大小（`nativeSnapshotSize` 会完整建一次快照，不能放在热路径）。
 
 ## 5. 不做的事（避免过度设计）
 

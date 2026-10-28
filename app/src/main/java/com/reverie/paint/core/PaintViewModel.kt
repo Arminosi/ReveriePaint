@@ -6372,7 +6372,7 @@ class PaintViewModel : ViewModel() {
             val page = LayerSnapshotProbe.read()
             val snapshotUs = (System.nanoTime() - t0) / 1000
             if (page != null) {
-                LayerSnapshotProbe.reportDiff(page.rev, legacyUs, snapshotUs, LayerSnapshotProbe.diff(list, page))
+                LayerSnapshotProbe.reportDiff(page.rev, page.layers.size, legacyUs, snapshotUs, LayerSnapshotProbe.diff(list, page))
                 layers = if (probeMode >= 2) page.layers.map(LayerSnapshotProbe::toUiState) else list
             } else {
                 layers = list

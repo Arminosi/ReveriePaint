@@ -52,80 +52,38 @@ internal data class SnapshotPage(
 internal object LayerSnapshotProbe {
 
     private const val TAG = "ReverieSnapshot"
-    private const val MAGIC = 0x43535052 // "RPSC" little-endian
-    private const val HEADER_BYTES = 32
 
     /** 0 = 关闭, 1 = 只比对, 2 = 用快照结果 (由 native 读系统属性) */
     val mode: Int by lazy { ReverieCoreBridge.nativeSnapshotMode() }
 
-    fun read(): SnapshotPage? {
-        val size = ReverieCoreBridge.nativeSnapshotSize()
-        if (size <= HEADER_BYTES) return null
-        val buffer = ByteBuffer.allocateDirect(size).order(ByteOrder.LITTLE_ENDIAN)
-        val rev = ReverieCoreBridge.nativeSnapshotFill(buffer)
-        if (rev < 0) return null
-        buffer.position(0)
-        if (buffer.int != MAGIC) {
-            Log.w(TAG, "bad magic from native snapshot")
-            return null
-        }
-        buffer.int // abi
-        val snapRev = buffer.int
-        val count = buffer.int
-        val currentLayer = buffer.int
-        val soloActive = buffer.int != 0
-        val stride = buffer.int
-        buffer.position(HEADER_BYTES)
+    /**
+     * 复用的直接缓冲: allocateDirect 本身成本不低(每次几十 µs), 图层同步在滑动笔刷
+     * 参数时会被反复触发, 因此按容量缓存一块, 只在不够大时重新分配。
+     */
+    private var scratch: ByteBuffer? = null
 
-        val layers = ArrayList<SnapshotLayer>(count)
-        for (i in 0 until count) {
-            val base = buffer.position()
-            val id = buffer.getLong(base)
-            val opacity = buffer.getDouble(base + 8)
-            val index = buffer.getInt(base + 16)
-            val nodeType = buffer.getInt(base + 20)
-            val depth = buffer.getInt(base + 24)
-            val colorLabel = buffer.getInt(base + 28)
-            val strokeSize = buffer.getInt(base + 32)
-            val strokePosition = buffer.getInt(base + 36)
-            val strokeOpacity = buffer.getInt(base + 40)
-            val strokeColor = buffer.getInt(base + 44)
-            val fillColor = buffer.getInt(base + 48)
-            val flags = buffer.getInt(base + 52)
-            val name = readCString(buffer, base + 56, 64)
-            val blend = readCString(buffer, base + 120, 32)
-            buffer.position(base + stride)
-            layers.add(
-                SnapshotLayer(
-                    index = index,
-                    id = id,
-                    name = name,
-                    // solo 生效时面板显示由 soloKeep 决定, 与旧路径保持一致
-                    visible = if (soloActive) (flags and FLAG_SOLO_SHADOWED) == 0
-                    else (flags and FLAG_VISIBLE) != 0,
-                    locked = (flags and FLAG_LOCKED) != 0,
-                    alphaLocked = (flags and FLAG_ALPHA_LOCKED) != 0,
-                    isGroup = (flags and FLAG_GROUP) != 0,
-                    nodeType = nodeType,
-                    depth = depth,
-                    colorLabel = colorLabel,
-                    clipped = (flags and FLAG_CLIPPED) != 0,
-                    alphaInherited = (flags and FLAG_ALPHA_INHERITED) != 0,
-                    isBackground = (flags and FLAG_BACKGROUND) != 0,
-                    soloed = (flags and FLAG_SOLOED) != 0,
-                    opacity = opacity,
-                    blendMode = blend,
-                    isStrokeLayer = (flags and FLAG_STROKE) != 0,
-                    strokeSize = strokeSize,
-                    strokeColor = strokeColor,
-                    strokePosition = strokePosition,
-                    strokeOpacity = strokeOpacity,
-                    fillColor = fillColor,
-                    passThrough = (flags and FLAG_PASS_THROUGH) != 0,
-                ),
-            )
+    fun read(): SnapshotPage? {
+        var buffer = scratch
+        if (buffer == null) {
+            val size = ReverieCoreBridge.nativeSnapshotSize()
+            if (size <= SnapshotCodec.HEADER_BYTES) return null
+            buffer = ByteBuffer.allocateDirect(size).order(ByteOrder.LITTLE_ENDIAN)
+            scratch = buffer
         }
-        return SnapshotPage(rev = snapRev, currentLayer = currentLayer, soloActive = soloActive, layers = layers)
+        buffer.clear()
+        var rev = ReverieCoreBridge.nativeSnapshotFill(buffer)
+        if (rev < 0) {
+            // native 返回 -needed: 容量不够, 扩容后重试一次 (图层数变化时才会发生)
+            val needed = -rev
+            if (needed <= SnapshotCodec.HEADER_BYTES) return null
+            buffer = ByteBuffer.allocateDirect(needed).order(ByteOrder.LITTLE_ENDIAN)
+            scratch = buffer
+            rev = ReverieCoreBridge.nativeSnapshotFill(buffer)
+            if (rev < 0) return null
+        }
+        val page = SnapshotCodec.parse(buffer)
+        if (page == null) Log.w(TAG, "bad magic from native snapshot")
+        return page
     }
 
     /** 与旧路径逐字段比对, 返回差异描述 (最多 [limit] 条) */
@@ -195,13 +153,93 @@ internal object LayerSnapshotProbe {
         passThrough = layer.passThrough,
     )
 
-    fun reportDiff(rev: Int, legacyUs: Long, snapshotUs: Long, diffs: List<String>) {
+    fun reportDiff(rev: Int, layers: Int, legacyUs: Long, snapshotUs: Long, diffs: List<String>) {
         if (diffs.isEmpty()) {
-            Log.i(TAG, "rev=$rev equal (legacy=${legacyUs}us snapshot=${snapshotUs}us)")
+            Log.i(TAG, "rev=$rev layers=$layers equal (legacy=${legacyUs}us snapshot=${snapshotUs}us)")
         } else {
-            Log.w(TAG, "rev=$rev DIFF ${diffs.size}+ (legacy=${legacyUs}us snapshot=${snapshotUs}us)")
+            Log.w(TAG, "rev=$rev layers=$layers DIFF ${diffs.size}+ (legacy=${legacyUs}us snapshot=${snapshotUs}us)")
             diffs.forEach { Log.w(TAG, "  $it") }
         }
+    }
+
+}
+
+/**
+ * 快照二进制解析 (纯函数, 无 JNI/Log 依赖, 可 JVM 单测)。
+ *
+ * 布局见 `app/src/main/cpp/reverie_core.h`: header 32 字节, 每层 152 字节定长,
+ * 字段偏移: id@0 opacity@8 index@16 node_type@20 depth@24 color_label@28
+ * stroke_size@32 stroke_position@36 stroke_opacity@40 stroke_color@44
+ * fill_color@48 flags@52 name@56[64] blend_mode@120[32]
+ */
+internal object SnapshotCodec {
+
+    const val HEADER_BYTES = 32
+    const val LAYER_BYTES = 152
+    const val MAGIC = 0x43535052 // "RPSC" little-endian
+    private const val NAME_OFFSET = 56
+    private const val NAME_CAP = 64
+    private const val BLEND_OFFSET = 120
+    private const val BLEND_CAP = 32
+
+    const val FLAG_VISIBLE = 1 shl 0
+    const val FLAG_LOCKED = 1 shl 1
+    const val FLAG_ALPHA_LOCKED = 1 shl 2
+    const val FLAG_GROUP = 1 shl 3
+    const val FLAG_STROKE = 1 shl 4
+    const val FLAG_BACKGROUND = 1 shl 5
+    const val FLAG_SOLOED = 1 shl 6
+    const val FLAG_CLIPPED = 1 shl 7
+    const val FLAG_ALPHA_INHERITED = 1 shl 8
+    const val FLAG_PASS_THROUGH = 1 shl 9
+    const val FLAG_SOLO_SHADOWED = 1 shl 10
+
+    fun parse(buffer: ByteBuffer): SnapshotPage? {
+        buffer.order(ByteOrder.LITTLE_ENDIAN)
+        buffer.position(0)
+        if (buffer.int != MAGIC) return null
+        buffer.int // abi
+        val rev = buffer.int
+        val count = buffer.int
+        val currentLayer = buffer.int
+        val soloActive = buffer.int != 0
+        val stride = buffer.int
+        if (stride < LAYER_BYTES) return null
+        val layers = ArrayList<SnapshotLayer>(count)
+        for (i in 0 until count) {
+            val base = HEADER_BYTES + i * stride
+            if (base + LAYER_BYTES > buffer.capacity()) return null
+            val flags = buffer.getInt(base + 52)
+            layers.add(
+                SnapshotLayer(
+                    index = buffer.getInt(base + 16),
+                    id = buffer.getLong(base),
+                    name = readCString(buffer, base + NAME_OFFSET, NAME_CAP),
+                    visible = if (soloActive) (flags and FLAG_SOLO_SHADOWED) == 0
+                    else (flags and FLAG_VISIBLE) != 0,
+                    locked = (flags and FLAG_LOCKED) != 0,
+                    alphaLocked = (flags and FLAG_ALPHA_LOCKED) != 0,
+                    isGroup = (flags and FLAG_GROUP) != 0,
+                    nodeType = buffer.getInt(base + 20),
+                    depth = buffer.getInt(base + 24),
+                    colorLabel = buffer.getInt(base + 28),
+                    clipped = (flags and FLAG_CLIPPED) != 0,
+                    alphaInherited = (flags and FLAG_ALPHA_INHERITED) != 0,
+                    isBackground = (flags and FLAG_BACKGROUND) != 0,
+                    soloed = (flags and FLAG_SOLOED) != 0,
+                    opacity = buffer.getDouble(base + 8),
+                    blendMode = readCString(buffer, base + BLEND_OFFSET, BLEND_CAP),
+                    isStrokeLayer = (flags and FLAG_STROKE) != 0,
+                    strokeSize = buffer.getInt(base + 32),
+                    strokeColor = buffer.getInt(base + 44),
+                    strokePosition = buffer.getInt(base + 36),
+                    strokeOpacity = buffer.getInt(base + 40),
+                    fillColor = buffer.getInt(base + 48),
+                    passThrough = (flags and FLAG_PASS_THROUGH) != 0,
+                ),
+            )
+        }
+        return SnapshotPage(rev = rev, currentLayer = currentLayer, soloActive = soloActive, layers = layers)
     }
 
     private fun readCString(buffer: ByteBuffer, offset: Int, cap: Int): String {
@@ -211,16 +249,4 @@ internal object LayerSnapshotProbe {
         for (i in bytes.indices) bytes[i] = buffer.get(offset + i)
         return String(bytes, Charsets.UTF_8)
     }
-
-    private const val FLAG_VISIBLE = 1 shl 0
-    private const val FLAG_LOCKED = 1 shl 1
-    private const val FLAG_ALPHA_LOCKED = 1 shl 2
-    private const val FLAG_GROUP = 1 shl 3
-    private const val FLAG_STROKE = 1 shl 4
-    private const val FLAG_BACKGROUND = 1 shl 5
-    private const val FLAG_SOLOED = 1 shl 6
-    private const val FLAG_CLIPPED = 1 shl 7
-    private const val FLAG_ALPHA_INHERITED = 1 shl 8
-    private const val FLAG_PASS_THROUGH = 1 shl 9
-    private const val FLAG_SOLO_SHADOWED = 1 shl 10
 }

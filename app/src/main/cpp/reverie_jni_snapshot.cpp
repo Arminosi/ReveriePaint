@@ -95,7 +95,8 @@ Java_com_reverie_paint_core_ReverieCoreBridge_nativeSnapshotFill(JNIEnv *env, jo
     const int needed = payloadSize(snap);
     if (capacity < needed) {
         rp_snapshot_release(snap);
-        return -1;
+        // 返回负的需求字节数, Kotlin 侧扩容后重试 -> 稳态只需一次 JNI 调用
+        return -needed;
     }
 
     writeHeader(dst, snap);

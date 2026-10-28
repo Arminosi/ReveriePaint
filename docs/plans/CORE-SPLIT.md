@@ -164,6 +164,24 @@ Kotlin 侧表现层把 `LayerUiState` 换成「快照 + diff」：`rev` 变了�
 
 这一步纯换边界、未改动任何引擎语义，Krita fork 依然零改动。
 
+### P1a 进展（2026-10-28 深夜）：图层镜像默认走快照
+
+`syncLayersFromNative()` 现在默认只调一次 `rp_doc_snapshot`，旧的逐项 getter 循环被抽成
+`buildLayerListFromEngine()` 作为兜底与诊断路径。开关语义（`debug.reverie.snapshot`）：
+
+| 值 | 行为 |
+|---|---|
+| 未设置 | **只用快照**（常态，一次 JNI） |
+| `0` | 只用旧路径（出问题时的总开关） |
+| `1` | 旧路径 + 与快照逐字段比对 |
+| `2` | 快照 + 比对（验证快照路径本身） |
+
+快照解析/ABI 校验失败时自动退回旧路径，不会出现空图层面板。
+
+真机验证（OPD2413）：prop=2 时 `rev=2 layers=3 equal (legacy=186us snapshot=206us)`、
+`rev=3 layers=3 equal (59us vs 106us)`；清空属性（默认）后图层面板、缩略图、可见性、
+选层与渲染全部正常；`compileDebugKotlin` 与 1357 项单测通过。
+
 ## 5. 不做的事（避免过度设计）
 
 - 不把 Krita 类型暴露到 C ABI，也不做「C++ 头文件包装层」（那只是换名字）

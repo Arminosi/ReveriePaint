@@ -6343,9 +6343,82 @@ class PaintViewModel : ViewModel() {
 
     /** Mirror all native layer state into [layers] / [currentLayerIndex].
      * Must run on the main thread after any C++ layer mutation. */
+    /**
+     * 把引擎里的图层状态镜像到 [layers] / [currentLayerIndex]。
+     * 必须在每次 C++ 图层变更后的主线程上调用。
+     *
+     * P1: 默认从**引擎生成的只读快照**取数 (一次 JNI 调用), 旧的逐项 getter 路径
+     * 退为兜底与诊断 (见 docs/plans/CORE-SPLIT.md)。开关 `debug.reverie.snapshot`:
+     *   未设置 -> 只用快照 (常态, 最快)
+     *   0      -> 只用旧路径 (出问题时的总开关)
+     *   1      -> 旧路径 + 与快照逐字段比对并打日志
+     *   2      -> 快照 + 比对 (验证快照路径本身)
+     */
     internal fun syncLayersFromNative() {
-        val probeMode = LayerSnapshotProbe.mode
-        val probeStartNs = if (probeMode != 0) System.nanoTime() else 0L
+        val mode = LayerSnapshotProbe.mode
+        val legacyNeeded = mode == 0 || mode == 1 || mode == 2
+        val compare = mode == 1 || mode == 2
+
+        var legacy: List<LayerUiState>? = null
+        var legacyUs = 0L
+        if (legacyNeeded) {
+            val t0 = System.nanoTime()
+            legacy = buildLayerListFromEngine()
+            legacyUs = (System.nanoTime() - t0) / 1000
+        }
+
+        var snapshotUs = 0L
+        var page: SnapshotPage? = null
+        if (mode != 0) {
+            val t0 = System.nanoTime()
+            page = LayerSnapshotProbe.read()
+            snapshotUs = (System.nanoTime() - t0) / 1000
+        }
+
+        // 快照失败 (解析/ABI 不符) 且没有旧路径结果时, 临时退回旧路径, 宁可慢也不能空面板
+        if (page == null && legacy == null) {
+            val t0 = System.nanoTime()
+            legacy = buildLayerListFromEngine()
+            legacyUs = (System.nanoTime() - t0) / 1000
+        }
+
+        layers = when {
+            page != null && mode != 1 -> page.layers.map(LayerSnapshotProbe::toUiState)
+            legacy != null -> legacy
+            else -> emptyList()
+        }
+
+        if (compare && page != null && legacy != null) {
+            LayerSnapshotProbe.reportDiff(
+                page.rev,
+                page.layers.size,
+                legacyUs,
+                snapshotUs,
+                LayerSnapshotProbe.diff(legacy, page),
+            )
+        }
+
+        val n = layers.size
+        syncStoryboardTrackFromNative()
+        currentLayerIndex = ReverieCoreBridge.currentLayerIndex()
+        if (selectedLayerIndices.isNotEmpty()) {
+            selectedLayerIndices = selectedLayerIndices.filter { it in 1 until n }.toSet()
+        }
+
+        // 时间轴"选中轨道"与当前图层强制对齐 (修"创建帧错乱"):
+        // selectedTrack 旧实现只在时间轴 tap 时写入且**永不重置** —— 用户在
+        // 时间轴点过任意一行后, 去图层面板切了别的图层再点"新建帧"/落笔
+        // 自动建帧, 帧会建到上次点过的那条轨道上 (selectedTrackIndex()
+        // 优先读它)。UI 上选中轨道与当前图层本来就是同时设置 (轨道区 tap
+        // 两处都写), 这里把图层面板改层 / undo 删层 / 切换文档等路径也
+        // 收敛到同一状态, 帧的落轨依据从此只有 currentLayerIndex。
+        if (anim.enabled && anim.selectedTrack != currentLayerIndex) {
+            anim.selectedTrack = currentLayerIndex
+        }
+    }
+
+    /** 旧的逐项 getter 路径: 每层约 20 次 JNI 往返 (兜底/诊断用, 不是常态) */
+    private fun buildLayerListFromEngine(): List<LayerUiState> {
         val n = ReverieCoreBridge.layerCount()
         // Solo mode is a render-time filter: rows outside the keep set are
         // shown as hidden (eye off) in the panel while solo is active, but the
@@ -6389,36 +6462,7 @@ class PaintViewModel : ViewModel() {
                 ),
             )
         }
-        if (probeMode == 0) {
-            layers = list
-        } else {
-            val legacyUs = (System.nanoTime() - probeStartNs) / 1000
-            val t0 = System.nanoTime()
-            val page = LayerSnapshotProbe.read()
-            val snapshotUs = (System.nanoTime() - t0) / 1000
-            if (page != null) {
-                LayerSnapshotProbe.reportDiff(page.rev, page.layers.size, legacyUs, snapshotUs, LayerSnapshotProbe.diff(list, page))
-                layers = if (probeMode >= 2) page.layers.map(LayerSnapshotProbe::toUiState) else list
-            } else {
-                layers = list
-            }
-        }
-        syncStoryboardTrackFromNative()
-        currentLayerIndex = ReverieCoreBridge.currentLayerIndex()
-        if (selectedLayerIndices.isNotEmpty()) {
-            selectedLayerIndices = selectedLayerIndices.filter { it in 1 until n }.toSet()
-        }
-
-        // 时间轴"选中轨道"与当前图层强制对齐 (修"创建帧错乱"):
-        // selectedTrack 旧实现只在时间轴 tap 时写入且**永不重置** —— 用户在
-        // 时间轴点过任意一行后, 去图层面板切了别的图层再点"新建帧"/落笔
-        // 自动建帧, 帧会建到上次点过的那条轨道上 (selectedTrackIndex()
-        // 优先读它)。UI 上选中轨道与当前图层本来就是同时设置 (轨道区 tap
-        // 两处都写), 这里把图层面板改层 / undo 删层 / 切换文档等路径也
-        // 收敛到同一状态, 帧的落轨依据从此只有 currentLayerIndex。
-        if (anim.enabled && anim.selectedTrack != currentLayerIndex) {
-            anim.selectedTrack = currentLayerIndex
-        }
+        return list
     }
 
     internal fun isAppContextReady(): Boolean = ::appContext.isInitialized

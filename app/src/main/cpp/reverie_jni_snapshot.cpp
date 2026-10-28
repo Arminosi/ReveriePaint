@@ -10,7 +10,7 @@
  *   header: magic("RPSC") abi rev layer_count current_layer solo_active layer_stride reserved
  *   layers: layer_stride 字节/条, 内容为 rp_layer_snapshot
  *
- * 开关: `setprop debug.reverie.snapshot 1` (只校验) / `2` (用快照取代旧路径)。
+ * 开关: 未设置 = 默认用快照; `0` = 强制旧路径; `1` = 旧路径+比对; `2` = 快照+比对。
  * 关闭时 Kotlin 侧只多一次返回 false 的 JNI 调用, 热路径不受影响。
  */
 
@@ -33,7 +33,8 @@ int snapshotMode()
     if (cached >= 0) return cached;
     char value[PROP_VALUE_MAX] = {0};
     const int len = __system_property_get("debug.reverie.snapshot", value);
-    cached = (len > 0) ? atoi(value) : 0;
+    // 未设置返回 -1: Kotlin 侧据此默认走快照路径 (0 = 强制旧路径, 1/2 = 比对)
+    cached = (len > 0) ? atoi(value) : -1;
     return cached;
 }
 

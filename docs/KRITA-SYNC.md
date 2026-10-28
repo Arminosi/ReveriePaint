@@ -122,6 +122,12 @@ lib/libkritadefaultpaintops_static.a` 刷新它再链。
 `libreverie_jni.so` 也必须换成用新引擎重编的版本（`app/build/intermediates/cxx/Release/*/obj/arm64-v8a/`），
 否则会在运行期和新的 `libkritaui` 行为不一致。
 
+**soname 版本号坑**：新构建出来的 `libkritastore.so` / `libkritaresources.so` 会按 deps 里的
+`libbz2.so.1.0` 记录 NEEDED，而 APK 里只有 `libbz2.so`，真机启动即
+`UnsatisfiedLinkError: dlopen failed: library "libbz2.so.1.0" not found`。复制后用
+`patchelf --replace-needed libbz2.so.1.0 libbz2.so` 改回无版本名，再跑一次依赖闭包检查
+（`readelf -d` 扫全部 NEEDED，注意别只匹配 `.so` 结尾，版本号 soname 会漏掉）。
+
 **已知差异**：上游删除了导出 `KisColorManager` 的 `libkritacolor.so` 插件（新树里没有对应目标），
 当前仍保留旧文件（34KB，新代码不引用它），等真机验证后再决定是否从 `third_party` 和
 `app/src/main/cpp/CMakeLists.txt` 里摘掉。

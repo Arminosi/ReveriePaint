@@ -6347,55 +6347,15 @@ class PaintViewModel : ViewModel() {
      * 把引擎里的图层状态镜像到 [layers] / [currentLayerIndex]。
      * 必须在每次 C++ 图层变更后的主线程上调用。
      *
-     * P1: 默认从**引擎生成的只读快照**取数 (一次 JNI 调用), 旧的逐项 getter 路径
-     * 退为兜底与诊断 (见 docs/plans/CORE-SPLIT.md)。开关 `debug.reverie.snapshot`:
-     *   未设置 -> 只用快照 (常态, 最快)
-     *   0      -> 只用旧路径 (出问题时的总开关)
-     *   1      -> 旧路径 + 与快照逐字段比对并打日志
-     *   2      -> 快照 + 比对 (验证快照路径本身)
+     * P1b: 只从**引擎生成的只读快照**取数 (一次 JNI 调用)。旧的逐项 getter 路径
+     * 与对应的 JNI 已退役; 快照取不到时保持上一次的镜像并限流告警, 不会清空面板。
      */
     internal fun syncLayersFromNative() {
-        val mode = LayerSnapshotProbe.mode
-        val legacyNeeded = mode == 0 || mode == 1 || mode == 2
-        val compare = mode == 1 || mode == 2
-
-        var legacy: List<LayerUiState>? = null
-        var legacyUs = 0L
-        if (legacyNeeded) {
-            val t0 = System.nanoTime()
-            legacy = buildLayerListFromEngine()
-            legacyUs = (System.nanoTime() - t0) / 1000
-        }
-
-        var snapshotUs = 0L
-        var page: SnapshotPage? = null
-        if (mode != 0) {
-            val t0 = System.nanoTime()
-            page = LayerSnapshotProbe.read()
-            snapshotUs = (System.nanoTime() - t0) / 1000
-        }
-
-        // 快照失败 (解析/ABI 不符) 且没有旧路径结果时, 临时退回旧路径, 宁可慢也不能空面板
-        if (page == null && legacy == null) {
-            val t0 = System.nanoTime()
-            legacy = buildLayerListFromEngine()
-            legacyUs = (System.nanoTime() - t0) / 1000
-        }
-
-        layers = when {
-            page != null && mode != 1 -> page.layers.map(LayerSnapshotProbe::toUiState)
-            legacy != null -> legacy
-            else -> emptyList()
-        }
-
-        if (compare && page != null && legacy != null) {
-            LayerSnapshotProbe.reportDiff(
-                page.rev,
-                page.layers.size,
-                legacyUs,
-                snapshotUs,
-                LayerSnapshotProbe.diff(legacy, page),
-            )
+        val page = LayerSnapshotProbe.read()
+        if (page != null) {
+            layers = page.layers.map(LayerSnapshotProbe::toUiState)
+        } else {
+            LayerSnapshotProbe.reportUnavailable()
         }
 
         val n = layers.size
@@ -6417,53 +6377,6 @@ class PaintViewModel : ViewModel() {
         }
     }
 
-    /** 旧的逐项 getter 路径: 每层约 20 次 JNI 往返 (兜底/诊断用, 不是常态) */
-    private fun buildLayerListFromEngine(): List<LayerUiState> {
-        val n = ReverieCoreBridge.layerCount()
-        // Solo mode is a render-time filter: rows outside the keep set are
-        // shown as hidden (eye off) in the panel while solo is active, but the
-        // underlying layer state is untouched
-        val soloKeep = if (ReverieCoreBridge.soloActive()) ReverieCoreBridge.layerSoloKeep().toSet() else null
-        val list = ArrayList<LayerUiState>(n)
-        for (i in 0 until n) {
-            val nodeType = ReverieCoreBridge.layerNodeType(i)
-            val isStroke = nodeType == 6 || ReverieCoreBridge.layerIsStroke(i)
-            val strokeParams = if (isStroke) ReverieCoreBridge.getLayerStrokeParams(i) else null
-            val strokeSize = strokeParams?.getOrNull(0) ?: 6
-            val strokeColor = strokeParams?.getOrNull(1) ?: 0xFF000000.toInt()
-            val strokePosition = strokeParams?.getOrNull(2) ?: 0
-            val strokeOpacity = strokeParams?.getOrNull(3) ?: 100
-            val fillColor = if (nodeType == 2) ReverieCoreBridge.getFillLayerColor(i) else 0xFFFFFFFF.toInt()
-            list.add(
-                LayerUiState(
-                    index = i,
-                    id = ReverieCoreBridge.layerId(i),
-                    name = ReverieCoreBridge.layerName(i),
-                    visible = if (soloKeep != null) i in soloKeep else ReverieCoreBridge.layerVisible(i),
-                    locked = ReverieCoreBridge.layerLocked(i),
-                    alphaLocked = ReverieCoreBridge.layerAlphaLocked(i),
-                    isGroup = ReverieCoreBridge.layerIsGroup(i),
-                    nodeType = nodeType,
-                    depth = ReverieCoreBridge.layerDepth(i),
-                    colorLabel = ReverieCoreBridge.layerColorLabel(i),
-                    clipped = ReverieCoreBridge.layerClipped(i),
-                    alphaInherited = ReverieCoreBridge.layerAlphaInherited(i),
-                    isBackground = ReverieCoreBridge.layerBackground(i),
-                    soloed = ReverieCoreBridge.layerSoloed(i),
-                    opacity = ReverieCoreBridge.layerOpacity(i),
-                    blendMode = ReverieCoreBridge.layerBlendMode(i),
-                    isStrokeLayer = isStroke,
-                    strokeSize = strokeSize,
-                    strokeColor = strokeColor,
-                    strokePosition = strokePosition,
-                    strokeOpacity = strokeOpacity,
-                    fillColor = fillColor,
-                    passThrough = ReverieCoreBridge.layerIsGroup(i) && ReverieCoreBridge.groupPassThrough(i),
-                ),
-            )
-        }
-        return list
-    }
 
     internal fun isAppContextReady(): Boolean = ::appContext.isInitialized
 

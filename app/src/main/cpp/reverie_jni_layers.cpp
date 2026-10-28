@@ -181,12 +181,6 @@ Java_com_reverie_paint_core_ReverieCoreBridge_layerIsGroup(JNIEnv *, jobject, ji
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_reverie_paint_core_ReverieCoreBridge_layerNodeType(JNIEnv *, jobject, jint index)
-{
-    return core()->layerNodeType(index);
-}
-
-extern "C" JNIEXPORT jint JNICALL
 Java_com_reverie_paint_core_ReverieCoreBridge_layerDepth(JNIEnv *, jobject, jint index)
 {
     return core()->layerDepth(index);
@@ -342,17 +336,6 @@ Java_com_reverie_paint_core_ReverieCoreBridge_soloActive(JNIEnv *, jobject)
     return core()->soloActive();
 }
 
-extern "C" JNIEXPORT jintArray JNICALL
-Java_com_reverie_paint_core_ReverieCoreBridge_layerSoloKeep(JNIEnv *env, jobject)
-{
-    const QVector<int> idx = core()->soloKeepIndices();
-    jintArray arr = env->NewIntArray(idx.size());
-    if (arr && !idx.isEmpty()) {
-        env->SetIntArrayRegion(arr, 0, idx.size(), reinterpret_cast<const jint *>(idx.constData()));
-    }
-    return arr;
-}
-
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_reverie_paint_core_ReverieCoreBridge_layerSoloRawMode(JNIEnv *, jobject)
 {
@@ -423,12 +406,6 @@ extern "C" JNIEXPORT jboolean JNICALL
 Java_com_reverie_paint_core_ReverieCoreBridge_setGroupPassThrough(JNIEnv *, jobject, jint index, jboolean passThrough)
 {
     return core()->setGroupPassThrough(index, passThrough == JNI_TRUE);
-}
-
-extern "C" JNIEXPORT jboolean JNICALL
-Java_com_reverie_paint_core_ReverieCoreBridge_groupPassThrough(JNIEnv *, jobject, jint index)
-{
-    return core()->groupPassThrough(index);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
@@ -596,12 +573,6 @@ Java_com_reverie_paint_core_ReverieCoreBridge_setFillLayerColor(JNIEnv *env, job
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_reverie_paint_core_ReverieCoreBridge_getFillLayerColor(JNIEnv *, jobject, jint index)
-{
-    return static_cast<jint>(core()->getFillLayerColor(index));
-}
-
-extern "C" JNIEXPORT jint JNICALL
 Java_com_reverie_paint_core_ReverieCoreBridge_copySelectionToNewLayer(JNIEnv *, jobject, jboolean cut)
 {
     return core()->copySelectionToNewLayer(cut == JNI_TRUE);
@@ -626,12 +597,6 @@ Java_com_reverie_paint_core_ReverieCoreBridge_pasteCanvasClipboard(JNIEnv *, job
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_com_reverie_paint_core_ReverieCoreBridge_layerIsStroke(JNIEnv *, jobject, jint index)
-{
-    return core()->isLayerStroke(index) ? JNI_TRUE : JNI_FALSE;
-}
-
-extern "C" JNIEXPORT jboolean JNICALL
 Java_com_reverie_paint_core_ReverieCoreBridge_setLayerStrokeParams(
     JNIEnv *, jobject, jint index, jint size, jint color, jint position, jint opacity)
 {
@@ -643,28 +608,6 @@ Java_com_reverie_paint_core_ReverieCoreBridge_setLayerStrokeParamsDirect(
     JNIEnv *, jobject, jint index, jint size, jint color, jint position, jint opacity)
 {
     return core()->setLayerStrokeParamsDirect(index, size, static_cast<quint32>(color), position, opacity) ? JNI_TRUE : JNI_FALSE;
-}
-
-extern "C" JNIEXPORT jintArray JNICALL
-Java_com_reverie_paint_core_ReverieCoreBridge_getLayerStrokeParams(JNIEnv *env, jobject, jint index)
-{
-    int size = 6;
-    quint32 color = 0xFF000000;
-    int position = 0;
-    int opacity = 100;
-    if (!core()->getLayerStrokeParams(index, size, color, position, opacity)) {
-        return nullptr;
-    }
-    jintArray result = env->NewIntArray(4);
-    if (!result) return nullptr;
-    jint fill[4] = {
-        static_cast<jint>(size),
-        static_cast<jint>(color),
-        static_cast<jint>(position),
-        static_cast<jint>(opacity)
-    };
-    env->SetIntArrayRegion(result, 0, 4, fill);
-    return result;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL

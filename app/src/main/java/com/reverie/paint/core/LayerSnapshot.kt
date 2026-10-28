@@ -53,9 +53,6 @@ internal object LayerSnapshotProbe {
 
     private const val TAG = "ReverieSnapshot"
 
-    /** 0 = 关闭, 1 = 只比对, 2 = 用快照结果 (由 native 读系统属性) */
-    val mode: Int by lazy { ReverieCoreBridge.nativeSnapshotMode() }
-
     /**
      * 复用的直接缓冲: allocateDirect 本身成本不低(每次几十 µs), 图层同步在滑动笔刷
      * 参数时会被反复触发, 因此按容量缓存一块, 只在不够大时重新分配。
@@ -86,47 +83,6 @@ internal object LayerSnapshotProbe {
         return page
     }
 
-    /** 与旧路径逐字段比对, 返回差异描述 (最多 [limit] 条) */
-    fun diff(legacy: List<PaintViewModel.LayerUiState>, snap: SnapshotPage, limit: Int = 8): List<String> {
-        val out = ArrayList<String>()
-        if (legacy.size != snap.layers.size) {
-            out.add("count legacy=${legacy.size} snapshot=${snap.layers.size}")
-            return out
-        }
-        for (i in legacy.indices) {
-            val a = legacy[i]
-            val b = snap.layers[i]
-            fun check(name: String, l: Any?, s: Any?) {
-                if (out.size >= limit) return
-                if (l != s) out.add("layer[$i].$name legacy=$l snapshot=$s")
-            }
-            check("index", a.index, b.index)
-            check("id", a.id, b.id)
-            check("name", a.name, b.name)
-            check("visible", a.visible, b.visible)
-            check("locked", a.locked, b.locked)
-            check("alphaLocked", a.alphaLocked, b.alphaLocked)
-            check("isGroup", a.isGroup, b.isGroup)
-            check("nodeType", a.nodeType, b.nodeType)
-            check("depth", a.depth, b.depth)
-            check("colorLabel", a.colorLabel, b.colorLabel)
-            check("clipped", a.clipped, b.clipped)
-            check("alphaInherited", a.alphaInherited, b.alphaInherited)
-            check("isBackground", a.isBackground, b.isBackground)
-            check("soloed", a.soloed, b.soloed)
-            check("opacity", a.opacity, b.opacity)
-            check("blendMode", a.blendMode, b.blendMode)
-            check("isStrokeLayer", a.isStrokeLayer, b.isStrokeLayer)
-            check("strokeSize", a.strokeSize, b.strokeSize)
-            check("strokeColor", a.strokeColor, b.strokeColor)
-            check("strokePosition", a.strokePosition, b.strokePosition)
-            check("strokeOpacity", a.strokeOpacity, b.strokeOpacity)
-            check("fillColor", a.fillColor, b.fillColor)
-            check("passThrough", a.passThrough, b.passThrough)
-        }
-        return out
-    }
-
     fun toUiState(layer: SnapshotLayer): PaintViewModel.LayerUiState = PaintViewModel.LayerUiState(
         index = layer.index,
         id = layer.id,
@@ -153,13 +109,14 @@ internal object LayerSnapshotProbe {
         passThrough = layer.passThrough,
     )
 
-    fun reportDiff(rev: Int, layers: Int, legacyUs: Long, snapshotUs: Long, diffs: List<String>) {
-        if (diffs.isEmpty()) {
-            Log.i(TAG, "rev=$rev layers=$layers equal (legacy=${legacyUs}us snapshot=${snapshotUs}us)")
-        } else {
-            Log.w(TAG, "rev=$rev layers=$layers DIFF ${diffs.size}+ (legacy=${legacyUs}us snapshot=${snapshotUs}us)")
-            diffs.forEach { Log.w(TAG, "  $it") }
-        }
+    /** 快照暂不可用 (解析失败/未就绪): 限流告警, 保持上一次镜像 */
+    private var lastUnavailableLogNs = 0L
+
+    fun reportUnavailable() {
+        val now = System.nanoTime()
+        if (now - lastUnavailableLogNs < 2_000_000_000L) return
+        lastUnavailableLogNs = now
+        Log.w(TAG, "layer snapshot unavailable; keeping previous mirror")
     }
 
 }

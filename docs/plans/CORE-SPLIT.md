@@ -182,6 +182,20 @@ Kotlin 侧表现层把 `LayerUiState` 换成「快照 + diff」：`rev` 变了�
 `rev=3 layers=3 equal (59us vs 106us)`；清空属性（默认）后图层面板、缩略图、可见性、
 选层与渲染全部正常；`compileDebugKotlin` 与 1357 项单测通过。
 
+### P1b 进展（2026-10-28）：旧 getter 路径与相关 JNI 退役
+
+- `syncLayersFromNative()` 只剩一条路：取快照 → 解析 → 写入镜像。快照取不到时保持上一次
+  镜像并限流告警（2s 一次），不再回退到逐项 getter
+- 删除 `buildLayerListFromEngine()`、探针的 `mode`/`diff`/`reportDiff`
+- 退役 7 个 JNI（Kotlin `external fun` 与 C++ `Java_...` 同步删除）：
+  `layerNodeType` `layerIsStroke` `getLayerStrokeParams` `getFillLayerColor`
+  `groupPassThrough` `layerSoloKeep` `nativeSnapshotMode`
+  —— 其余图层 getter 仍被 UI 的增删/属性/缩略图路径使用，保留
+
+真机验证（OPD2413）：打开工程后图层面板、缩略图、选中态正常；把「背景」层眼睛关掉，
+画布立即显示棋盘格、该行眼睛变为关闭态（这张状态由快照供给），再点一次恢复；全程无
+`UnsatisfiedLinkError`/FATAL。
+
 ## 5. 不做的事（避免过度设计）
 
 - 不把 Krita 类型暴露到 C ABI，也不做「C++ 头文件包装层」（那只是换名字）

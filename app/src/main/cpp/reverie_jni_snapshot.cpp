@@ -66,12 +66,6 @@ void writeHeader(uint8_t *dst, const rp_snapshot *snap)
 extern "C" {
 
 JNIEXPORT jint JNICALL
-Java_com_reverie_paint_core_ReverieCoreBridge_nativeSnapshotMode(JNIEnv *, jobject)
-{
-    return snapshotMode();
-}
-
-JNIEXPORT jint JNICALL
 Java_com_reverie_paint_core_ReverieCoreBridge_nativeSnapshotSize(JNIEnv *, jobject)
 {
     // 先试算一次, 拿到精确字节数; 失败返回 -1

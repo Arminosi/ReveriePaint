@@ -121,8 +121,6 @@ object ReverieCoreBridge {
     external fun layerCount(): Int
 
     // ---- 图层只读快照 (P0, 见 docs/plans/CORE-SPLIT.md) ----
-    // 0=关闭 1=比对 2=用快照结果, 由 native 读 debug.reverie.snapshot 决定
-    external fun nativeSnapshotMode(): Int
 
     /** 快照字节数 (header + n*152), 失败返回 -1 */
     external fun nativeSnapshotSize(): Int
@@ -1139,7 +1137,6 @@ object ReverieCoreBridge {
     external fun layerIsGroup(index: Int): Boolean
 
     /** NodeType 值域: 0paint/1group/2fill/3adjust/5clone/10-13四mask, 越界-1 */
-    external fun layerNodeType(index: Int): Int
 
     /** 创建真 KisAdjustmentLayer（滤镜类型为 reverie-f<filterType>，参数 p1-p4，可选 lut） */
     external fun createAdjustmentLayer(
@@ -1184,7 +1181,6 @@ object ReverieCoreBridge {
         x: Int, y: Int, tolerance: Int, sampleMerged: Boolean, expand: Int, feather: Int,
         closeGap: Int, opacity: Double, compositeOp: String, png: ByteArray,
     ): Boolean
-    external fun getFillLayerColor(index: Int): Int
 
     external fun layerDepth(index: Int): Int
 
@@ -1272,7 +1268,6 @@ object ReverieCoreBridge {
 
     external fun rasterizeLayer(index: Int): Boolean
 
-    external fun layerIsStroke(index: Int): Boolean
 
     external fun setLayerStrokeParams(
         index: Int,
@@ -1290,7 +1285,6 @@ object ReverieCoreBridge {
         opacity: Int,
     ): Boolean
 
-    external fun getLayerStrokeParams(index: Int): IntArray?
 
     external fun rasterizeLayerStroke(index: Int): Boolean
 
@@ -1301,7 +1295,6 @@ object ReverieCoreBridge {
         passThrough: Boolean,
     ): Boolean
 
-    external fun groupPassThrough(index: Int): Boolean
 
     external fun mergeDown(index: Int): Boolean
 
@@ -1311,7 +1304,6 @@ object ReverieCoreBridge {
 
     external fun soloActive(): Boolean
 
-    external fun layerSoloKeep(): IntArray
 
     external fun layerSoloRawMode(): Boolean
 

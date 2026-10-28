@@ -27,7 +27,6 @@ import com.reverie.paint.R
 import com.reverie.paint.core.stylus.StylusAudioType
 import com.reverie.paint.model.*
 import com.reverie.paint.perf.PerfHud
-import com.reverie.paint.ui.painting.canvas.FrontBufferFeatureFlags
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay

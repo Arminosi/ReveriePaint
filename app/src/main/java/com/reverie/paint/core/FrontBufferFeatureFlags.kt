@@ -2,9 +2,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-package com.reverie.paint.ui.painting.canvas
+package com.reverie.paint.core
 
-import com.reverie.paint.core.PerfTrace
 import com.reverie.paint.model.FrontBufferHolePolicy
 import com.reverie.paint.model.HoleMaskGrid
 

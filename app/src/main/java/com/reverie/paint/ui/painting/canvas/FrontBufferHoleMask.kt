@@ -4,6 +4,7 @@
 
 package com.reverie.paint.ui.painting.canvas
 
+import com.reverie.paint.core.FrontBufferFeatureFlags
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.os.Handler

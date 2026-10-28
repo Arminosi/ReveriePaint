@@ -3150,5 +3150,20 @@
     <string name="replay_export_stage_finalizing">書き出しファイルをパッケージ化中…</string>
     <string name="replay_export_stage_saving_gallery">システムのアルバムに保存中…</string>
     <string name="replay_export_hint_4k">4K解像度の書き出しには時間がかかるため、1080pの選択をおすすめします</string>
+    <string name="layer_3d_axis_pitch">ピッチ（上下）</string>
+    <string name="layer_3d_axis_roll">ロール（ひねり）</string>
+    <string name="layer_3d_axis_yaw">ヨー（左右）</string>
+    <string name="layer_3d_cat_curl">丸まって眠る</string>
+    <string name="layer_3d_cat_look">振り返る</string>
+    <string name="layer_3d_cat_pounce">待ち伏せの構え</string>
+    <string name="layer_3d_cat_rear">立ち上がって前足を伸ばす</string>
+    <string name="layer_3d_cat_walk">歩行</string>
+    <string name="layer_3d_joint_cat_curl">丸まりの曲げ</string>
+    <string name="layer_3d_joint_cat_rise_removed">全体の上下移動（接地の微調整）</string>
+    <string name="layer_3d_pose_no_selection">キャンバス上のボーン関節をタップすると選択できます</string>
+    <string name="layer_3d_pose_reset_bone">このボーンをリセット</string>
+    <string name="layer_3d_pose_selected_bone">ボーンを選択中</string>
+    <string name="stylus_cursor_outline_actual_size">輪郭を実寸で表示</string>
+    <string name="stylus_cursor_outline_actual_size_desc">円形とブラシ輪郭が筆圧に合わせてリアルタイムに拡縮します。オフにすると最大ブラシサイズで固定され、描画中に大きさが変わりません</string>
 </resources>
 

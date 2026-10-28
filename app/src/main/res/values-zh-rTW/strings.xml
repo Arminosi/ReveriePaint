@@ -3145,5 +3145,20 @@
     <string name="replay_export_stage_finalizing">正在封裝匯出檔案…</string>
     <string name="replay_export_stage_saving_gallery">正在寫入系統相簿…</string>
     <string name="replay_export_hint_4k">4K 解析度匯出耗時較長，建議優先選擇 1080p</string>
+    <string name="layer_3d_axis_pitch">俯仰</string>
+    <string name="layer_3d_axis_roll">翻滾</string>
+    <string name="layer_3d_axis_yaw">偏轉</string>
+    <string name="layer_3d_cat_curl">蜷縮入睡</string>
+    <string name="layer_3d_cat_look">回首張望</string>
+    <string name="layer_3d_cat_pounce">伏擊準備</string>
+    <string name="layer_3d_cat_rear">立身伸爪</string>
+    <string name="layer_3d_cat_walk">行走邁步</string>
+    <string name="layer_3d_joint_cat_curl">蜷縮彎曲</string>
+    <string name="layer_3d_joint_cat_rise_removed">整體升降（貼地微調）</string>
+    <string name="layer_3d_pose_no_selection">點按畫布上的骨骼關節即可選中</string>
+    <string name="layer_3d_pose_reset_bone">重置此骨骼</string>
+    <string name="layer_3d_pose_selected_bone">選中骨骼</string>
+    <string name="stylus_cursor_outline_actual_size">輪廓反映實際大小</string>
+    <string name="stylus_cursor_outline_actual_size_desc">圓形與筆刷輪廓隨壓感即時縮放，關閉後固定在滿號筆刷大小，運筆時不再忽大忽小</string>
 </resources>
 

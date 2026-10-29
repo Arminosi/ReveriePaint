@@ -2058,18 +2058,53 @@ fun PaintingPage(
             hazeState = hazeState,
             modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = bottomDockPadding),
         )
-        // ---- 动画时间轴面板 (仅动画画布): 左下角, 紧贴左侧滑块工具条右侧,
-        //      无圆角, 与工具条同底融合; 可展开收起 / 缩放平移 ----
+        // ---- 动画时间轴面板 (仅动画画布): 悬浮模式居中自适应避让，非悬浮模式紧贴左侧滑块工具条 ----
+        val isTimelineFloating = vm.floatingUiConfig.enabled
+        val animTimelineModifier = if (isTimelineFloating) {
+            val baseMargin = vm.floatingUiConfig.marginDp.dp
+            val scale = vm.floatingUiConfig.scale * 1.13f
+            val railWidth = 36.dp * scale
+
+            val hasLeftPanel = listOf(
+                vm.floatingUiConfig.topBarPosition,
+                vm.floatingUiConfig.toolRailPosition,
+                vm.floatingUiConfig.sliderRailPosition,
+            ).any { it.edge == com.reverie.paint.model.PanelEdge.LEFT }
+
+            val hasRightPanel = listOf(
+                vm.floatingUiConfig.topBarPosition,
+                vm.floatingUiConfig.toolRailPosition,
+                vm.floatingUiConfig.sliderRailPosition,
+            ).any { it.edge == com.reverie.paint.model.PanelEdge.RIGHT }
+
+            val bottomPanels = listOf(
+                vm.floatingUiConfig.topBarPosition,
+                vm.floatingUiConfig.toolRailPosition,
+                vm.floatingUiConfig.sliderRailPosition,
+            ).filter { it.edge == com.reverie.paint.model.PanelEdge.BOTTOM }
+
+            val startPadding = if (hasLeftPanel) (baseMargin + railWidth + 8.dp) else baseMargin
+            val endPadding = if (hasRightPanel) (baseMargin + railWidth + 8.dp) else baseMargin
+            val bottomPadding = if (bottomPanels.isNotEmpty()) bottomDockPadding else baseMargin
+
+            Modifier
+                .align(Alignment.BottomCenter)
+                .padding(start = startPadding, end = endPadding, bottom = bottomPadding)
+                .fillMaxWidth()
+                .zIndex(20f)
+        } else {
+            Modifier
+                .align(Alignment.BottomStart)
+                .padding(start = 36.dp) // 避开左侧滑块工具条 (36dp 宽)
+                .fillMaxWidth()
+                .zIndex(20f)
+        }
+
         AnimatedVisibility(
             visible = vm.anim.enabled && vm.anim.panelOpen,
             enter = fadeIn(Motion.enterSpring()) + slideInVertically(Motion.enterSpring()) { it },
             exit = fadeOut(Motion.exitTween(200)) + slideOutVertically(Motion.exitTween(200)) { it },
-            modifier =
-                Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(start = 36.dp) // 避开左侧滑块工具条 (36dp 宽)
-                    .fillMaxWidth()
-                    .zIndex(20f),
+            modifier = animTimelineModifier,
         ) {
             AnimationTimelinePanel(vm = vm, hazeState = hazeState)
         }

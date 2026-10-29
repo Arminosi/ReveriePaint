@@ -23,6 +23,7 @@
     <uses-permission android:name="com.oplus.permission.safe.IOT" />
 
     <queries>
+        <package android:name="com.xiaomi.touchservice" />
         <package android:name="com.coloros.ocs.opencapabilityservice" />
         <package android:name="com.oplus.ocs" />
         <package android:name="com.oplus.ipemanager" />

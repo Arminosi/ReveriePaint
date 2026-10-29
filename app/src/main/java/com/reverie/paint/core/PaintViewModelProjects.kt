@@ -77,7 +77,11 @@ internal fun PaintViewModel.saveProject(
 ) {
     val fileToSave =
         currentProjectFile?.let { File(it) }?.takeIf { it.parentFile?.exists() == true && !it.name.contains(".autosave") }
-            ?: File(projectDir(), "$name.revp")
+            ?: run {
+                val targetDir = currentFolder?.let { File(it.filePath) }?.takeIf { it.exists() && it.isDirectory }
+                    ?: projectDir()
+                File(targetDir, "$name.revp")
+            }
     val finalFile =
         if (fileToSave.nameWithoutExtension != name) {
             File(fileToSave.parentFile, "$name.revp")
@@ -692,6 +696,47 @@ internal fun PaintViewModel.moveProjectToFolder(
     refreshProjects()
 }
 
+internal fun PaintViewModel.moveProjectsToFolder(
+    projects: List<com.reverie.paint.model.Project>,
+    targetFolderName: String?,
+) {
+    val root = projectDir()
+    val destDir = if (targetFolderName.isNullOrBlank()) root else File(root, targetFolderName)
+    if (!destDir.exists()) destDir.mkdirs()
+    projects.forEach { p ->
+        if (!p.isFolder) {
+            val srcFile = File(p.filePath)
+            if (srcFile.exists()) {
+                val destFile = File(destDir, srcFile.name)
+                if (srcFile.renameTo(destFile)) referenceStore.move(srcFile, destFile)
+            }
+        }
+    }
+    refreshProjects()
+}
+
+internal fun PaintViewModel.setFolderCover(
+    folder: com.reverie.paint.model.Project,
+    coverProject: com.reverie.paint.model.Project,
+) {
+    if (!folder.isFolder) return
+    val folderDir = File(folder.filePath)
+    if (!folderDir.exists() || !folderDir.isDirectory) return
+    val coverFile = File(folderDir, ".cover")
+    val projectFile = File(coverProject.filePath)
+    coverFile.writeText(projectFile.name)
+    refreshProjects()
+}
+
+internal fun PaintViewModel.clearFolderCover(
+    folder: com.reverie.paint.model.Project,
+) {
+    if (!folder.isFolder) return
+    val coverFile = File(folder.filePath, ".cover")
+    if (coverFile.exists()) coverFile.delete()
+    refreshProjects()
+}
+
 internal fun PaintViewModel.deleteProject(p: com.reverie.paint.model.Project) {
     if (p.isFolder) {
         val dir = File(p.filePath)
@@ -1022,7 +1067,17 @@ private fun PaintViewModel.buildProjectList(): List<com.reverie.paint.model.Proj
                 ?.sortedByDescending { it.lastModified() }
                 ?.toTypedArray() ?: emptyArray()
 
-        return files.map { parseProjectFromFile(it) }
+        val coverFile = File(dir, ".cover")
+        val coverName = if (coverFile.exists()) coverFile.readText().trim() else null
+
+        return files.map { file ->
+            val p = parseProjectFromFile(file)
+            if (coverName != null && file.name == coverName) {
+                p.copy(isFolderCover = true)
+            } else {
+                p
+            }
+        }
     }
 
     // Root level: read both standalone files and folders (画集)
@@ -1042,8 +1097,24 @@ private fun PaintViewModel.buildProjectList(): List<com.reverie.paint.model.Proj
                     ?.sortedByDescending { it.lastModified() }
                     ?.toTypedArray() ?: emptyArray()
 
-            val subProjects = subFiles.map { parseProjectFromFile(it) }
-            val topThumb = subProjects.firstOrNull()?.previewPath ?: ""
+            val coverFile = File(entry, ".cover")
+            val chosenCoverName = if (coverFile.exists()) coverFile.readText().trim() else null
+
+            val subProjects = subFiles.map { file ->
+                val p = parseProjectFromFile(file)
+                if (chosenCoverName != null && file.name == chosenCoverName) {
+                    p.copy(isFolderCover = true)
+                } else {
+                    p
+                }
+            }
+            val coverProject = subProjects.firstOrNull { it.isFolderCover }
+            val orderedSubProjects = if (coverProject != null) {
+                listOf(coverProject) + (subProjects - coverProject)
+            } else {
+                subProjects
+            }
+            val topThumb = orderedSubProjects.firstOrNull()?.previewPath ?: ""
             val topModified = maxOf(entry.lastModified(), subProjects.maxOfOrNull { it.lastModified } ?: 0L)
 
             list.add(
@@ -1054,7 +1125,7 @@ private fun PaintViewModel.buildProjectList(): List<com.reverie.paint.model.Proj
                     lastModified = topModified,
                     isFolder = true,
                     folderPath = entry.absolutePath,
-                    items = subProjects,
+                    items = orderedSubProjects,
                 ),
             )
         } else if (entry.isFile && entry.extension.lowercase() in listOf("revp", "kra", "png")) {

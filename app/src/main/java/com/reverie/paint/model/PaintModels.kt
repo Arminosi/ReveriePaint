@@ -188,6 +188,8 @@ data class Project(
     val masterFilePath: String = "",
     /** Whether the project is an animation canvas (含动画时间轴, meta.layers[].animated) */
     val isAnimation: Boolean = false,
+    /** Whether this project is the chosen cover artwork for its parent folder */
+    val isFolderCover: Boolean = false,
 )
 
 /** A canvas size preset for the create page */

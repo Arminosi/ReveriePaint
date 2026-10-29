@@ -18,10 +18,23 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
+import kotlin.math.roundToInt
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
@@ -118,7 +131,7 @@ private object ThumbnailCache {
 }
 
 @Composable
-private fun rememberThumbnail(path: String?, lastModified: Long): android.graphics.Bitmap? {
+internal fun rememberThumbnail(path: String?, lastModified: Long): android.graphics.Bitmap? {
     if (path.isNullOrEmpty()) return null
     val key = "$path:$lastModified"
     val immediate = remember(key) { ThumbnailCache.peek(key) }
@@ -175,6 +188,17 @@ fun HomePage(vm: PaintViewModel) {
 
     // Long-press Context Menu on card
     var longPressedProject by remember { mutableStateOf<Project?>(null) }
+
+    // Choose folder cover dialog
+    var showChooseCoverDialog by remember { mutableStateOf(false) }
+    var targetCoverFolder by remember { mutableStateOf<Project?>(null) }
+
+    // Drag-and-drop projects to album stack
+    var draggingProject by remember { mutableStateOf<Project?>(null) }
+    var dragTouchRootPos by remember { mutableStateOf(Offset.Zero) }
+    var dragStartRootPos by remember { mutableStateOf(Offset.Zero) }
+    var hoveredFolderKey by remember { mutableStateOf<String?>(null) }
+    val folderBoundsMap = remember { mutableStateMapOf<String, Rect>() }
 
     // Filter projects by search query
     val currentFolder = vm.currentFolder
@@ -274,6 +298,26 @@ fun HomePage(vm: PaintViewModel) {
                 selectedProjects.clear()
             },
             onDismiss = { showMoveDialog = false },
+        )
+    }
+
+    if (showChooseCoverDialog && targetCoverFolder != null) {
+        val folder = targetCoverFolder!!
+        ChooseFolderCoverDialog(
+            colors = colors,
+            folder = folder,
+            onSelectCover = { coverProject ->
+                vm.setFolderCover(folder, coverProject)
+                Toast.makeText(context, context.getString(R.string.gallery_toast_cover_set, coverProject.name), Toast.LENGTH_SHORT).show()
+            },
+            onResetCover = {
+                vm.clearFolderCover(folder)
+                Toast.makeText(context, context.getString(R.string.gallery_toast_cover_cleared), Toast.LENGTH_SHORT).show()
+            },
+            onDismiss = {
+                showChooseCoverDialog = false
+                targetCoverFolder = null
+            },
         )
     }
 
@@ -841,40 +885,158 @@ fun HomePage(vm: PaintViewModel) {
                                             label = "FanTopAngle",
                                         )
 
+                                        val isFolderHovered = p.isFolder && hoveredFolderKey == p.filePath
+                                        val folderHoverScale by animateFloatAsState(
+                                            targetValue = if (isFolderHovered) 1.07f else 1.0f,
+                                            animationSpec =
+                                                spring(
+                                                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                                                    stiffness = Spring.StiffnessMediumLow,
+                                                ),
+                                            label = "FolderHoverScale",
+                                        )
+                                        var itemCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+
                                         Box(
                                             modifier =
-                                                Modifier.graphicsLayer {
-                                                    alpha = progress.coerceIn(0f, 1f)
-                                                    scaleX = itemScale * cardPressScale * cardSelectScale
-                                                    scaleY = itemScale * cardPressScale * cardSelectScale
-                                                    translationY = itemOffsetY.toPx()
-                                                    rotationZ = itemRotation
-                                                },
+                                                Modifier
+                                                    .graphicsLayer {
+                                                        alpha = progress.coerceIn(0f, 1f)
+                                                        scaleX = itemScale * cardPressScale * cardSelectScale * folderHoverScale
+                                                        scaleY = itemScale * cardPressScale * cardSelectScale * folderHoverScale
+                                                        translationY = itemOffsetY.toPx()
+                                                        rotationZ = itemRotation
+                                                    }
+                                                    .onGloballyPositioned { coords ->
+                                                        itemCoordinates = coords
+                                                        if (p.isFolder) {
+                                                            folderBoundsMap[p.filePath] = coords.boundsInRoot()
+                                                        }
+                                                    },
                                         ) {
-                                            Column(
-                                                modifier =
-                                                    Modifier
-                                                        .fillMaxWidth()
-                                                        .combinedClickable(
-                                                            interactionSource = interactionSource,
-                                                            indication = null,
-                                                            onClick = {
-                                                                if (isSelectMode) {
-                                                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                                    if (isSelected) selectedProjects.remove(p) else selectedProjects.add(p)
-                                                                } else if (p.isFolder) {
-                                                                    vm.currentFolder = p
-                                                                    vm.refreshProjects()
+                                            val cardModifier = if (currentFolder == null && !p.isFolder) {
+                                                Modifier
+                                                    .fillMaxWidth()
+                                                    .pointerInput(p, isSelectMode, selectedProjects.size) {
+                                                        awaitEachGesture {
+                                                            val down = awaitFirstDown(requireUnconsumed = false)
+                                                            val downRoot = itemCoordinates?.localToRoot(down.position) ?: down.position
+                                                            var dragStarted = false
+                                                            var totalDrag = Offset.Zero
+                                                            val touchSlop = viewConfiguration.touchSlop
+
+                                                            val longPress = awaitLongPressOrCancellation(down.id)
+                                                            if (longPress == null) {
+                                                                if (!down.isConsumed) {
+                                                                    if (isSelectMode) {
+                                                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                                        if (isSelected) selectedProjects.remove(p) else selectedProjects.add(p)
+                                                                    } else {
+                                                                        vm.loadProject(p)
+                                                                    }
+                                                                }
+                                                            } else {
+                                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                                var currentPos = itemCoordinates?.localToRoot(longPress.position) ?: downRoot
+                                                                var pointerId = longPress.id
+                                                                while (true) {
+                                                                    val event = awaitPointerEvent()
+                                                                    val change = event.changes.firstOrNull { it.id == pointerId } ?: break
+                                                                    if (change.isConsumed) break
+
+                                                                    if (change.changedToUpIgnoreConsumed()) {
+                                                                        change.consume()
+                                                                        break
+                                                                    }
+
+                                                                    val dragDelta = change.position - change.previousPosition
+                                                                    totalDrag += dragDelta
+
+                                                                    if (!dragStarted && totalDrag.getDistance() > touchSlop) {
+                                                                        dragStarted = true
+                                                                        draggingProject = p
+                                                                        dragStartRootPos = currentPos
+                                                                        dragTouchRootPos = currentPos
+                                                                    }
+
+                                                                    if (dragStarted) {
+                                                                        change.consume()
+                                                                        currentPos = itemCoordinates?.localToRoot(change.position) ?: (dragTouchRootPos + dragDelta)
+                                                                        dragTouchRootPos = currentPos
+
+                                                                        val hit = folderBoundsMap.entries.firstOrNull { (_, rect) ->
+                                                                            rect.contains(dragTouchRootPos)
+                                                                        }
+                                                                        if (hit?.key != hoveredFolderKey) {
+                                                                            if (hit != null) {
+                                                                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                                                            }
+                                                                            hoveredFolderKey = hit?.key
+                                                                        }
+                                                                    }
+                                                                }
+
+                                                                if (dragStarted) {
+                                                                    val targetPath = hoveredFolderKey
+                                                                    if (targetPath != null) {
+                                                                        val targetFolder = displayProjects.firstOrNull { it.isFolder && it.filePath == targetPath }
+                                                                        if (targetFolder != null) {
+                                                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                                            val toMove = if (isSelectMode && isSelected) {
+                                                                                selectedProjects.toList()
+                                                                            } else {
+                                                                                listOf(p)
+                                                                            }
+                                                                            vm.moveProjectsToFolder(toMove, targetFolder.name)
+                                                                            Toast.makeText(
+                                                                                context,
+                                                                                context.getString(R.string.gallery_toast_moved_to_stack, toMove.size, targetFolder.name),
+                                                                                Toast.LENGTH_SHORT,
+                                                                            ).show()
+                                                                            if (isSelectMode) {
+                                                                                selectedProjects.clear()
+                                                                                isSelectMode = false
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                    draggingProject = null
+                                                                    dragTouchRootPos = Offset.Zero
+                                                                    hoveredFolderKey = null
                                                                 } else {
-                                                                    vm.loadProject(p)
+                                                                    if (!isSelectMode) {
+                                                                        longPressedProject = p
+                                                                    }
                                                                 }
-                                                            },
-                                                            onLongClick = {
-                                                                if (!isSelectMode) {
-                                                                    longPressedProject = p
-                                                                }
-                                                            },
-                                                        ),
+                                                            }
+                                                        }
+                                                    }
+                                            } else {
+                                                Modifier
+                                                    .fillMaxWidth()
+                                                    .combinedClickable(
+                                                        interactionSource = interactionSource,
+                                                        indication = null,
+                                                        onClick = {
+                                                            if (isSelectMode) {
+                                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                                if (isSelected) selectedProjects.remove(p) else selectedProjects.add(p)
+                                                            } else if (p.isFolder) {
+                                                                vm.currentFolder = p
+                                                                vm.refreshProjects()
+                                                            } else {
+                                                                vm.loadProject(p)
+                                                            }
+                                                        },
+                                                        onLongClick = {
+                                                            if (!isSelectMode) {
+                                                                longPressedProject = p
+                                                            }
+                                                        },
+                                                    )
+                                            }
+
+                                            Column(
+                                                modifier = cardModifier,
                                             ) {
                                                 val thumb = rememberThumbnail(p.previewPath, p.lastModified)
 
@@ -993,7 +1155,9 @@ fun HomePage(vm: PaintViewModel) {
                                                                     .clip(RoundedCornerShape(8.dp))
                                                                     .background(Color.White)
                                                                     .then(
-                                                                        if (borderStrokeWidth > 0.dp) {
+                                                                        if (isFolderHovered) {
+                                                                            Modifier.border(3.dp, colors.accent, RoundedCornerShape(8.dp))
+                                                                        } else if (borderStrokeWidth > 0.dp) {
                                                                             Modifier.border(borderStrokeWidth, colors.accent, RoundedCornerShape(8.dp))
                                                                         } else Modifier
                                                                     ),
@@ -1053,6 +1217,35 @@ fun HomePage(vm: PaintViewModel) {
                                                                     fontSize = 10.sp,
                                                                     fontWeight = FontWeight.Bold,
                                                                 )
+                                                            }
+                                                        }
+
+                                                        // Drop hint badge when dragging project over folder
+                                                        if (isFolderHovered) {
+                                                            Box(
+                                                                modifier =
+                                                                    Modifier
+                                                                        .align(Alignment.Center)
+                                                                        .shadow(6.dp, RoundedCornerShape(16.dp))
+                                                                        .clip(RoundedCornerShape(16.dp))
+                                                                        .background(colors.accent)
+                                                                        .padding(horizontal = 10.dp, vertical = 5.dp),
+                                                            ) {
+                                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                                    Icon(
+                                                                        painterResource(R.drawable.ic_folders),
+                                                                        contentDescription = null,
+                                                                        tint = Color.White,
+                                                                        modifier = Modifier.size(13.dp),
+                                                                    )
+                                                                    Spacer(Modifier.width(4.dp))
+                                                                    Text(
+                                                                        stringResource(R.string.gallery_drag_drop_to_stack),
+                                                                        color = Color.White,
+                                                                        fontSize = 11.sp,
+                                                                        fontWeight = FontWeight.Bold,
+                                                                    )
+                                                                }
                                                             }
                                                         }
 
@@ -1166,6 +1359,36 @@ fun HomePage(vm: PaintViewModel) {
                                                                     Spacer(Modifier.width(3.dp))
                                                                     Text(
                                                                         text = stringResource(R.string.gallery_badge_anim),
+                                                                        color = Color.White,
+                                                                        fontSize = 10.sp,
+                                                                        fontWeight = FontWeight.Bold,
+                                                                    )
+                                                                }
+                                                            }
+                                                        }
+
+                                                        // Album cover badge (画集封面角标)
+                                                        if (currentFolder != null && p.isFolderCover) {
+                                                            Box(
+                                                                modifier =
+                                                                    Modifier
+                                                                        .align(Alignment.BottomStart)
+                                                                        .padding(6.dp)
+                                                                        .shadow(3.dp, RoundedCornerShape(12.dp), clip = false)
+                                                                        .clip(RoundedCornerShape(12.dp))
+                                                                        .background(colors.accent.copy(alpha = 0.90f))
+                                                                        .padding(horizontal = 7.dp, vertical = 3.dp),
+                                                            ) {
+                                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                                    Icon(
+                                                                        painterResource(R.drawable.ic_image),
+                                                                        contentDescription = null,
+                                                                        tint = Color.White,
+                                                                        modifier = Modifier.size(10.dp),
+                                                                    )
+                                                                    Spacer(Modifier.width(3.dp))
+                                                                    Text(
+                                                                        text = stringResource(R.string.gallery_cover_badge),
                                                                         color = Color.White,
                                                                         fontSize = 10.sp,
                                                                         fontWeight = FontWeight.Bold,
@@ -1288,6 +1511,40 @@ fun HomePage(vm: PaintViewModel) {
                                                             showMoveDialog = true
                                                         },
                                                     )
+                                                    if (currentFolder != null) {
+                                                        if (p.isFolderCover) {
+                                                            HomeDropdownMenuItem(
+                                                                text = stringResource(R.string.gallery_action_clear_cover),
+                                                                icon = R.drawable.ic_x,
+                                                                onClick = {
+                                                                    longPressedProject = null
+                                                                    vm.clearFolderCover(currentFolder)
+                                                                    Toast.makeText(context, context.getString(R.string.gallery_toast_cover_cleared), Toast.LENGTH_SHORT).show()
+                                                                },
+                                                            )
+                                                        } else {
+                                                            HomeDropdownMenuItem(
+                                                                text = stringResource(R.string.gallery_action_set_as_cover),
+                                                                icon = R.drawable.ic_image,
+                                                                onClick = {
+                                                                    longPressedProject = null
+                                                                    vm.setFolderCover(currentFolder, p)
+                                                                    Toast.makeText(context, context.getString(R.string.gallery_toast_cover_set, p.name), Toast.LENGTH_SHORT).show()
+                                                                },
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                                if (p.isFolder) {
+                                                    HomeDropdownMenuItem(
+                                                        text = stringResource(R.string.gallery_action_set_stack_cover),
+                                                        icon = R.drawable.ic_image,
+                                                        onClick = {
+                                                            longPressedProject = null
+                                                            targetCoverFolder = p
+                                                            showChooseCoverDialog = true
+                                                        },
+                                                    )
                                                 }
                                                 HomeDropdownMenuItem(
                                                     text = stringResource(R.string.home_draft_rename),
@@ -1371,6 +1628,71 @@ fun HomePage(vm: PaintViewModel) {
                     selectedTab = selectedTab,
                     hazeState = hazeState,
                 )
+            }
+        }
+
+        // Floating drag proxy preview card
+        if (draggingProject != null) {
+            val dragProj = draggingProject!!
+            val dragThumb = rememberThumbnail(dragProj.previewPath, dragProj.lastModified)
+            val dragCount = if (isSelectMode && selectedProjects.contains(dragProj)) selectedProjects.size else 1
+            val dragCardSize = 130.dp
+            val density = LocalDensity.current
+            val halfSizePx = with(density) { (dragCardSize / 2).toPx() }
+
+            Box(modifier = Modifier.fillMaxSize()) {
+                Box(
+                    modifier =
+                        Modifier
+                            .offset {
+                                IntOffset(
+                                    (dragTouchRootPos.x - halfSizePx).roundToInt(),
+                                    (dragTouchRootPos.y - halfSizePx).roundToInt(),
+                                )
+                            }
+                            .size(dragCardSize)
+                            .shadow(16.dp, RoundedCornerShape(12.dp), clip = false)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color.White)
+                            .border(2.dp, colors.accent, RoundedCornerShape(12.dp))
+                            .graphicsLayer {
+                                rotationZ = -4f
+                                alpha = 0.92f
+                            },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (dragThumb != null) {
+                        Image(
+                            bitmap = dragThumb.asImageBitmap(),
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    } else {
+                        Box(modifier = Modifier.fillMaxSize().background(Color(0xFFEEEEF0)))
+                    }
+
+                    if (dragCount > 1) {
+                        Box(
+                            modifier =
+                                Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(6.dp)
+                                    .shadow(4.dp, CircleShape)
+                                    .clip(CircleShape)
+                                    .background(colors.accent)
+                                    .size(24.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = "$dragCount",
+                                color = Color.White,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    }
+                }
             }
         }
 

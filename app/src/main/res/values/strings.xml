@@ -141,8 +141,19 @@
     <string name="gallery_toast_stack_deleted">画集已删除</string>
     <string name="gallery_toast_artwork_deleted">作品已删除</string>
     <string name="gallery_toast_batch_deleted">已删除 %d 项内容</string>
-    <string name="gallery_toast_batch_duplicated">已复制 %d 项作品</string>
     <string name="gallery_select_all">全选</string>
+    <string name="gallery_action_set_as_cover">设为画集封面</string>
+    <string name="gallery_action_set_stack_cover">更改画集封面...</string>
+    <string name="gallery_action_clear_cover">重置画集封面</string>
+    <string name="gallery_toast_cover_set">已将画集封面设为「%s」</string>
+    <string name="gallery_toast_cover_cleared">已重置画集封面</string>
+    <string name="gallery_toast_moved_to_stack">已将 %1$d 项工程归入「%2$s」</string>
+    <string name="gallery_toast_batch_duplicated">已副本 %d 项作品</string>
+    <string name="gallery_dialog_choose_cover_title">选择画集封面</string>
+    <string name="gallery_cover_badge">封面</string>
+    <string name="gallery_drag_drop_to_stack">松手归入画集</string>
+    <string name="create_target_folder_chip">归入画集: %s</string>
+    <string name="create_target_folder_detach">移出画集</string>
     <string name="gallery_deselect_all">取消全选</string>
     <string name="gallery_processing">正在处理...</string>
 

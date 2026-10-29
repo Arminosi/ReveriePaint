@@ -446,6 +446,50 @@ fun CreatePage(vm: PaintViewModel) {
                 maxLines = 1,
             )
 
+            val currentFolder = vm.currentFolder
+            if (currentFolder != null && currentFolder.isFolder) {
+                Spacer(Modifier.width(12.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(colors.panelHi)
+                        .border(1.dp, colors.border, RoundedCornerShape(14.dp))
+                        .padding(start = 10.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_folder_symlink),
+                        contentDescription = null,
+                        tint = colors.accent,
+                        modifier = Modifier.size(14.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = stringResource(R.string.create_target_folder_chip, currentFolder.name),
+                        color = colors.text,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Box(
+                        modifier = Modifier
+                            .size(20.dp)
+                            .clip(CircleShape)
+                            .clickable { vm.currentFolder = null },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_x),
+                            contentDescription = stringResource(R.string.create_target_folder_detach),
+                            tint = colors.subText,
+                            modifier = Modifier.size(12.dp),
+                        )
+                    }
+                }
+            }
+
             if (isWideLandscape) {
                 Spacer(Modifier.width(18.dp))
 

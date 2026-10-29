@@ -141,8 +141,19 @@
     <string name="gallery_toast_stack_deleted">Stack deleted</string>
     <string name="gallery_toast_artwork_deleted">Artwork deleted</string>
     <string name="gallery_toast_batch_deleted">Deleted %d items</string>
-    <string name="gallery_toast_batch_duplicated">Duplicated %d artworks</string>
     <string name="gallery_select_all">Select All</string>
+    <string name="gallery_action_set_as_cover">Set as Stack Cover</string>
+    <string name="gallery_action_set_stack_cover">Change Stack Cover...</string>
+    <string name="gallery_action_clear_cover">Reset Stack Cover</string>
+    <string name="gallery_toast_cover_set">Stack cover set to \'%s\'</string>
+    <string name="gallery_toast_cover_cleared">Stack cover reset</string>
+    <string name="gallery_toast_moved_to_stack">Moved %1$d project(s) to \'%2$s\'</string>
+    <string name="gallery_toast_batch_duplicated">Duplicated %d artwork(s)</string>
+    <string name="gallery_dialog_choose_cover_title">Choose Stack Cover</string>
+    <string name="gallery_cover_badge">Cover</string>
+    <string name="gallery_drag_drop_to_stack">Drop to add into stack</string>
+    <string name="create_target_folder_chip">In Stack: %s</string>
+    <string name="create_target_folder_detach">Detach from Stack</string>
     <string name="gallery_deselect_all">Deselect All</string>
     <string name="gallery_processing">Processing...</string>
 

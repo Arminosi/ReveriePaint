@@ -471,3 +471,188 @@ val context = LocalContext.current
         }
     }
 }
+
+@Composable
+internal fun ChooseFolderCoverDialog(
+    colors: AppColors,
+    folder: Project,
+    onSelectCover: (Project) -> Unit,
+    onResetCover: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onDismiss,
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(420.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = {},
+                    )
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(colors.panel)
+                    .padding(22.dp),
+            ) {
+                Column {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(colors.accent.copy(alpha = 0.14f)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_image),
+                                contentDescription = null,
+                                tint = colors.accent,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Column {
+                            Text(
+                                text = stringResource(R.string.gallery_dialog_choose_cover_title),
+                                color = colors.text,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Text(
+                                text = folder.name,
+                                color = colors.subText,
+                                fontSize = 12.sp,
+                            )
+                        }
+                    }
+
+                    Spacer(Modifier.height(16.dp))
+
+                    if (folder.items.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(120.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = stringResource(R.string.gallery_empty_stack_desc),
+                                color = colors.subText,
+                                fontSize = 13.sp,
+                            )
+                        }
+                    } else {
+                        LazyVerticalGrid(
+                            columns = GridCells.Adaptive(minSize = 90.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 280.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            items(folder.items, key = { it.filePath }) { item ->
+                                val thumb = rememberThumbnail(item.previewPath, item.lastModified)
+                                val isCover = item.isFolderCover
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .clickable {
+                                            onSelectCover(item)
+                                            onDismiss()
+                                        }
+                                        .padding(4.dp),
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .aspectRatio(1f)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(colors.panelHi)
+                                            .border(
+                                                width = if (isCover) 2.5.dp else 1.dp,
+                                                color = if (isCover) colors.accent else colors.border,
+                                                shape = RoundedCornerShape(10.dp),
+                                            ),
+                                    ) {
+                                        if (thumb != null) {
+                                            Image(
+                                                bitmap = thumb.asImageBitmap(),
+                                                contentDescription = item.name,
+                                                contentScale = ContentScale.Crop,
+                                                modifier = Modifier.fillMaxSize(),
+                                            )
+                                        }
+                                        if (isCover) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .align(Alignment.TopEnd)
+                                                    .padding(4.dp)
+                                                    .clip(RoundedCornerShape(4.dp))
+                                                    .background(colors.accent)
+                                                    .padding(horizontal = 4.dp, vertical = 2.dp),
+                                            ) {
+                                                Text(
+                                                    text = stringResource(R.string.gallery_cover_badge),
+                                                    color = Color.White,
+                                                    fontSize = 9.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                )
+                                            }
+                                        }
+                                    }
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(
+                                        text = item.name,
+                                        color = if (isCover) colors.accent else colors.text,
+                                        fontSize = 11.sp,
+                                        maxLines = 1,
+                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                        fontWeight = if (isCover) FontWeight.Bold else FontWeight.Normal,
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(18.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        ReTextButton(
+                            stringResource(R.string.gallery_action_clear_cover),
+                            onClick = {
+                                onResetCover()
+                                onDismiss()
+                            },
+                            textColor = colors.subText,
+                            fontSize = 13.sp,
+                        )
+                        ReTextButton(
+                            stringResource(R.string.common_cancel),
+                            onDismiss,
+                            textColor = colors.accent,
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 14.sp,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}

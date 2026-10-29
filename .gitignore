@@ -5,6 +5,7 @@ app/build/
 .gradle/
 local.properties
 .idea/
+.vscode/
 *.hprof
 app/.cxx/
 app/src/main/jniLibs/

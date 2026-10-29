@@ -248,6 +248,9 @@ fun HomePage(vm: PaintViewModel) {
     val toastStackDeleted = stringResource(R.string.gallery_toast_stack_deleted)
     val toastArtworkDeleted = stringResource(R.string.gallery_toast_artwork_deleted)
     val toastBatchDeleted = stringResource(R.string.gallery_toast_batch_deleted)
+    val toastCoverSet = stringResource(R.string.gallery_toast_cover_set)
+    val toastCoverCleared = stringResource(R.string.gallery_toast_cover_cleared)
+    val toastMovedToStack = stringResource(R.string.gallery_toast_moved_to_stack)
     val defaultProcessingText = stringResource(R.string.gallery_processing)
 
     // Custom Styled Dialog: Create Stack / Folder (新建画集)
@@ -308,11 +311,11 @@ fun HomePage(vm: PaintViewModel) {
             folder = folder,
             onSelectCover = { coverProject ->
                 vm.setFolderCover(folder, coverProject)
-                Toast.makeText(context, context.getString(R.string.gallery_toast_cover_set, coverProject.name), Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, String.format(toastCoverSet, coverProject.name), Toast.LENGTH_SHORT).show()
             },
             onResetCover = {
                 vm.clearFolderCover(folder)
-                Toast.makeText(context, context.getString(R.string.gallery_toast_cover_cleared), Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, toastCoverCleared, Toast.LENGTH_SHORT).show()
             },
             onDismiss = {
                 showChooseCoverDialog = false
@@ -990,7 +993,7 @@ fun HomePage(vm: PaintViewModel) {
                                                                             vm.moveProjectsToFolder(toMove, targetFolder.name)
                                                                             Toast.makeText(
                                                                                 context,
-                                                                                context.getString(R.string.gallery_toast_moved_to_stack, toMove.size, targetFolder.name),
+                                                                                String.format(toastMovedToStack, toMove.size, targetFolder.name),
                                                                                 Toast.LENGTH_SHORT,
                                                                             ).show()
                                                                             if (isSelectMode) {
@@ -1519,7 +1522,7 @@ fun HomePage(vm: PaintViewModel) {
                                                                 onClick = {
                                                                     longPressedProject = null
                                                                     vm.clearFolderCover(currentFolder)
-                                                                    Toast.makeText(context, context.getString(R.string.gallery_toast_cover_cleared), Toast.LENGTH_SHORT).show()
+                                                                    Toast.makeText(context, toastCoverCleared, Toast.LENGTH_SHORT).show()
                                                                 },
                                                             )
                                                         } else {
@@ -1529,7 +1532,7 @@ fun HomePage(vm: PaintViewModel) {
                                                                 onClick = {
                                                                     longPressedProject = null
                                                                     vm.setFolderCover(currentFolder, p)
-                                                                    Toast.makeText(context, context.getString(R.string.gallery_toast_cover_set, p.name), Toast.LENGTH_SHORT).show()
+                                                                    Toast.makeText(context, String.format(toastCoverSet, p.name), Toast.LENGTH_SHORT).show()
                                                                 },
                                                             )
                                                         }

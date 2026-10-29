@@ -1730,12 +1730,12 @@ class CanvasTouchView(context: Context) : View(context) {
     // 视图参数后整条笔迹共用一份变换, 并且只往复用数组里写结果, 全程零分配。
     private val viewTransform = CanvasViewTransform()
     private val pointScratch = FloatArray(2)
-    private val symScratchX = FloatArray(16)
-    private val symScratchY = FloatArray(16)
-    private val symEndScratchX = FloatArray(16)
-    private val symEndScratchY = FloatArray(16)
-    private val cursorSymScreenX = FloatArray(16)
-    private val cursorSymScreenY = FloatArray(16)
+    private val symScratchX = FloatArray(72)
+    private val symScratchY = FloatArray(72)
+    private val symEndScratchX = FloatArray(72)
+    private val symEndScratchY = FloatArray(72)
+    private val cursorSymScreenX = FloatArray(72)
+    private val cursorSymScreenY = FloatArray(72)
     private val boundsScratch = IntArray(4)
     // 512 显示瓦片: 视口命中的瓦片列表 (复用) 与边缘 clamp 的着色器缓存
     private var tileDrawScratch = IntArray(0)

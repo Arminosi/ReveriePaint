@@ -347,4 +347,49 @@ class GuideModelsTest {
         assertEquals(0, symConfig.writeSymmetricPoints(200f, Float.POSITIVE_INFINITY, 1000, 1000, outX, outY))
         assertEquals(0, symConfig.writeSymmetricPoints(200f, 300f, 1000, 1000, FloatArray(0), outY))
     }
+
+    @Test
+    fun `computeSymmetricPoints radial mode with 3 rays produces 2 branches for 3-blade top`() {
+        val config = DrawingGuideConfig(
+            mode = GuideMode.SYMMETRY,
+            symmetryType = SymmetryType.RADIAL,
+            symmetryRayCount = 3,
+            symmetryRotational = true,
+            symmetryCenterX = 0.5f,
+            symmetryCenterY = 0.5f
+        )
+        val symPts = config.computeSymmetricPoints(Point2D(600f, 500f), docWidth = 1000, docHeight = 1000)
+        assertEquals(2, symPts.size)
+        // Point is (100, 0) in local.
+        // Branch 1 at 120 deg: cos(120) = -0.5, sin(120) = 0.866025
+        assertEquals(450f, symPts[0].x, 0.05f)
+        assertEquals(586.6f, symPts[0].y, 0.1f)
+        // Branch 2 at 240 deg: cos(240) = -0.5, sin(240) = -0.866025
+        assertEquals(450f, symPts[1].x, 0.05f)
+        assertEquals(413.4f, symPts[1].y, 0.1f)
+    }
+
+    @Test
+    fun `computeSymmetricPoints radial kaleidoscope mode with 4 rays produces 7 branches`() {
+        val config = DrawingGuideConfig(
+            mode = GuideMode.SYMMETRY,
+            symmetryType = SymmetryType.RADIAL,
+            symmetryRayCount = 4,
+            symmetryRotational = false,
+            symmetryCenterX = 0.5f,
+            symmetryCenterY = 0.5f
+        )
+        val docPt = Point2D(600f, 500f)
+        val symPts = config.computeSymmetricPoints(docPt, docWidth = 1000, docHeight = 1000)
+        assertEquals(2 * 4 - 1, symPts.size) // 7 branches (8 total sectors)
+
+        val outX = FloatArray(32)
+        val outY = FloatArray(32)
+        val count = config.writeSymmetricPoints(docPt.x, docPt.y, 1000, 1000, outX, outY)
+        assertEquals(symPts.size, count)
+        for (i in 0 until count) {
+            assertEquals(symPts[i].x, outX[i], 0.001f)
+            assertEquals(symPts[i].y, outY[i], 0.001f)
+        }
+    }
 }

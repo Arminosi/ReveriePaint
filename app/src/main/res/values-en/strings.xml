@@ -1721,6 +1721,12 @@
     <string name="guide_symmetry_center">Axis Center</string>
     <string name="guide_symmetry_rotation">Rotation Angle</string>
     <string name="guide_symmetry_reset_center">Reset Center</string>
+    <string name="guide_symmetry_mode">Symmetry Mode</string>
+    <string name="guide_symmetry_mode_rotational">Rotational</string>
+    <string name="guide_symmetry_mode_mirrored">Kaleidoscope</string>
+    <string name="guide_symmetry_rays">Symmetry Axes</string>
+    <string name="guide_symmetry_rays_rotational_format">%d-fold Rotation</string>
+    <string name="guide_symmetry_rays_mirrored_format">%1$d Axes (%2$d Slices)</string>
     <string name="guide_perspective_ray_density">Ray Density</string>
     <string name="guide_perspective_mode_3d">3D Grid</string>
     <string name="guide_perspective_mode_vanish">Vanishing Rays</string>

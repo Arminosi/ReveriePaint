@@ -275,6 +275,18 @@ internal fun DrawScope.drawDrawingGuides(
                                 )
                             }
 
+                            fun drawRotatedRay(dirX: Float, dirY: Float) {
+                                val rx = dirX * cosR - dirY * sinR
+                                val ry = dirX * sinR + dirY * cosR
+                                drawLine(
+                                    symCol,
+                                    Offset(cx, cy),
+                                    Offset(cx + rx * dMax, cy + ry * dMax),
+                                    strokeWidth = symStroke.width,
+                                    pathEffect = symStroke.pathEffect,
+                                )
+                            }
+
                             when (guide.symmetryType) {
                                 SymmetryType.VERTICAL -> {
                                     drawRotatedLine(0f, 1f)
@@ -287,11 +299,23 @@ internal fun DrawScope.drawDrawingGuides(
                                     drawRotatedLine(1f, 0f)
                                 }
                                 SymmetryType.RADIAL -> {
-                                    drawRotatedLine(0f, 1f)
-                                    drawRotatedLine(1f, 0f)
-                                    val diag = 0.70710678f
-                                    drawRotatedLine(diag, diag)
-                                    drawRotatedLine(-diag, diag)
+                                    val rays = guide.symmetryRayCount.coerceIn(
+                                        com.reverie.paint.model.SYMMETRY_RAY_COUNT_MIN,
+                                        com.reverie.paint.model.SYMMETRY_RAY_COUNT_MAX,
+                                    )
+                                    if (guide.symmetryRotational) {
+                                        val step = 2f * PI.toFloat() / rays.toFloat()
+                                        for (k in 0 until rays) {
+                                            val ang = k * step
+                                            drawRotatedRay(sin(ang), cos(ang))
+                                        }
+                                    } else {
+                                        val step = PI.toFloat() / rays.toFloat()
+                                        for (k in 0 until rays) {
+                                            val ang = k * step
+                                            drawRotatedLine(sin(ang), cos(ang))
+                                        }
+                                    }
                                 }
                             }
 

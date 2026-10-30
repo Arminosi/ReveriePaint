@@ -52,6 +52,7 @@ function makeD1(database) {
 const env = {
   DB: makeD1(db),
   INGEST_KEY: process.env.INGEST_KEY ?? '',
+  STATS_KEY: process.env.STATS_KEY ?? '',
   DISABLED: process.env.DISABLED ?? '0',
 };
 

@@ -18,7 +18,8 @@ curl -s 'http://127.0.0.1:8787/t/v1/stats?days=7' | head
 cd telemetry/worker
 npx wrangler d1 create reveriepaint_telemetry      # 把返回的 database_id 填进 wrangler.toml
 npx wrangler d1 execute reveriepaint_telemetry --file=./schema.sql --remote
-npx wrangler secret put INGEST_KEY                  # 生成的随机串, 同时写进 CI/本地 secret
+npx wrangler secret put INGEST_KEY                  # 上报写入凭据, 生成的随机串写进 CI/客户端
+npx wrangler secret put STATS_KEY                   # 看板只读凭据, 只给自己用, 不要进 APK
 npx wrangler deploy
 ```
 
@@ -50,8 +51,15 @@ npx wrangler deploy --var DISABLED:1
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | `POST` | `/t/v1/crash` | 上报入口。`Content-Encoding: gzip` 可选,`x-rp-key` 校验 |
-| `GET` | `/t/v1/stats?days=7&token=…` | 按签名聚合的 HTML 简表,`?sig=` 可看某类崩溃的最近样本 |
+| `GET` | `/t/v1/stats?days=7&key=…` | 看板(`key` 用 **STATS_KEY**)。支持 `&model=` `&ver=` 筛选、`&sig=` 下钻 |
 | `GET` | `/t/v1/health` | 存活探针,回显 `disabled` 状态 |
+
+## 看板
+
+`/t/v1/stats` 是服务端渲染的只读页面(无 JS、无外部资源):每日趋势条形、按签名聚合(次数/设备数/末见版本)、
+版本分布、机型分布;点机型或版本下钻筛选,点签名看最近 20 条原始样本。
+`STATS_KEY` 与 `INGEST_KEY` 必须分开 —— 看板 key 会进浏览器历史与 Referer, 不能是能写入的凭据。
+未配置 `STATS_KEY` 时会退回 `INGEST_KEY`(仅为兼容旧部署)。
 
 ## 配额
 

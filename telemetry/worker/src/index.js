@@ -76,6 +76,18 @@ function checkKey(request, env, url) {
   if (given !== expected) throw new HttpError(401, 'bad_key');
 }
 
+/**
+ * 看板的只读鉴权。与上报用的 INGEST_KEY 分开:
+ * 看板 key 会进浏览器地址栏、历史记录与 Referer, 绝不能复用写入凭据。
+ * 未配置 STATS_KEY 时退回 INGEST_KEY(兼容旧部署)。
+ */
+function checkStatsKey(request, env, url) {
+  const expected = env.STATS_KEY || env.INGEST_KEY || '';
+  if (!expected) return;
+  const given = request.headers.get('x-stats-key') ?? url.searchParams.get('key') ?? '';
+  if (given !== expected) throw new HttpError(401, 'bad_key');
+}
+
 async function readBody(request) {
   const ab = await request.arrayBuffer();
   if (ab.byteLength > MAX_BODY_BYTES) throw new HttpError(413, 'too_large');
@@ -248,77 +260,213 @@ function fmtTime(sec) {
 }
 
 async function handleStats(request, url, env) {
-  checkKey(request, env, url);
-  const days = Math.min(Math.max(clampInt(url.searchParams.get('days'), 7), 1), 90);
-  const sigFilter = url.searchParams.get('sig');
+  checkStatsKey(request, env, url);
   const db = env.DB;
-  const since = Math.floor(Date.now() / 1000) - days * 86400;
+  const days = Math.min(Math.max(clampInt(url.searchParams.get('days'), 7), 1), 90);
+  const ctx = {
+    db,
+    days,
+    since: Math.floor(Date.now() / 1000) - days * 86400,
+    model: clampText(url.searchParams.get('model'), 64),
+    ver: clampText(url.searchParams.get('ver'), 32),
+    key: url.searchParams.get('key') ?? '',
+  };
+  const sig = clampText(url.searchParams.get('sig'), 128);
+  return sig ? await renderSignature(ctx, sig) : await renderOverview(ctx);
+}
 
-  if (sigFilter) {
-    const rows = await db
-      .prepare('SELECT received, app_ver, model, payload FROM crashes WHERE sig = ? AND at >= ? ORDER BY at DESC LIMIT 20')
-      .bind(sigFilter, since)
-      .all();
-    const items = rows.results ?? [];
-    const body = items
-      .map(
-        (r) => `<details><summary>${fmtTime(r.received)} · ${escapeHtml(r.app_ver)} · ${escapeHtml(
-          r.model,
-        )}</summary><pre>${escapeHtml(prettyPayload(r.payload))}</pre></details>`,
-      )
-      .join('\n');
-    return htmlPage(`签名 ${escapeHtml(sigFilter)} · 最近 ${items.length} 条`, `<p><a href="?days=${days}">返回聚合</a></p>${body || '<p>无记录</p>'}`);
+/** WHERE 子句拼装: 所有查询都走同一条时间窗 + 可选机型/版本筛选 */
+function whereClause(ctx, extra = []) {
+  const clauses = ['at >= ?'];
+  const params = [ctx.since];
+  if (ctx.model) {
+    clauses.push('model = ?');
+    params.push(ctx.model);
   }
+  if (ctx.ver) {
+    clauses.push('app_ver = ?');
+    params.push(ctx.ver);
+  }
+  for (const e of extra) clauses.push(e);
+  return { sql: ' WHERE ' + clauses.join(' AND '), params };
+}
 
-  const agg = await db
-    .prepare(
-      `SELECT sig, kind, COUNT(*) AS n, COUNT(DISTINCT install) AS people,
-              MIN(at) AS first_at, MAX(at) AS last_at, MAX(app_ver) AS last_ver
-         FROM crashes WHERE at >= ?
-        GROUP BY sig, kind
-        ORDER BY people DESC, n DESC
-        LIMIT 100`,
-    )
-    .bind(since)
-    .all();
+async function rows(ctx, sql, params) {
+  const res = await ctx.db.prepare(sql).bind(...params).all();
+  return res.results ?? [];
+}
 
-  const models = await db
-    .prepare(
-      `SELECT model, sdk, COUNT(*) AS n FROM crashes WHERE at >= ?
-        GROUP BY model, sdk ORDER BY n DESC LIMIT 15`,
-    )
-    .bind(since)
-    .all();
+async function row0(ctx, sql, params) {
+  return (await ctx.db.prepare(sql).bind(...params).first()) ?? {};
+}
 
-  const total = await db.prepare('SELECT COUNT(*) AS n, COUNT(DISTINCT install) AS i FROM crashes WHERE at >= ?').bind(since).first();
+/** 生成页内链接时把 key 带上, 否则每点一次筛选都会 401 */
+function link(ctx, extra = {}) {
+  const qs = new URLSearchParams();
+  qs.set('days', String(ctx.days));
+  if (ctx.model) qs.set('model', ctx.model);
+  if (ctx.ver) qs.set('ver', ctx.ver);
+  for (const [k, v] of Object.entries(extra)) {
+    if (v === null || v === undefined || v === '') continue;
+    qs.set(k, String(v));
+  }
+  if (ctx.key) qs.set('key', ctx.key);
+  return '?' + qs.toString();
+}
 
-  const rows = (agg.results ?? [])
+function fillTrend(points, days) {
+  const map = new Map(points.map((p) => [p.d, p.n]));
+  const out = [];
+  const now = Date.now();
+  for (let i = days - 1; i >= 0; i--) {
+    const key = new Date(now - i * 86400000).toISOString().slice(0, 10);
+    out.push({ d: key, n: map.get(key) ?? 0 });
+  }
+  return out;
+}
+
+function trendBars(points) {
+  const max = Math.max(1, ...points.map((p) => p.n));
+  const bars = points
+    .map((p) => {
+      const h = Math.max(p.n > 0 ? 3 : 1, Math.round((p.n / max) * 48));
+      const color = p.n > 0 ? '#5a6e8a' : '#e2e2de';
+      return `<div class="bar" title="${escapeHtml(p.d)}: ${p.n}"><i style="height:${h}px;background:${color}"></i></div>`;
+    })
+    .join('');
+  const total = points.reduce((a, p) => a + p.n, 0);
+  return `<div class="trend">${bars}</div>
+    <div class="hint">每日上报数（峰值 ${max}）· 区间合计 ${total} · ${escapeHtml(points[0]?.d ?? '')} → ${escapeHtml(
+      points[points.length - 1]?.d ?? '',
+    )}</div>`;
+}
+
+function filterChips(ctx) {
+  const parts = [];
+  if (ctx.model) parts.push(`机型 <b>${escapeHtml(ctx.model)}</b>`);
+  if (ctx.ver) parts.push(`版本 <b>${escapeHtml(ctx.ver)}</b>`);
+  if (parts.length === 0) return '';
+  return `<p class="chips">当前筛选: ${parts.join(' · ')} <a href="${link(ctx, { model: '', ver: '' })}">清除</a></p>`;
+}
+
+async function renderOverview(ctx) {
+  const w = whereClause(ctx);
+  const total = await row0(ctx, `SELECT COUNT(*) AS n, COUNT(DISTINCT install) AS i FROM crashes${w.sql}`, w.params);
+  const sigRows = await rows(
+    ctx,
+    `SELECT sig, kind, COUNT(*) AS n, COUNT(DISTINCT install) AS people,
+            MIN(at) AS first_at, MAX(at) AS last_at, MAX(app_ver) AS last_ver
+       FROM crashes${w.sql}
+      GROUP BY sig, kind ORDER BY people DESC, n DESC LIMIT 100`,
+    w.params,
+  );
+  const modelRows = await rows(
+    ctx,
+    `SELECT model, sdk, COUNT(*) AS n FROM crashes${w.sql} GROUP BY model, sdk ORDER BY n DESC LIMIT 12`,
+    w.params,
+  );
+  const verRows = await rows(
+    ctx,
+    `SELECT app_ver, COUNT(*) AS n, COUNT(DISTINCT install) AS people FROM crashes${w.sql}
+      GROUP BY app_ver ORDER BY n DESC LIMIT 8`,
+    w.params,
+  );
+  const trendRows = await rows(
+    ctx,
+    `SELECT date(received,'unixepoch') AS d, COUNT(*) AS n FROM crashes${w.sql} GROUP BY d ORDER BY d`,
+    w.params,
+  );
+
+  const sigTable = sigRows
     .map(
       (r) => `<tr>
-        <td><a href="?days=${days}&sig=${encodeURIComponent(r.sig)}">${escapeHtml(r.kind)} · ${escapeHtml(
-          r.sig.slice(0, 12),
-        )}…</a></td>
+        <td><a href="${link(ctx, { sig: r.sig })}">${escapeHtml(r.kind)} · ${escapeHtml(r.sig.slice(0, 12))}…</a></td>
         <td class="n">${r.n}</td><td class="n">${r.people}</td>
         <td>${escapeHtml(r.last_ver)}</td><td>${fmtTime(r.first_at)} → ${fmtTime(r.last_at)}</td>
       </tr>`,
     )
-    .join('\n');
+    .join('');
 
-  const modelRows = (models.results ?? [])
-    .map((m) => `<tr><td>${escapeHtml(m.model)}</td><td class="n">${m.sdk}</td><td class="n">${m.n}</td></tr>`)
-    .join('\n');
+  const modelTable = modelRows
+    .map(
+      (m) => `<tr>
+        <td><a href="${link(ctx, { model: m.model })}">${escapeHtml(m.model || '(未知)')}</a></td>
+        <td class="n">${m.sdk}</td><td class="n">${m.n}</td>
+      </tr>`,
+    )
+    .join('');
+
+  const verTable = verRows
+    .map(
+      (v) => `<tr>
+        <td><a href="${link(ctx, { ver: v.app_ver })}">${escapeHtml(v.app_ver || '(未知)')}</a></td>
+        <td class="n">${v.n}</td><td class="n">${v.people}</td>
+      </tr>`,
+    )
+    .join('');
 
   const body = `
-    <p>近 ${days} 天: <b>${total?.n ?? 0}</b> 条上报 · <b>${total?.i ?? 0}</b> 台设备 · <b>${
-      (agg.results ?? []).length
-    }</b> 个签名</p>
+    ${filterChips(ctx)}
+    <p>近 ${ctx.days} 天: <b>${total.n ?? 0}</b> 条上报 · <b>${total.i ?? 0}</b> 台设备 · <b>${sigRows.length}</b> 个签名</p>
+    <h2>每日趋势</h2>${trendBars(fillTrend(trendRows, ctx.days))}
     <h2>按签名聚合</h2>
     <table><thead><tr><th>签名</th><th>次数</th><th>设备数</th><th>末见版本</th><th>首末见到</th></tr></thead>
-    <tbody>${rows || '<tr><td colspan="5">近 ' + days + ' 天无上报</td></tr>'}</tbody></table>
+    <tbody>${sigTable || `<tr><td colspan="5">近 ${ctx.days} 天无上报</td></tr>`}</tbody></table>
+    <h2>版本分布</h2>
+    <table><thead><tr><th>版本</th><th>次数</th><th>设备数</th></tr></thead>
+    <tbody>${verTable || '<tr><td colspan="3">无</td></tr>'}</tbody></table>
     <h2>机型分布</h2>
     <table><thead><tr><th>机型</th><th>SDK</th><th>次数</th></tr></thead>
-    <tbody>${modelRows || '<tr><td colspan="3">无</td></tr>'}</tbody></table>`;
-  return htmlPage(`崩溃聚合 · 近 ${days} 天`, body);
+    <tbody>${modelTable || '<tr><td colspan="3">无</td></tr>'}</tbody></table>
+    <p class="hint">点机型或版本可下钻筛选 · 点签名看原始样本</p>`;
+  return htmlPage(`崩溃聚合 · 近 ${ctx.days} 天`, body);
+}
+
+async function renderSignature(ctx, sig) {
+  const w = whereClause(ctx, ['sig = ?']);
+  w.params.push(sig);
+  const head = await row0(
+    ctx,
+    `SELECT COUNT(*) AS n, COUNT(DISTINCT install) AS people, MIN(at) AS first_at, MAX(at) AS last_at,
+            MIN(app_ver) AS first_ver, MAX(app_ver) AS last_ver
+       FROM crashes${w.sql}`,
+    w.params,
+  );
+  const modelRows = await rows(
+    ctx,
+    `SELECT model, sdk, COUNT(*) AS n FROM crashes${w.sql} GROUP BY model, sdk ORDER BY n DESC LIMIT 12`,
+    w.params,
+  );
+  const samples = await rows(
+    ctx,
+    `SELECT received, app_ver, model, sdk, payload FROM crashes${w.sql} ORDER BY at DESC LIMIT 20`,
+    w.params,
+  );
+
+  const modelTable = modelRows
+    .map((m) => `<tr><td>${escapeHtml(m.model || '(未知)')}</td><td class="n">${m.sdk}</td><td class="n">${m.n}</td></tr>`)
+    .join('');
+
+  const sampleHtml = samples
+    .map(
+      (r) => `<details><summary>${fmtTime(r.received)} · ${escapeHtml(r.app_ver)} · ${escapeHtml(
+        r.model,
+      )} · SDK ${r.sdk}</summary><pre>${escapeHtml(prettyPayload(r.payload))}</pre></details>`,
+    )
+    .join('');
+
+  const body = `
+    <p><a href="${link(ctx, { sig: '' })}">← 返回聚合</a></p>
+    <p>签名 <code>${escapeHtml(sig)}</code></p>
+    <p><b>${head.n ?? 0}</b> 条 · <b>${head.people ?? 0}</b> 台设备 · 版本 ${escapeHtml(
+      head.first_ver ?? '',
+    )} → ${escapeHtml(head.last_ver ?? '')} · ${fmtTime(head.first_at)} → ${fmtTime(head.last_at)}</p>
+    <h2>机型分布</h2>
+    <table><thead><tr><th>机型</th><th>SDK</th><th>次数</th></tr></thead>
+    <tbody>${modelTable || '<tr><td colspan="3">无</td></tr>'}</tbody></table>
+    <h2>最近 ${samples.length} 条样本</h2>
+    ${sampleHtml || '<p>无记录</p>'}`;
+  return htmlPage(`签名 ${sig.slice(0, 12)} · 近 ${ctx.days} 天`, body);
 }
 
 function prettyPayload(text) {
@@ -346,6 +494,14 @@ td.n{text-align:right;font-variant-numeric:tabular-nums}
 a{color:#5a6e8a}
 pre{background:#fff;padding:12px;border-radius:8px;overflow:auto;font-size:12px;max-height:60vh}
 details{margin:6px 0}
+code{background:#ececea;padding:1px 5px;border-radius:4px;font-size:12px}
+.hint{color:#8a8f99;font-size:12px;margin:6px 0 0}
+.chips{background:#fff;border-radius:10px;padding:8px 12px;font-size:13px;
+       box-shadow:0 1px 2px rgba(0,0,0,.06)}
+.trend{display:flex;align-items:flex-end;gap:3px;height:64px;background:#fff;
+       padding:8px;border-radius:10px;box-shadow:0 1px 2px rgba(0,0,0,.06)}
+.bar{flex:1;display:flex;align-items:flex-end;min-width:2px}
+.bar i{display:block;width:100%;border-radius:2px}
 </style></head><body><h1>${escapeHtml(title)}</h1>${body}</body></html>`,
     { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } },
   );

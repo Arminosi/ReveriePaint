@@ -198,7 +198,7 @@ sig = sha256(kind + "|" + app.code + "|" + 异常类名 + "|" + 前 3 个帧的 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | `POST` | `/t/v1/crash` | 上报入口,`Content-Type: application/json`,`Content-Encoding: gzip` |
-| `GET` | `/t/v1/stats?days=7&key=…` | 按签名聚合的 HTML 简表(`?key=` 校验,`?sig=` 看某类崩溃的最近样本) |
+| `GET` | `/t/v1/stats?days=7&key=…` | 看板(`STATS_KEY` 校验):趋势/签名聚合/版本分布/机型分布;`&model=` `&ver=` 筛选,`&sig=` 下钻 |
 | `GET` | `/t/v1/health` | 存活探针,回显 `disabled` 状态 |
 
 保留期 180 天,由 `scheduled` 定时任务每日删除(`wrangler.toml` 的 `[triggers]`)。
@@ -236,7 +236,7 @@ Worker 不读 `CF-Connecting-IP`,不写任何 IP 或 IP 哈希。滥用防护靠
 | 对外端点 | `https://telemetry.lanrhyme.top`(**自定义域,必需**) |
 | D1 | `reveriepaint_telemetry` · `2ac5fc7b-9816-410d-9267-9a55f455359d`(region WNAM) |
 | 定时任务 | `17 3 * * *` 保留期清理 |
-| 密钥 | `INGEST_KEY`(`wrangler secret put`,客户端用 `-PtelemetryKey` / `TELEMETRY_KEY` 注入) |
+| 密钥 | `INGEST_KEY`(写入,客户端用 `-PtelemetryKey` / `TELEMETRY_KEY` 注入) · `STATS_KEY`(看板只读,只在本机) |
 
 > **为什么必须走自定义域**: 真机实测 `*.workers.dev` 在国内移动网络下 DNS 被污染,连接直接吊死成
 > `SocketTimeoutException`;换成 `telemetry.lanrhyme.top` 后同一份 APK 立刻 200。

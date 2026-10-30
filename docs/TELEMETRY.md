@@ -198,14 +198,18 @@ sig = sha256(kind + "|" + app.code + "|" + 异常类名 + "|" + 前 3 个帧的 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | `POST` | `/t/v1/crash` | 上报入口,`Content-Type: application/json`,`Content-Encoding: gzip` |
-| `GET` | `/t/v1/stats?days=7` | 看板(`STATS_KEY` 校验):趋势/签名聚合/版本分布/机型分布;`&model=` `&ver=` 筛选,`&sig=` 下钻 |
+| `GET` | `/t/v1/stats?days=7` | 看板:固定公开链接 + 登录门(`STATS_PASSWORD`);未登录给登录页,脚本用 `?key=` 或 `x-stats-key` 免登录 |
 | `GET` | `/t/v1/health` | 存活探针,回显 `disabled` 状态 |
 
 保留期 180 天,由 `scheduled` 定时任务每日删除(`wrangler.toml` 的 `[triggers]`)。
 
-**固定书签**:第一次用 `?key=<STATS_KEY>` 打开后,服务端种下 `rp_stats` Cookie 并 302 到不带 key 的干净 URL;
-之后书签固定为 `?days=7` 即可。Cookie 里放的是 `sha256("revp-stats-v1|"+STATS_KEY)` 而不是 key 本身
-(HttpOnly / Secure / SameSite=Lax),且每次访问滑动续期一年。这样既让链接固定,也不会把写入凭据带进浏览器历史。
+**完全固定的链接**:`https://telemetry.lanrhyme.top/t/v1/stats` —— 不含任何密钥,谁拿到都能打开,
+但看到的是登录页(输入 `STATS_PASSWORD`),登录后种一年期 `rp_stats` Cookie 直接进看板,页头有「退出」。
+
+- Cookie 里放的是 `sha256("revp-stats-v1|"+密码)` 而不是密码本身(HttpOnly / Secure / SameSite=Lax),每次访问滑动续期一年
+- 登录失败统一 `401` + 同一条错误提示,并延迟 600 ms 抬高爆破成本;a 登录后 `next` 参数只允许跳回本站看板路径(防开放重定向)
+- 脚本/CI 仍可用 `?key=<STATS_KEY>` 或 `x-stats-key` 头直接取数据,不必走登录
+- 浏览器(带 `Accept: text/html`)未登录给登录页;其它客户端给 `401 JSON`,避免把 HTML 当 JSON 解析
 
 ### 7.2 D1 schema
 
@@ -240,7 +244,7 @@ Worker 不读 `CF-Connecting-IP`,不写任何 IP 或 IP 哈希。滥用防护靠
 | 对外端点 | `https://telemetry.lanrhyme.top`(**自定义域,必需**) |
 | D1 | `reveriepaint_telemetry` · `2ac5fc7b-9816-410d-9267-9a55f455359d`(region WNAM) |
 | 定时任务 | `17 3 * * *` 保留期清理 |
-| 密钥 | `INGEST_KEY`(写入,客户端用 `-PtelemetryKey` / `TELEMETRY_KEY` 注入) · `STATS_KEY`(看板只读,只在本机) |
+| 密钥 | `INGEST_KEY`(写入,客户端用 `-PtelemetryKey` / `TELEMETRY_KEY` 注入) · `STATS_KEY`(脚本只读) · `STATS_PASSWORD`(登录页密码,可随时改) |
 
 > **为什么必须走自定义域**: 真机实测 `*.workers.dev` 在国内移动网络下 DNS 被污染,连接直接吊死成
 > `SocketTimeoutException`;换成 `telemetry.lanrhyme.top` 后同一份 APK 立刻 200。

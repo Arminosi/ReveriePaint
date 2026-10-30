@@ -53,6 +53,7 @@ const env = {
   DB: makeD1(db),
   INGEST_KEY: process.env.INGEST_KEY ?? '',
   STATS_KEY: process.env.STATS_KEY ?? '',
+  STATS_PASSWORD: process.env.STATS_PASSWORD ?? '',
   DISABLED: process.env.DISABLED ?? '0',
 };
 

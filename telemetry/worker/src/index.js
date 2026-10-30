@@ -40,6 +40,19 @@ export default {
       if (path === '/t/v1/stats' && request.method === 'GET') {
         return await handleStats(request, url, env);
       }
+      if (path === '/t/v1/stats' && request.method === 'POST') {
+        return await handleLogin(request, url, env);
+      }
+      if (path === '/t/v1/logout') {
+        return new Response(null, {
+          status: 303,
+          headers: {
+            location: '/t/v1/stats',
+            'set-cookie': cookie('rp_stats', '', 0),
+            'cache-control': 'no-store',
+          },
+        });
+      }
       return json({ ok: false, error: 'not_found' }, 404);
     } catch (err) {
       if (err instanceof HttpError) {
@@ -78,25 +91,66 @@ function checkKey(request, env, url) {
   if (given !== expected) throw new HttpError(401, 'bad_key');
 }
 
+// ---------------------------------------------------------------- 看板鉴权
+
 /**
- * 看板的只读鉴权。与上报用的 INGEST_KEY 分开:
- * 看板凭据会进浏览器地址栏与书签, 绝不能复用写入凭据。
- * 未配置 STATS_KEY 时退回 INGEST_KEY(兼容旧部署)。
+ * 看板是"固定公开链接 + 登录门"的形态:
+ *   - 链接本身不含任何秘密, 任何人拿到都能打开, 但看到的是登录页
+ *   - 登录密码用 STATS_PASSWORD(未配置则退回 STATS_KEY / INGEST_KEY)
+ *   - 登录成功后种一年期的 HttpOnly Cookie, 之后直接进看板
+ *   - 脚本仍可用 ?key=STATS_KEY 或 x-stats-key 头直接取数据(免登录)
  *
- * 三种凭据形态: ?key= / x-stats-key 头 / rp_stats Cookie。
- * 用 Cookie 是为了让"书签链接"固定 —— 首次带 key 访问后跳转到干净 URL, 之后只靠 Cookie。
+ * 与上报的 INGEST_KEY 分开的原因: 看板凭据会进浏览器/书签, 不能是写入凭据。
  */
-async function checkStatsKey(request, env, url) {
-  const secret = env.STATS_KEY || env.INGEST_KEY || '';
-  if (!secret) return;
-  const given =
-    url.searchParams.get('key') ??
-    request.headers.get('x-stats-key') ??
-    cookieValue(request, 'rp_stats') ??
-    '';
-  if (given === secret) return;
-  if (given && given === (await statsToken(env))) return;
-  throw new HttpError(401, given ? 'bad_key' : 'need_key');
+function statsPassword(env) {
+  return env.STATS_PASSWORD || env.STATS_KEY || env.INGEST_KEY || '';
+}
+
+function statsKey(env) {
+  return env.STATS_KEY || env.INGEST_KEY || '';
+}
+
+/** Cookie 里放的不是密码本身, 而是 sha256("revp-stats-v1|"+密码), 泄了也拿不到密码 */
+async function statsToken(env) {
+  const secret = statsPassword(env);
+  if (!secret) return '';
+  const data = new TextEncoder().encode('revp-stats-v1|' + secret);
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', data));
+  let out = '';
+  for (const b of digest) out += b.toString(16).padStart(2, '0');
+  return out;
+}
+
+function safeEqual(a, b) {
+  const x = new TextEncoder().encode(a);
+  const y = new TextEncoder().encode(b);
+  if (x.length !== y.length) return false;
+  let diff = 0;
+  for (let i = 0; i < x.length; i++) diff |= x[i] ^ y[i];
+  return diff === 0;
+}
+
+/** 是否已通过鉴权; 不做异常, 供"要不要显示登录页"判断 */
+async function isStatsAuthed(request, env, url) {
+  const secret = statsPassword(env);
+  if (!secret) return true; // 未配置时放行(仅本地开发)
+
+  const cookieVal = cookieValue(request, 'rp_stats') ?? '';
+  if (cookieVal) {
+    const token = await statsToken(env);
+    if (token && safeEqual(cookieVal, token)) return true;
+  }
+
+  const qKey = url.searchParams.get('key') ?? request.headers.get('x-stats-key') ?? '';
+  if (qKey && safeEqual(qKey, secret)) return true;
+  const k = statsKey(env);
+  if (qKey && k && safeEqual(qKey, k)) return true;
+  return false;
+}
+
+/** 浏览器给登录页, 程序和 curl 给 401(别把 HTML 当 JSON 解析) */
+function wantsHtml(request) {
+  return (request.headers.get('accept') ?? '').includes('text/html');
 }
 
 const THEMES = ['auto', 'light', 'dark'];
@@ -119,17 +173,6 @@ function cookieValue(request, name) {
     if (i > 0 && part.slice(0, i).trim() === name) return part.slice(i + 1).trim();
   }
   return null;
-}
-
-/** Cookie 里放的不是 key 本身, 而是 sha256("revp-stats-v1|"+key), 泄了也拿不到写入凭据 */
-async function statsToken(env) {
-  const secret = env.STATS_KEY || env.INGEST_KEY || '';
-  if (!secret) return '';
-  const data = new TextEncoder().encode('revp-stats-v1|' + secret);
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', data));
-  let out = '';
-  for (const b of digest) out += b.toString(16).padStart(2, '0');
-  return out;
 }
 
 async function readBody(request) {
@@ -309,8 +352,117 @@ const MORANDI = {
   anr: { color: '#8B7FA8', label: 'ANR' },
 };
 
+async function handleLogin(request, url, env) {
+  const secret = statsPassword(env);
+  if (!secret) return redirect('/t/v1/stats');
+
+  const form = await readForm(request, 8 * 1024);
+  const password = (form.get('password') ?? '').slice(0, 256);
+  const next = safeNext(form.get('next'));
+  const qKey = url.searchParams.get('key') ?? '';
+
+  const ok = (password && safeEqual(password, secret)) || (qKey && safeEqual(qKey, secret));
+  if (!ok) {
+    // 失败不区分"没填/填错", 也不回显; 稍作延迟抬高爆破成本
+    await sleep(600);
+    return new Response(loginPage({ next, error: true }), {
+      status: 401,
+      headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
+    });
+  }
+
+  return new Response(null, {
+    status: 303,
+    headers: {
+      location: next,
+      'set-cookie': cookie('rp_stats', await statsToken(env)),
+      'cache-control': 'no-store',
+    },
+  });
+}
+
+function redirect(location) {
+  return new Response(null, { status: 303, headers: { location, 'cache-control': 'no-store' } });
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** 只允许跳回本站看板路径, 防止开放重定向 */
+function safeNext(raw) {
+  const next = String(raw ?? '');
+  if (next.startsWith('/t/v1/stats') && !next.startsWith('//')) return next;
+  return '/t/v1/stats';
+}
+
+async function readForm(request, limit) {
+  const text = await request.text();
+  if (text.length > limit) throw new HttpError(413, 'too_large');
+  return new URLSearchParams(text);
+}
+
+function loginPage({ next = '/t/v1/stats', error = false } = {}) {
+  const theme = 'auto';
+  return `<!doctype html><html lang="zh-CN" data-theme="${theme}"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>ReveriePaint 崩溃看板 · 登录</title>
+<style>
+:root{--bg:#F2F2F7;--panel:#F7F7F9;--panel-hi:#EAEAEE;--text:#242426;--sub:#8A8A8E;
+      --accent:#5A6E8A;--line:rgba(0,0,0,.07);
+      --shadow:0 1px 2px rgba(0,0,0,.04), 0 24px 48px -32px rgba(20,20,30,.5)}
+@media (prefers-color-scheme: dark){
+  :root{--bg:#141416;--panel:#1E1E22;--panel-hi:#2A2A2E;--text:#F5F5F7;--sub:#8E8E93;
+        --accent:#8FA1B8;--line:rgba(255,255,255,.08);
+        --shadow:0 1px 2px rgba(0,0,0,.4), 0 24px 48px -30px rgba(0,0,0,.9)}
+}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+     background:var(--bg);color:var(--text);padding:24px;
+     font:14px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Noto Sans CJK SC",sans-serif}
+.card{width:100%;max-width:360px;background:var(--panel);border-radius:22px;padding:28px 24px;
+      box-shadow:var(--shadow)}
+.logo{display:flex;align-items:center;justify-content:center;width:52px;height:52px;margin:0 auto 16px;
+      border-radius:15px;background:#0e0f16;padding:9px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.07)}
+.logo svg{width:100%;height:100%;display:block}
+h1{margin:0;font-size:17px;font-weight:650;text-align:center;letter-spacing:.2px}
+p.sub{margin:6px 0 22px;text-align:center;color:var(--sub);font-size:12.5px}
+label{display:block;font-size:12px;color:var(--sub);margin-bottom:6px;letter-spacing:.3px}
+input[type=password]{width:100%;padding:11px 13px;border-radius:12px;border:1px solid var(--line);
+      background:var(--bg);color:var(--text);font-size:15px;outline:none;letter-spacing:.06em}
+input[type=password]:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(90,110,138,.16)}
+button{width:100%;margin-top:16px;padding:11px 13px;border:none;border-radius:12px;cursor:pointer;
+       background:var(--accent);color:#fff;font-size:14px;font-weight:600;letter-spacing:.3px}
+button:hover{filter:brightness(1.05)}
+.err{margin:0 0 14px;padding:9px 12px;border-radius:10px;background:rgba(208,68,68,.1);
+     color:#C05555;font-size:12.5px;text-align:center}
+.foot{margin-top:18px;text-align:center;color:var(--sub);font-size:11.5px}
+</style></head><body>
+<form class="card" method="post" action="/t/v1/stats">
+  <div class="logo">${APP_ICON_SVG}</div>
+  <h1>崩溃看板</h1>
+  <p class="sub">ReveriePaint · 需要密码才能查看</p>
+  ${error ? '<p class="err">密码不对, 再试一次</p>' : ''}
+  <label for="pw">访问密码</label>
+  <input id="pw" name="password" type="password" autocomplete="current-password"
+         autofocus autocapitalize="off" spellcheck="false" required>
+  <input type="hidden" name="next" value="${escapeHtml(next)}">
+  <button type="submit">进入看板</button>
+  <p class="foot">密码由上架时设置 · Cookie 保留一年</p>
+</form>
+</body></html>`;
+}
+
 async function handleStats(request, url, env) {
-  await checkStatsKey(request, env, url);
+  // 未登录: 浏览器给登录页(链接本身是公开固定的), 其它客户端给 401
+  if (!(await isStatsAuthed(request, env, url))) {
+    if (!wantsHtml(request)) throw new HttpError(401, 'need_key');
+    return new Response(loginPage({ next: url.pathname + url.search.replace(/([?&])key=[^&]*&?/, '$1') }), {
+      status: 200,
+      headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
+    });
+  }
 
   const headers = new Headers({ 'cache-control': 'no-store' });
   const token = await statsToken(env);
@@ -649,6 +801,8 @@ body{margin:0;background:var(--bg);color:var(--text);
 .brand .logo svg{width:100%;height:100%;display:block}
 .brand small{color:var(--sub);font-weight:500;letter-spacing:.4px}
 .controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.logout{font-size:12px;color:var(--sub);padding:4px 2px}
+.logout:hover{color:var(--text);text-decoration:none}
 .range{display:flex;gap:6px;background:var(--panel-hi);padding:4px;border-radius:999px}
 .pill{padding:5px 12px;border-radius:999px;font-size:12.5px;color:var(--sub);text-decoration:none}
 .pill.on{background:var(--panel);color:var(--text);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.08)}
@@ -713,6 +867,7 @@ details.sample pre{margin:0;padding:0 14px 14px;font-size:11.5px;line-height:1.5
   <div class="controls">
     <nav class="range">${rangeNav(ctx)}</nav>
     <nav class="range">${themeNav(ctx)}</nav>
+    <a class="logout" href="/t/v1/logout" title="退出登录">退出</a>
   </div>
 </header>
 ${body}

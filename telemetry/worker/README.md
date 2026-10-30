@@ -19,7 +19,8 @@ cd telemetry/worker
 npx wrangler d1 create reveriepaint_telemetry      # 把返回的 database_id 填进 wrangler.toml
 npx wrangler d1 execute reveriepaint_telemetry --file=./schema.sql --remote
 npx wrangler secret put INGEST_KEY                  # 上报写入凭据, 生成的随机串写进 CI/客户端
-npx wrangler secret put STATS_KEY                   # 看板只读凭据, 只给自己用, 不要进 APK
+npx wrangler secret put STATS_KEY                   # 脚本只读凭据, 只给自己用, 不要进 APK
+npx wrangler secret put STATS_PASSWORD               # 看板登录页的密码(短、可随时改)
 npx wrangler deploy
 ```
 
@@ -51,7 +52,9 @@ npx wrangler deploy --var DISABLED:1
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | `POST` | `/t/v1/crash` | 上报入口。`Content-Encoding: gzip` 可选,`x-rp-key` 校验 |
-| `GET` | `/t/v1/stats?days=7` | 看板(`STATS_KEY`)。首次用 `?key=<STATS_KEY>` 访问会种 Cookie 并 302 到干净 URL,此后书签固定 |
+| `GET` | `/t/v1/stats?days=7` | 看板。固定公开链接 + 登录门(未登录给登录页);脚本用 `?key=` / `x-stats-key` 免登录 |
+| `POST` | `/t/v1/stats` | 登录表单(`password` + `next`),成功后 303 + 一年期 Cookie |
+| `GET` | `/t/v1/logout` | 清 Cookie 并跳回看板 |
 | `GET` | `/t/v1/health` | 存活探针,回显 `disabled` 状态 |
 
 ## 看板
@@ -61,7 +64,8 @@ npx wrangler deploy --var DISABLED:1
 主题默认跟随系统,页头可手动切换「自动 / 浅色 / 深色」(写进 `rp_theme` Cookie)。
 图标直接内联仓库里的 `art/icon.svg`(白色星芒配 `#0e0f16` 底色,与应用图标一致)。
 
-`STATS_KEY` 与 `INGEST_KEY` 必须分开 —— 看板 key 会进浏览器历史与 Referer, 不能是能写入的凭据。
+链接本身公开固定、不含密钥,访问者需要输入 `STATS_PASSWORD` 才能看数据(登录一次管一年,页头可退出)。
+`STATS_KEY` / `INGEST_KEY` / `STATS_PASSWORD` 三者必须分开 —— 看板 key 会进浏览器历史与 Referer, 不能是能写入的凭据。
 未配置 `STATS_KEY` 时会退回 `INGEST_KEY`(仅为兼容旧部署)。
 
 ## 配额

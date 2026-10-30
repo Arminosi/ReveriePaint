@@ -790,6 +790,18 @@ internal fun PaintViewModel.executeShortcutAction(id: String) {
         "layer_duplicate" -> copyLayer(currentLayerIndex)
         "layer_merge_down" -> mergeDown(currentLayerIndex)
         "layer_toggle_vis" -> toggleLayerVisible(currentLayerIndex)
+        "layer_prev" -> {
+            if (layers.isNotEmpty()) {
+                setCurrentLayer((currentLayerIndex - 1).coerceIn(0, layers.lastIndex))
+            }
+            showActionToast(R.string.stylus_action_layer_prev, R.drawable.ic_layers)
+        }
+        "layer_next" -> {
+            if (layers.isNotEmpty()) {
+                setCurrentLayer((currentLayerIndex + 1).coerceIn(0, layers.lastIndex))
+            }
+            showActionToast(R.string.stylus_action_layer_next, R.drawable.ic_layers)
+        }
         "zoom_in" -> requestUiCommand("zoom_in")
         "zoom_out" -> requestUiCommand("zoom_out")
         "rotate_canvas" -> requestUiCommand("rotate_cw")
@@ -801,6 +813,11 @@ internal fun PaintViewModel.executeShortcutAction(id: String) {
         "tool_color" -> toggleQuickColor(atPointer = true)
         "toggle_quick_color" -> toggleQuickColor(atPointer = true)
         "toggle_quick_layer" -> toggleQuickLayer()
+        "toggle_quick_menu" -> requestUiCommand("toggle_edit_menu")
+        "toggle_ref_window" -> {
+            referenceWindowOpen = !referenceWindowOpen
+            showActionToast(R.string.stylus_action_ref_window, R.drawable.ic_reference)
+        }
         "disable_touch" -> toggleCanvasTouchDisabled()
         // 打开滤镜页并预选对应分类 (color 含 HSV/曲线, blur 含高斯模糊,
         // enhance 含锐化); 具体滤镜项仍需用户点选

@@ -51,7 +51,7 @@ npx wrangler deploy --var DISABLED:1
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | `POST` | `/t/v1/crash` | 上报入口。`Content-Encoding: gzip` 可选,`x-rp-key` 校验 |
-| `GET` | `/t/v1/stats?days=7&key=…` | 看板(`key` 用 **STATS_KEY**)。支持 `&model=` `&ver=` 筛选、`&sig=` 下钻 |
+| `GET` | `/t/v1/stats?days=7` | 看板(`STATS_KEY`)。首次用 `?key=<STATS_KEY>` 访问会种 Cookie 并 302 到干净 URL,此后书签固定 |
 | `GET` | `/t/v1/health` | 存活探针,回显 `disabled` 状态 |
 
 ## 看板

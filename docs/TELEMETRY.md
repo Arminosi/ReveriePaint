@@ -198,10 +198,14 @@ sig = sha256(kind + "|" + app.code + "|" + 异常类名 + "|" + 前 3 个帧的 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | `POST` | `/t/v1/crash` | 上报入口,`Content-Type: application/json`,`Content-Encoding: gzip` |
-| `GET` | `/t/v1/stats?days=7&key=…` | 看板(`STATS_KEY` 校验):趋势/签名聚合/版本分布/机型分布;`&model=` `&ver=` 筛选,`&sig=` 下钻 |
+| `GET` | `/t/v1/stats?days=7` | 看板(`STATS_KEY` 校验):趋势/签名聚合/版本分布/机型分布;`&model=` `&ver=` 筛选,`&sig=` 下钻 |
 | `GET` | `/t/v1/health` | 存活探针,回显 `disabled` 状态 |
 
 保留期 180 天,由 `scheduled` 定时任务每日删除(`wrangler.toml` 的 `[triggers]`)。
+
+**固定书签**:第一次用 `?key=<STATS_KEY>` 打开后,服务端种下 `rp_stats` Cookie 并 302 到不带 key 的干净 URL;
+之后书签固定为 `?days=7` 即可。Cookie 里放的是 `sha256("revp-stats-v1|"+STATS_KEY)` 而不是 key 本身
+(HttpOnly / Secure / SameSite=Lax),且每次访问滑动续期一年。这样既让链接固定,也不会把写入凭据带进浏览器历史。
 
 ### 7.2 D1 schema
 
@@ -241,6 +245,12 @@ Worker 不读 `CF-Connecting-IP`,不写任何 IP 或 IP 哈希。滥用防护靠
 > **为什么必须走自定义域**: 真机实测 `*.workers.dev` 在国内移动网络下 DNS 被污染,连接直接吊死成
 > `SocketTimeoutException`;换成 `telemetry.lanrhyme.top` 后同一份 APK 立刻 200。
 > 一个推论: `wrangler.toml` 的 `routes` 必须写在任何 `[table]` 之前,否则会被解析成上一个 table 的字段而**静默不生效**。
+
+### 7.5 看板
+
+纯服务端渲染(无 JS、无外部资源、无构建步骤),配色与 App 的 Morandi 主题同源(`ui/theme/Theme.kt` 的
+`bg/panel/accent/text/subText`),跟随系统深色模式。内容:指标卡(上报/设备/签名)、每日趋势条形、
+按签名聚合(可下钻)、版本分布、机型分布(可点击筛选);签名详情页展示版本跨度、机型分布与最近 20 条原始样本。
 
 ## 8. 配额、退避与 kill switch
 

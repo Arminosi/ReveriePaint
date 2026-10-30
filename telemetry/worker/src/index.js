@@ -194,6 +194,8 @@ function clampText(value, max) {
 }
 
 function clampInt(value, fallback = 0) {
+  // 注意 Number(null) === 0: 参数缺省时必须走 fallback, 否则 ?days 缺省会变成 1 天
+  if (value === null || value === undefined || value === '') return fallback;
   const n = Number(value);
   return Number.isFinite(n) ? Math.trunc(n) : fallback;
 }
@@ -466,10 +468,7 @@ async function handleStats(request, url, env) {
 
   const headers = new Headers({ 'cache-control': 'no-store' });
   const token = await statsToken(env);
-  if (token) {
-    // 每次通过鉴权都续期一年(滑动窗口): 书签链接才真的"固定"
-    headers.append('set-cookie', cookie('rp_stats', token));
-  }
+  if (token) headers.append('set-cookie', cookie('rp_stats', token));
 
   // ?key= / ?theme= 都先落 Cookie, 再跳回不带这些参数的同一条 URL
   const qTheme = url.searchParams.get('theme');
@@ -484,23 +483,29 @@ async function handleStats(request, url, env) {
   }
 
   const days = Math.min(Math.max(clampInt(url.searchParams.get('days'), 7), 1), 90);
+  const kind = clampText(url.searchParams.get('kind'), 24);
   const ctx = {
     db: env.DB,
     days,
     since: Math.floor(Date.now() / 1000) - days * 86400,
     model: clampText(url.searchParams.get('model'), 64),
     ver: clampText(url.searchParams.get('ver'), 32),
+    kind: KINDS.has(kind) ? kind : '',
+    q: clampText(url.searchParams.get('q'), 48),
     sig: clampText(url.searchParams.get('sig'), 128),
     theme: themeOf(request, url),
   };
-  const sig = ctx.sig;
 
-  const html = sig ? await renderSignature(ctx, sig) : await renderOverview(ctx);
+  const format = url.searchParams.get('format');
+  if (format === 'csv') return await exportCsv(ctx);
+  if (format === 'md') return await exportMarkdown(ctx);
+
+  const html = ctx.sig ? await renderSignature(ctx, ctx.sig) : await renderOverview(ctx);
   headers.set('content-type', 'text/html; charset=utf-8');
   return new Response(html, { status: 200, headers });
 }
 
-/** 时间窗 + 可选机型/版本筛选, 所有查询共用 */
+/** 时间窗 + 机型/版本/类型/关键词筛选, 所有查询共用 */
 function whereClause(ctx, extra = []) {
   const clauses = ['at >= ?'];
   const params = [ctx.since];
@@ -511,6 +516,15 @@ function whereClause(ctx, extra = []) {
   if (ctx.ver) {
     clauses.push('app_ver = ?');
     params.push(ctx.ver);
+  }
+  if (ctx.kind) {
+    clauses.push('kind = ?');
+    params.push(ctx.kind);
+  }
+  if (ctx.q) {
+    clauses.push('(sig LIKE ? OR model LIKE ? OR app_ver LIKE ?)');
+    const like = `%${ctx.q}%`;
+    params.push(like, like, like);
   }
   for (const e of extra) clauses.push(e);
   return { sql: ' WHERE ' + clauses.join(' AND '), params };
@@ -526,7 +540,15 @@ async function q1(ctx, sql, params) {
 }
 
 function link(ctx, extra = {}) {
-  const params = { days: ctx.days, model: ctx.model, ver: ctx.ver, sig: ctx.sig, ...extra };
+  const params = {
+    days: ctx.days,
+    model: ctx.model,
+    ver: ctx.ver,
+    kind: ctx.kind,
+    q: ctx.q,
+    sig: ctx.sig,
+    ...extra,
+  };
   const qs = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
     if (v === '' || v === null || v === undefined) continue;
@@ -535,9 +557,28 @@ function link(ctx, extra = {}) {
   return '?' + qs.toString();
 }
 
+function prettyPayload(text) {
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    return String(text ?? '');
+  }
+}
+
 function kindChip(kind) {
   const m = MORANDI[kind] ?? { color: '#8A8A8E', label: kind };
   return `<span class="chip"><i style="background:${m.color}"></i>${escapeHtml(m.label)}</span>`;
+}
+
+/** 相对时间: 扫读"多久以前"比读绝对时间快 */
+function fmtRel(sec) {
+  if (!sec) return '-';
+  const diff = Math.floor(Date.now() / 1000) - sec;
+  if (diff < 60) return '刚刚';
+  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`;
+  if (diff < 86400 * 30) return `${Math.floor(diff / 86400)} 天前`;
+  return fmtTime(sec).slice(0, 10);
 }
 
 function fillTrend(points, days) {
@@ -551,13 +592,13 @@ function fillTrend(points, days) {
   return out;
 }
 
-function trendChart(points) {
+function trendChart(points, compact = false) {
   const max = Math.max(1, ...points.map((p) => p.n));
   const every = Math.ceil(points.length / 7);
   const cols = points
     .map((p, i) => {
       const h = p.n === 0 ? 2 : Math.max(6, Math.round((p.n / max) * 100));
-      const label = i % every === 0 || i === points.length - 1 ? p.d.slice(5) : '';
+      const label = compact ? '' : i % every === 0 || i === points.length - 1 ? p.d.slice(5) : '';
       return `<div class="col" title="${escapeHtml(p.d)}: ${p.n} 条">
         <div class="track"><i style="height:${h}%" class="${p.n ? '' : 'zero'}"></i></div>
         <span>${label}</span>
@@ -565,7 +606,7 @@ function trendChart(points) {
     })
     .join('');
   const total = points.reduce((a, p) => a + p.n, 0);
-  return `<div class="trend">${cols}</div>
+  return `<div class="trend${compact ? ' compact' : ''}">${cols}</div>
     <p class="foot">峰值 ${max} · 合计 ${total} 条 · ${escapeHtml(points[0]?.d ?? '')} → ${escapeHtml(
       points[points.length - 1]?.d ?? '',
     )}</p>`;
@@ -595,7 +636,7 @@ function versionSpan(head) {
 }
 
 function metrics(items) {
-  return `<div class="metrics">${items
+  return `<div class="metrics m${items.length}">${items
     .map(
       (m) =>
         `<div class="metric"><span class="n${m.small ? ' small' : ''}">${m.value}</span><span class="l">${escapeHtml(
@@ -607,14 +648,57 @@ function metrics(items) {
 
 function filterChips(ctx) {
   const parts = [];
+  if (ctx.kind) parts.push(`类型 <b>${escapeHtml(ctx.kind)}</b>`);
+  if (ctx.q) parts.push(`搜索 <b>${escapeHtml(ctx.q)}</b>`);
   if (ctx.model) parts.push(`机型 <b>${escapeHtml(ctx.model)}</b>`);
   if (ctx.ver) parts.push(`版本 <b>${escapeHtml(ctx.ver)}</b>`);
   if (parts.length === 0) return '';
-  return `<div class="chips">${parts.join(' · ')} <a href="${link(ctx, { model: '', ver: '' })}">清除</a></div>`;
+  return `<div class="chips">${parts.join(' · ')} <a href="${link(ctx, {
+    model: '',
+    ver: '',
+    kind: '',
+    q: '',
+  })}">清除全部</a></div>`;
+}
+
+/** 类型筛选 + 搜索框 + 导出, 三者都保留当前其余筛选 */
+function toolbar(ctx) {
+  const kinds = [
+    ['', '全部'],
+    ['native_crash', 'Native'],
+    ['java_crash', 'Java'],
+    ['anr', 'ANR'],
+  ];
+  const kindLinks = kinds
+    .map(
+      ([v, label]) =>
+        `<a class="pill${ctx.kind === v ? ' on' : ''}" href="${link(ctx, { kind: v, sig: '' })}">${label}</a>`,
+    )
+    .join('');
+
+  const hidden = ['days', 'model', 'ver', 'kind']
+    .filter((k) => ctx[k])
+    .map((k) => `<input type="hidden" name="${k}" value="${escapeHtml(String(ctx[k]))}">`)
+    .join('');
+
+  return `<div class="toolbar">
+    <nav class="range">${kindLinks}</nav>
+    <form class="search" method="get" action="/t/v1/stats">
+      ${hidden}
+      <input type="search" name="q" placeholder="搜签名 / 机型 / 版本" value="${escapeHtml(ctx.q)}"
+             autocapitalize="off" spellcheck="false">
+      <button type="submit">搜索</button>
+    </form>
+    <span class="exports">
+      <a href="${link(ctx, { format: 'csv' })}">CSV</a>
+      <a href="${link(ctx, { format: 'md' })}">Markdown</a>
+    </span>
+  </div>`;
 }
 
 async function renderOverview(ctx) {
   const w = whereClause(ctx);
+  const now = Math.floor(Date.now() / 1000);
   const total = await q1(ctx, `SELECT COUNT(*) AS n, COUNT(DISTINCT install) AS i FROM crashes${w.sql}`, w.params);
   const sigRows = await q(
     ctx,
@@ -639,21 +723,35 @@ async function renderOverview(ctx) {
     w.params,
   );
 
+  // NEW 必须看"史上最早一次", 否则上周就崩过的签名进了 7 天窗口也会被标成新问题
+  const firstEver = new Map();
+  if (sigRows.length > 0) {
+    const sigs = [...new Set(sigRows.map((r) => r.sig))];
+    const marks = sigs.map(() => '?').join(',');
+    const rows = await q(
+      ctx,
+      `SELECT sig, MIN(at) AS first_ever FROM crashes WHERE sig IN (${marks}) GROUP BY sig`,
+      sigs,
+    );
+    for (const r of rows) firstEver.set(r.sig, r.first_ever);
+  }
+  const fresh = (r) => now - (firstEver.get(r.sig) ?? r.first_at) < 86400;
   const sigTable = sigRows
     .map(
       (r) => `<tr>
         <td><a class="sig" href="${link(ctx, { sig: r.sig })}">${kindChip(r.kind)}<code>${escapeHtml(
           r.sig.slice(0, 10),
-        )}</code></a></td>
+        )}</code>${fresh(r) ? '<span class="badge new">NEW</span>' : ''}</a></td>
         <td class="num">${r.n}</td>
         <td class="num">${r.people}</td>
         <td class="mono">${escapeHtml(r.last_ver)}</td>
-        <td class="dim">${fmtTime(r.first_at)} → ${fmtTime(r.last_at)}</td>
+        <td class="dim" title="${fmtTime(r.first_at)}">${fmtRel(r.last_at)}</td>
       </tr>`,
     )
     .join('');
 
   const body = `
+    ${toolbar(ctx)}
     ${filterChips(ctx)}
     ${metrics([
       { value: total.n ?? 0, label: `上报 · 近 ${ctx.days} 天` },
@@ -667,27 +765,117 @@ async function renderOverview(ctx) {
     <section class="card">
       <h2>按签名聚合</h2>
       <div class="scroll"><table>
-        <thead><tr><th>签名</th><th class="num">次数</th><th class="num">设备</th><th>末见版本</th><th>首末见到</th></tr></thead>
-        <tbody>${sigTable || `<tr><td colspan="5"><p class="empty">近 ${ctx.days} 天没有崩溃上报</p></td></tr>`}</tbody>
+        <thead><tr><th>签名</th><th class="num">次数</th><th class="num">设备</th><th>末见版本</th><th>最近发生</th></tr></thead>
+        <tbody>${sigTable || `<tr><td colspan="5"><p class="empty">这段时间没有符合条件的崩溃</p></td></tr>`}</tbody>
       </table></div>
     </section>
     <div class="split">
-      <section class="card">
-        <h2>版本分布</h2>
-        ${barRows(ctx, vers, (v) => v.app_ver, (v) => v.n, 'ver')}
-      </section>
-      <section class="card">
-        <h2>机型分布</h2>
-        ${barRows(ctx, models, (m) => m.model, (m) => m.n, 'model')}
-      </section>
+      <section class="card"><h2>版本分布</h2>${barRows(ctx, vers, (v) => v.app_ver, (v) => v.n, 'ver')}</section>
+      <section class="card"><h2>机型分布</h2>${barRows(ctx, models, (m) => m.model, (m) => m.n, 'model')}</section>
     </div>
-    <p class="foot">点机型或版本可下钻 · 点签名查看原始样本 · 保留 180 天</p>`;
+    <p class="foot">点机型/版本/类型可下钻 · 点签名看现场 · NEW = 近 24h 首次出现 · 保留 180 天</p>`;
   return layout(`近 ${ctx.days} 天`, ctx, body);
+}
+
+/** 单条样本的结构化渲染: 设备 / 上下文 / 面包屑时间线 / 帧 / 原始 JSON */
+function renderSample(r, i) {
+  let p = {};
+  try {
+    p = JSON.parse(r.payload);
+  } catch {
+    p = {};
+  }
+  const dev = p.dev ?? {};
+  const doc = p.doc ?? {};
+  const native = p.native ?? null;
+
+  const kv = (pairs) =>
+    `<div class="kv">${pairs
+      .filter(([, v]) => v !== '' && v !== 0 && v !== undefined && v !== null)
+      .map(([k, v]) => `<div><span>${escapeHtml(k)}</span><b>${escapeHtml(String(v))}</b></div>`)
+      .join('')}</div>`;
+
+  const crumbs = Array.isArray(p.crumbs) ? p.crumbs : [];
+  const timeline = crumbs.length
+    ? `<div class="timeline">${crumbs
+        .map(
+          (c) =>
+            `<span class="crumb" title="+${(c.t / 1000).toFixed(1)}s"><em>${escapeHtml(c.c)}</em>${escapeHtml(
+              c.e,
+            )}</span>`,
+        )
+        .join('')}</div>`
+    : '<p class="empty">没有面包屑</p>';
+
+  const frames = native && Array.isArray(native.frames) ? native.frames : [];
+  const frameList = frames.length
+    ? `<ol class="frames">${frames
+        .map((f) => {
+          const [mod, off] = String(f).split('+');
+          // 只给能真正跑的命令: 偏移已是 0x 开头, 别再加前缀; [vdso] 这类伪模块没有文件
+          const cmd =
+            off && off.startsWith('0x') && !mod.startsWith('[') ? `llvm-addr2line -f -C -e ${mod} ${off}` : '';
+          return `<li><code>${escapeHtml(mod)}</code><span>+${escapeHtml(off ?? '?')}</span>
+            ${cmd ? `<code class="cmd">${escapeHtml(cmd)}</code>` : ''}</li>`;
+        })
+        .join('')}</ol>`
+    : '';
+
+  const head = `${fmtTime(r.received)} · ${escapeHtml(r.app_ver)} · ${escapeHtml(r.model)} · SDK ${r.sdk}`;
+  return `<details class="sample" ${i === 0 ? 'open' : ''}>
+    <summary>${head}</summary>
+    <div class="sample-body">
+      <h3>设备</h3>
+      ${kv([
+        ['机型', `${dev.mfr ?? ''} ${dev.model ?? ''}`.trim()],
+        ['设备代号', dev.dev],
+        ['系统', `${dev.rel ?? ''} (SDK ${dev.sdk ?? ''})`],
+        ['内存', dev.ram_mb ? `${dev.ram_mb} MB` : ''],
+        ['ABI', p.app?.abi],
+        ['鸿蒙/EMUI', dev.harmony],
+        ['系统指纹', dev.fp],
+      ])}
+      <h3>崩溃时上下文</h3>
+      ${kv([
+        ['页面', doc.page],
+        ['工具', doc.tool],
+        ['画布', doc.w ? `${doc.w} × ${doc.h}` : ''],
+        ['图层数', doc.layers],
+        ['手写笔', doc.stylus],
+      ]) || '<p class="empty">无上下文</p>'}
+      <h3>操作轨迹（崩溃前 ${crumbs.length} 条）</h3>
+      ${timeline}
+      ${native ? `<h3>原生信号</h3>${kv([
+        ['信号', native.signal],
+        ['code', native.code],
+        ['故障地址', native.fault],
+      ])}${frames.length ? `<h3>调用栈（模块相对偏移，可直接 addr2line）</h3>${frameList}` : ''}` : ''}
+      ${!native && p.stack ? `<h3>调用栈</h3><pre class="stack">${escapeHtml(shortStack(p.stack))}</pre>` : ''}
+      <details class="raw"><summary>原始 JSON</summary><pre>${escapeHtml(prettyPayload(r.payload))}</pre></details>
+    </div>
+  </details>`;
+}
+
+/** Java 堆栈只保留前若干帧, 详情页别被第三方框架刷屏 */
+function shortStack(stack) {
+  const lines = String(stack).split('\n');
+  const head = [];
+  let frames = 0;
+  for (const line of lines) {
+    if (/^\s*at\s/.test(line)) {
+      frames++;
+      if (frames > 24) continue;
+    }
+    head.push(line);
+  }
+  if (frames > 24) head.push(`… 另外 ${frames - 24} 帧`);
+  return head.join('\n');
 }
 
 async function renderSignature(ctx, sig) {
   const w = whereClause(ctx, ['sig = ?']);
   w.params.push(sig);
+  const now = Math.floor(Date.now() / 1000);
   const head = await q1(
     ctx,
     `SELECT COUNT(*) AS n, COUNT(DISTINCT install) AS people, MIN(at) AS first_at, MAX(at) AS last_at,
@@ -695,9 +883,21 @@ async function renderSignature(ctx, sig) {
        FROM crashes${w.sql}`,
     w.params,
   );
+  const ever = await q1(ctx, 'SELECT MIN(at) AS first_ever FROM crashes WHERE sig = ?', [sig]);
+  const firstEver = ever.first_ever ?? head.first_at ?? 0;
   const models = await q(
     ctx,
     `SELECT model, sdk, COUNT(*) AS n FROM crashes${w.sql} GROUP BY model, sdk ORDER BY n DESC LIMIT 10`,
+    w.params,
+  );
+  const vers = await q(
+    ctx,
+    `SELECT app_ver, COUNT(*) AS n FROM crashes${w.sql} GROUP BY app_ver ORDER BY n DESC LIMIT 8`,
+    w.params,
+  );
+  const trendRows = await q(
+    ctx,
+    `SELECT date(received,'unixepoch') AS d, COUNT(*) AS n FROM crashes${w.sql} GROUP BY d ORDER BY d`,
     w.params,
   );
   const samples = await q(
@@ -706,43 +906,124 @@ async function renderSignature(ctx, sig) {
     w.params,
   );
 
-  const sampleHtml = samples
-    .map(
-      (r, i) => `<details class="sample" ${i === 0 ? 'open' : ''}>
-        <summary>${fmtTime(r.received)} ・ ${escapeHtml(r.app_ver)} ・ ${escapeHtml(r.model)} ・ SDK ${r.sdk}</summary>
-        <pre>${escapeHtml(prettyPayload(r.payload))}</pre>
-      </details>`,
-    )
-    .join('');
-
   const body = `
     <a class="back" href="${link(ctx, { sig: '' })}">← 返回聚合</a>
     <div class="hero">
       ${kindChip(head.kind ?? '')}
       <code class="full">${escapeHtml(sig)}</code>
+      ${now - firstEver < 86400 ? '<span class="badge new">NEW</span>' : ''}
     </div>
     ${metrics([
       { value: head.n ?? 0, label: `上报 · 近 ${ctx.days} 天` },
       { value: head.people ?? 0, label: '受影响设备' },
       { value: versionSpan(head), label: '版本跨度', small: true },
+      { value: fmtRel(firstEver), label: '首次见到（全量）', small: true },
     ])}
+    <section class="card"><h2>每日上报</h2>${trendChart(fillTrend(trendRows, ctx.days), true)}</section>
+    <div class="split">
+      <section class="card"><h2>版本分布</h2>${barRows(ctx, vers, (v) => v.app_ver, (v) => v.n, null)}</section>
+      <section class="card"><h2>机型分布</h2>${barRows(ctx, models, (m) => m.model, (m) => m.n, null)}</section>
+    </div>
     <section class="card">
-      <h2>机型分布</h2>
-      ${barRows(ctx, models, (m) => m.model, (m) => m.n, null)}
-    </section>
-    <section class="card">
-      <h2>最近 ${samples.length} 条样本</h2>
-      ${sampleHtml || '<p class="empty">无记录</p>'}
+      <h2>最近 ${samples.length} 条现场</h2>
+      ${samples.map((r, i) => renderSample(r, i)).join('') || '<p class="empty">无记录</p>'}
     </section>`;
   return layout(`签名 ${sig.slice(0, 10)}`, ctx, body);
 }
 
+// ---------------------------------------------------------------- 导出
+
+function csvCell(v) {
+  const s = String(v ?? '');
+  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+async function exportCsv(ctx) {
+  const w = whereClause(ctx);
+  const rows = await q(
+    ctx,
+    `SELECT received, at, kind, sig, app_ver, app_code, abi, model, sdk, payload
+       FROM crashes${w.sql} ORDER BY at DESC LIMIT 5000`,
+    w.params,
+  );
+  const header = ['received', 'crash_at', 'kind', 'sig', 'app_ver', 'app_code', 'abi', 'model', 'sdk', 'page', 'tool', 'canvas', 'layers', 'signal'];
+  const lines = [header.join(',')];
+  for (const r of rows) {
+    let p = {};
+    try {
+      p = JSON.parse(r.payload);
+    } catch {}
+    lines.push(
+      [
+        r.received,
+        r.at,
+        r.kind,
+        r.sig,
+        r.app_ver,
+        r.app_code,
+        r.abi,
+        r.model,
+        r.sdk,
+        p.doc?.page ?? '',
+        p.doc?.tool ?? '',
+        p.doc?.w ? `${p.doc.w}x${p.doc.h}` : '',
+        p.doc?.layers ?? '',
+        p.native?.signal ?? '',
+      ]
+        .map(csvCell)
+        .join(','),
+    );
+  }
+  return new Response('\uFEFF' + lines.join('\n'), {
+    headers: {
+      'content-type': 'text/csv; charset=utf-8',
+      'content-disposition': `attachment; filename="revp-crashes-${ctx.days}d.csv"`,
+      'cache-control': 'no-store',
+    },
+  });
+}
+
+async function exportMarkdown(ctx) {
+  const w = whereClause(ctx);
+  const rows = await q(
+    ctx,
+    `SELECT sig, kind, COUNT(*) AS n, COUNT(DISTINCT install) AS people,
+            MIN(at) AS first_at, MAX(at) AS last_at, MAX(app_ver) AS last_ver
+       FROM crashes${w.sql} GROUP BY sig, kind ORDER BY people DESC, n DESC LIMIT 100`,
+    w.params,
+  );
+  const scope = [`近 ${ctx.days} 天`];
+  if (ctx.kind) scope.push(`类型 ${ctx.kind}`);
+  if (ctx.model) scope.push(`机型 ${ctx.model}`);
+  if (ctx.ver) scope.push(`版本 ${ctx.ver}`);
+  const lines = [
+    `# ReveriePaint 崩溃汇总（${scope.join(' · ')}）`,
+    '',
+    '| 类型 | 签名 | 次数 | 设备 | 末见版本 | 首次 | 最近 |',
+    '|---|---|---|---|---|---|---|',
+  ];
+  for (const r of rows) {
+    lines.push(
+      `| ${r.kind} | \`${r.sig.slice(0, 10)}\` | ${r.n} | ${r.people} | ${r.last_ver} | ${fmtTime(
+        r.first_at,
+      )} | ${fmtTime(r.last_at)} |`,
+    );
+  }
+  if (rows.length === 0) lines.push('| - | 无 | 0 | 0 | - | - | - |');
+  return new Response(lines.join('\n') + '\n', {
+    headers: {
+      'content-type': 'text/markdown; charset=utf-8',
+      'content-disposition': `attachment; filename="revp-crashes-${ctx.days}d.md"`,
+      'cache-control': 'no-store',
+    },
+  });
+}
+
+// ---------------------------------------------------------------- 页面骨架
+
 function rangeNav(ctx) {
-  return [7, 14, 30]
-    .map(
-      (d) =>
-        `<a class="pill${ctx.days === d ? ' on' : ''}" href="${link(ctx, { days: d })}">${d} 天</a>`,
-    )
+  return [7, 14, 30, 90]
+    .map((d) => `<a class="pill${ctx.days === d ? ' on' : ''}" href="${link(ctx, { days: d })}">${d} 天</a>`)
     .join('');
 }
 
@@ -762,8 +1043,8 @@ function themeNav(ctx) {
 
 function layout(title, ctx, body) {
   return `<!doctype html><html lang="zh-CN" data-theme="${ctx.theme}"><head><meta charset="utf-8">
-<meta name="color-scheme" content="light dark">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>ReveriePaint 崩溃看板 · ${escapeHtml(title)}</title>
 <style>
 :root{
@@ -792,7 +1073,7 @@ body{margin:0;background:var(--bg);color:var(--text);
      font:14px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Noto Sans CJK SC",sans-serif;
      -webkit-font-smoothing:antialiased}
 .wrap{max-width:1000px;margin:0 auto;padding:28px 20px 64px}
-.top{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:22px;flex-wrap:wrap}
+.top{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px;flex-wrap:wrap}
 .brand{display:flex;align-items:center;gap:9px;font-weight:650;letter-spacing:.2px}
 /* 图标来自 art/icon.svg: 白色星芒是给深色底设计的, 所以垫一层应用图标的底色 #0e0f16 */
 .brand .logo{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;
@@ -803,10 +1084,21 @@ body{margin:0;background:var(--bg);color:var(--text);
 .controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .logout{font-size:12px;color:var(--sub);padding:4px 2px}
 .logout:hover{color:var(--text);text-decoration:none}
-.range{display:flex;gap:6px;background:var(--panel-hi);padding:4px;border-radius:999px}
-.pill{padding:5px 12px;border-radius:999px;font-size:12.5px;color:var(--sub);text-decoration:none}
+.range{display:flex;gap:4px;background:var(--panel-hi);padding:4px;border-radius:999px}
+.pill{padding:5px 12px;border-radius:999px;font-size:12.5px;color:var(--sub);text-decoration:none;white-space:nowrap}
 .pill.on{background:var(--panel);color:var(--text);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.08)}
-.metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px}
+.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+.search{display:flex;gap:6px;align-items:center;flex:1;min-width:220px}
+.search input{flex:1;min-width:140px;padding:7px 12px;border-radius:999px;border:1px solid var(--line);
+              background:var(--panel);color:var(--text);font-size:13px;outline:none}
+.search input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(90,110,138,.14)}
+.search button{padding:7px 14px;border-radius:999px;border:none;background:var(--accent);color:#fff;
+               font-size:13px;font-weight:600;cursor:pointer}
+.exports{display:flex;gap:10px;font-size:12.5px}
+.exports a{color:var(--sub)}
+.exports a:hover{color:var(--accent)}
+.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
+.metrics.m3{grid-template-columns:repeat(3,1fr)}
 .metric{background:var(--panel);border-radius:16px;padding:14px 16px;box-shadow:var(--shadow)}
 .metric .n.small{font-size:17px;letter-spacing:0}
 .metric .n{display:block;font-size:24px;font-weight:650;letter-spacing:-.4px;font-variant-numeric:tabular-nums}
@@ -824,13 +1116,15 @@ td.dim{color:var(--sub);font-size:12.5px;white-space:nowrap}
 td.mono{font-variant-numeric:tabular-nums;font-size:12.5px;color:var(--sub)}
 a{color:var(--accent);text-decoration:none}
 a:hover{text-decoration:underline}
-a.sig{display:inline-flex;align-items:center;gap:8px}
+a.sig{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}
 code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:var(--sub)}
 .chip{display:inline-flex;align-items:center;gap:6px;background:var(--panel-hi);border-radius:999px;
       padding:2px 9px 2px 7px;font-size:11.5px;color:var(--text);font-weight:600;letter-spacing:.3px}
 .chip i{width:6px;height:6px;border-radius:50%;display:inline-block}
-.trend{display:flex;align-items:flex-end;gap:6px;height:130px;padding-top:6px;
-       border-bottom:1px solid var(--line)}
+.badge{font-size:10px;font-weight:700;letter-spacing:.6px;padding:1px 6px;border-radius:6px}
+.badge.new{background:rgba(192,112,95,.16);color:#C0705F}
+.trend{display:flex;align-items:flex-end;gap:6px;height:130px;padding-top:6px;border-bottom:1px solid var(--line)}
+.trend.compact{height:80px}
 .trend .col{flex:1;display:flex;flex-direction:column;justify-content:flex-end;height:100%;gap:6px}
 .trend .track{flex:1;display:flex;align-items:flex-end;border-radius:6px 6px 0 0;overflow:hidden}
 .trend .track i{display:block;width:100%;background:var(--accent);border-radius:5px 5px 0 0;min-height:2px}
@@ -842,7 +1136,7 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;colo
 .bar-row .track i{display:block;height:100%;background:var(--accent);opacity:.85;border-radius:999px}
 .bar-row .v{font-variant-numeric:tabular-nums;font-size:12.5px;color:var(--sub);min-width:2ch;text-align:right}
 .foot{color:var(--sub);font-size:12px;margin:10px 0 0}
-.empty{color:var(--sub);text-align:center;padding:26px 0;margin:0}
+.empty{color:var(--sub);text-align:center;padding:22px 0;margin:0}
 .chips{background:var(--panel);border-radius:14px;padding:9px 14px;margin-bottom:14px;font-size:13px;box-shadow:var(--shadow)}
 .chips a{margin-left:8px}
 .back{display:inline-block;margin-bottom:14px;font-size:13px}
@@ -853,13 +1147,34 @@ details.sample summary{cursor:pointer;padding:11px 14px;font-size:12.5px;color:v
 details.sample summary::-webkit-details-marker{display:none}
 details.sample summary::before{content:"▸ ";color:var(--icon)}
 details.sample[open] summary::before{content:"▾ "}
-details.sample pre{margin:0;padding:0 14px 14px;font-size:11.5px;line-height:1.55;overflow:auto;max-height:46vh;
-                   font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text);opacity:.86}
+.sample-body{padding:0 14px 14px}
+.sample-body h3{margin:14px 0 6px;font-size:11.5px;font-weight:650;color:var(--sub);letter-spacing:.5px;text-transform:uppercase}
+.kv{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:2px 18px}
+.kv div{display:flex;gap:8px;justify-content:space-between;border-bottom:1px dashed var(--line);padding:3px 0}
+.kv span{color:var(--sub);font-size:12px;white-space:nowrap}
+.kv b{font-weight:500;font-size:12px;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.timeline{display:flex;flex-wrap:wrap;gap:6px;padding:2px 0}
+.crumb{display:inline-flex;align-items:center;gap:6px;background:var(--panel-hi);border-radius:8px;
+       padding:3px 8px;font-size:11.5px;color:var(--text)}
+.crumb em{font-style:normal;color:var(--sub);font-size:10.5px;text-transform:uppercase;letter-spacing:.4px}
+.frames{margin:0;padding-left:20px;font-size:11.5px}
+.frames li{margin:2px 0;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+.frames li span{color:var(--sub);font-variant-numeric:tabular-nums}
+.frames .cmd{margin-left:auto;color:var(--icon);opacity:.85;font-size:11px}
+pre{background:var(--bg);padding:12px;border-radius:10px;overflow:auto;font-size:11.5px;line-height:1.55;
+    max-height:46vh;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;margin:6px 0}
+.stack{max-height:34vh}
+details.raw{margin-top:12px}
+details.raw summary{cursor:pointer;font-size:12px;color:var(--sub)}
+@media (max-width:820px){
+  .metrics{grid-template-columns:1fr 1fr}
+}
 @media (max-width:760px){
   .wrap{padding:20px 14px 48px}
-  .metrics{grid-template-columns:1fr 1fr}
   .split{grid-template-columns:1fr}
   td.dim{font-size:11.5px}
+  .toolbar{gap:8px}
+  .frames .cmd{display:none}
 }
 </style></head><body><div class="wrap">
 <header class="top">
@@ -873,4 +1188,3 @@ details.sample pre{margin:0;padding:0 14px 14px;font-size:11.5px;line-height:1.5
 ${body}
 </div></body></html>`;
 }
-

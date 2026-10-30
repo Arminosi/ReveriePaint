@@ -529,6 +529,10 @@ object ReverieCoreBridge {
 
     external fun loadBrushPreset(index: Int): Boolean
 
+    external fun loadBrushPresetFile(path: String): Boolean
+
+    external fun currentTipResolved(): Boolean
+
     /** #116: 临时橡皮覆盖开始前快照引擎活状态 (当前 preset 对象 + 镜像变量) */
     external fun beginPresetOverrideSnapshot(): Boolean
 

@@ -199,11 +199,16 @@ bool ReverieCore::loadSingleBrushResource(const QString &baseName)
     const QString cleanName = QUrl::fromPercentEncoding(baseName.toUtf8());
     const QString bareName = QFileInfo(cleanName).fileName();
 
-    const bool isBrush = bareName.endsWith(QLatin1String(".gbr"), Qt::CaseInsensitive) ||
-                         bareName.endsWith(QLatin1String(".gih"), Qt::CaseInsensitive) ||
-                         bareName.endsWith(QLatin1String(".png"), Qt::CaseInsensitive) ||
-                         bareName.endsWith(QLatin1String(".svg"), Qt::CaseInsensitive) ||
-                         bareName.endsWith(QLatin1String(".abr"), Qt::CaseInsensitive);
+    const bool inBrushDir = !m_brushDir.isEmpty() &&
+        QFile::exists(QDir(m_brushDir).filePath(bareName));
+    const bool inPatternDir = !m_patternDir.isEmpty() &&
+        QFile::exists(QDir(m_patternDir).filePath(bareName));
+    const bool isBrush = inBrushDir || (!inPatternDir && (
+        bareName.endsWith(QLatin1String(".gbr"), Qt::CaseInsensitive) ||
+        bareName.endsWith(QLatin1String(".gih"), Qt::CaseInsensitive) ||
+        bareName.endsWith(QLatin1String(".png"), Qt::CaseInsensitive) ||
+        bareName.endsWith(QLatin1String(".svg"), Qt::CaseInsensitive) ||
+        bareName.endsWith(QLatin1String(".abr"), Qt::CaseInsensitive)));
 
     if (m_loadedBrushes.contains(baseName) || m_loadedBrushes.contains(cleanName) || m_loadedBrushes.contains(bareName)) {
         return true;
@@ -313,6 +318,15 @@ bool ReverieCore::loadSingleBrushResource(const QString &baseName)
                 if (res->loadFromDevice(&buf, m_brushResources)) {
                     res->setFilename(bareName);
                     res->setName(bareName);
+                    QFile origFile(fullPath);
+                    if (origFile.open(QIODevice::ReadOnly)) {
+                        const QByteArray origBytes = origFile.readAll();
+                        origFile.close();
+                        if (!origBytes.isEmpty()) {
+                            const QString md5Hex = QString::fromLatin1(QCryptographicHash::hash(origBytes, QCryptographicHash::Md5).toHex());
+                            res->setMD5Sum(md5Hex);
+                        }
+                    }
                     KisBrush *brushRaw = dynamic_cast<KisBrush *>(res);
                     if (brushRaw) {
                         KisBrushSP brushSp(brushRaw);
@@ -611,22 +625,8 @@ void ReverieCore::ensureBrushForPreset(const QString &kppPath)
                             return mr.hasMatch() ? mr.captured(1).trimmed() : QString();
                         };
                         const QString fn = getAttr(QStringLiteral("filename"));
-                        const QString type = getAttr(QStringLiteral("type"));
                         if (!fn.isEmpty()) {
-                            const QByteArray bytes = decodeBase64Safe(b64);
-                            if (!bytes.isEmpty()) {
-                                const bool isPattern = (type == QLatin1String("kis_patterns") || type == QLatin1String("patterns") || fn.endsWith(QLatin1String(".pat"), Qt::CaseInsensitive));
-                                const QString dir = (isPattern && !m_patternDir.isEmpty()) ? m_patternDir : m_brushDir;
-                                if (!dir.isEmpty()) {
-                                    const QString outPath = QDir(dir).filePath(QFileInfo(fn).fileName());
-                                    QFile outF(outPath);
-                                    if (outF.open(QIODevice::WriteOnly)) {
-                                        outF.write(bytes);
-                                        outF.close();
-                                    }
-                                }
-                                loadSingleBrushResource(fn);
-                            }
+                            loadSingleBrushResource(fn);
                         }
                     }
 
@@ -816,16 +816,12 @@ int ReverieCore::loadBrushResources(const QString &dirPath)
     return loaded;
 }
 
-bool ReverieCore::loadBrushPreset(int index)
+bool ReverieCore::loadBrushPresetCommon(const QString &path, const QString &name, int index)
 {
-    if (index < 0 || index >= m_presets.size()) {
-        return false;
-    }
     registerPaintOps();
     if (!m_brushResources) {
         m_brushResources = KisResourcesInterfaceSP(new KisLocalStrokeResources());
     }
-    const QString path = m_presets[index].second;
     ensureBrushForPreset(path);
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly)) {
@@ -835,7 +831,7 @@ bool ReverieCore::loadBrushPreset(int index)
     if (path.endsWith(QLatin1String(".myb"), Qt::CaseInsensitive)) {
         preset = KisPaintOpPresetSP(krita_create_mypaint_preset(path));
     } else {
-        preset = KisPaintOpPresetSP(new KisPaintOpPreset(m_presets[index].first));
+        preset = KisPaintOpPresetSP(new KisPaintOpPreset(name.isEmpty() ? path : name));
     }
     bool ok = preset->loadFromDevice(&f, m_brushResources);
     f.close();
@@ -879,13 +875,14 @@ bool ReverieCore::loadBrushPreset(int index)
             }
         }
     }
-    RPC_LOG("RPC loadBrushPreset idx=%d path=%s ok=%d", index, path.toUtf8().constData(), ok);
+    RPC_LOG("RPC loadBrushPresetCommon idx=%d path=%s ok=%d", index, path.toUtf8().constData(), ok);
     if (!ok) {
         return false;
     }
     m_presetIsEraserOverride = -1; // new preset: heuristic governs until UI asserts
     m_brushPreset = preset;
     m_brushPresetIndex = index;
+    m_currentPresetPath = path;
     if (m_brushPreset && m_brushPreset->settings()) {
         m_brushPreset->settings()->setEraserMode(m_toolMode == ToolEraser);
         KisPaintOpSettingsSP s = m_brushPreset->settings();
@@ -975,9 +972,42 @@ bool ReverieCore::loadBrushPreset(int index)
     return true;
 }
 
+bool ReverieCore::loadBrushPreset(int index)
+{
+    if (index < 0 || index >= m_presets.size()) {
+        return false;
+    }
+    return loadBrushPresetCommon(m_presets[index].second, m_presets[index].first, index);
+}
+
+bool ReverieCore::loadBrushPresetFile(const QString &path)
+{
+    if (path.isEmpty()) {
+        return false;
+    }
+    const QString name = QFileInfo(path).completeBaseName();
+    return loadBrushPresetCommon(path, name, -1);
+}
+
+bool ReverieCore::currentTipResolved()
+{
+    if (!m_brushPreset || !m_brushPreset->settings()) {
+        return false;
+    }
+    KisBrushBasedPaintOpSettings *bs =
+        dynamic_cast<KisBrushBasedPaintOpSettings *>(m_brushPreset->settings().data());
+    if (bs) {
+        KisBrushSP b = bs->brush();
+        if (b && b->valid()) {
+            const QImage tip = b->brushTipImage();
+            return !tip.isNull() && tip.width() > 0 && tip.height() > 0;
+        }
+    }
+    return false;
+}
 bool ReverieCore::beginPresetOverrideSnapshot()
 {
-    if (!m_brushPreset || m_brushPresetIndex < 0) {
+    if (!m_brushPreset) {
         return false;
     }
     m_overrideSnapshotPreset = m_brushPreset;
@@ -995,18 +1025,21 @@ bool ReverieCore::beginPresetOverrideSnapshot()
     m_overrideSnapshotToolMode = m_toolMode;
     m_overrideSnapshotTipOverridden = m_tipOverridden;
     m_overrideSnapshotTipAsset = m_brushTipAsset;
-    RPC_LOG("RPC overrideSnapshot begin idx=%d", m_brushPresetIndex);
+    m_overrideSnapshotPresetPath = m_currentPresetPath;
+    m_overrideSnapshotCompositeOp = m_brushPreset->settings() ? m_brushPreset->settings()->paintOpCompositeOp() : QString();
+    RPC_LOG("RPC overrideSnapshot begin idx=%d path=%s", m_brushPresetIndex, m_currentPresetPath.toUtf8().constData());
     return true;
 }
 
 bool ReverieCore::endPresetOverrideSnapshot()
 {
-    if (!m_overrideSnapshotPreset || m_overrideSnapshotIndex < 0) {
+    if (!m_overrideSnapshotPreset) {
         return false;
     }
     // 先取出并清空快照 (消费一次即失效, 防止旧快照被误用)
     const KisPaintOpPresetSP preset = m_overrideSnapshotPreset;
     const int index = m_overrideSnapshotIndex;
+    const QString presetPath = m_overrideSnapshotPresetPath;
     const qreal size = m_overrideSnapshotSize;
     const qreal opacity = m_overrideSnapshotOpacity;
     const qreal flow = m_overrideSnapshotFlow;
@@ -1020,11 +1053,15 @@ bool ReverieCore::endPresetOverrideSnapshot()
     const ToolMode toolMode = m_overrideSnapshotToolMode;
     const bool tipOverridden = m_overrideSnapshotTipOverridden;
     const QString tipAsset = m_overrideSnapshotTipAsset;
+    const QString compositeOp = m_overrideSnapshotCompositeOp;
     m_overrideSnapshotPreset.clear();
     m_overrideSnapshotIndex = -1;
+    m_overrideSnapshotPresetPath.clear();
+    m_overrideSnapshotCompositeOp.clear();
 
     m_brushPreset = preset;
     m_brushPresetIndex = index;
+    m_currentPresetPath = presetPath;
     m_brushSize = size;
     m_brushOpacity = opacity;
     m_brushFlow = flow;
@@ -1040,7 +1077,17 @@ bool ReverieCore::endPresetOverrideSnapshot()
     m_brushTipAsset = tipAsset;
     // 与 loadBrushPreset 的加载后处理保持一致: eraser 模式按工具态重写
     if (m_brushPreset && m_brushPreset->settings()) {
-        m_brushPreset->settings()->setEraserMode(m_toolMode == ToolEraser);
+        KisPaintOpSettingsSP s = m_brushPreset->settings();
+        s->setEraserMode(m_toolMode == ToolEraser);
+        // 临时橡皮与当前画笔是同一个预设对象时（没有换预设），begin 之后 Kotlin 侧写入的
+        // 橡皮 大小/不透明度/流量/混合模式 落在这个对象的 settings 上；上面只还原了成员，
+        // 这里把 settings 也还原到快照值，否则下一笔读到的是橡皮的值
+        s->setPaintOpSize(size);
+        s->setPaintOpOpacity(opacity);
+        s->setPaintOpFlow(flow);
+        if (!compositeOp.isEmpty()) {
+            s->setPaintOpCompositeOp(compositeOp);
+        }
     }
     // 压感曲线缓存按 owner 指针失效 (覆盖期间可能已指向橡皮 settings)
     {
@@ -1579,10 +1626,16 @@ bool ReverieCore::setBrushTipAsset(const QString &assetName)
             RPC_LOG("RPC setBrushTipAsset: no override in effect, factory tip already active (preset %d)", m_brushPresetIndex);
             return true;
         }
-        if (m_brushPresetIndex >= 0 && m_brushPresetIndex < m_presets.size()) {
-            QFile f(m_presets[m_brushPresetIndex].second);
+        const QString factoryPath = (m_brushPresetIndex >= 0 && m_brushPresetIndex < m_presets.size())
+            ? m_presets[m_brushPresetIndex].second
+            : m_currentPresetPath;
+        const QString factoryName = (m_brushPresetIndex >= 0 && m_brushPresetIndex < m_presets.size())
+            ? m_presets[m_brushPresetIndex].first
+            : QFileInfo(m_currentPresetPath).completeBaseName();
+        if (!factoryPath.isEmpty()) {
+            QFile f(factoryPath);
             if (f.open(QIODevice::ReadOnly)) {
-                KisPaintOpPresetSP originalPreset(new KisPaintOpPreset(m_presets[m_brushPresetIndex].first));
+                KisPaintOpPresetSP originalPreset(new KisPaintOpPreset(factoryName));
                 if (originalPreset->loadFromDevice(&f, m_brushResources)) {
                     KisBrushBasedPaintOpSettings *origBs =
                         dynamic_cast<KisBrushBasedPaintOpSettings *>(originalPreset->settings().data());
@@ -1591,7 +1644,7 @@ bool ReverieCore::setBrushTipAsset(const QString &assetName)
                         prop.readOptionSetting(origBs, m_brushResources, origBs->canvasResourcesInterface());
                         prop.writeOptionSetting(bs);
                         m_tipOverridden = false;
-                        RPC_LOG("RPC setBrushTipAsset: restored factory brush tip for preset %d", m_brushPresetIndex);
+                        RPC_LOG("RPC setBrushTipAsset: restored factory brush tip for preset %d path=%s", m_brushPresetIndex, factoryPath.toUtf8().constData());
                         return true;
                     }
                 }
@@ -1618,9 +1671,31 @@ bool ReverieCore::setBrushTipAsset(const QString &assetName)
         RPC_LOG("RPC setBrushTipAsset not found: %s", assetName.toUtf8().constData());
         return false;
     }
+    if (KisBrushSP prev = bs->brush()) {
+        const QString curFile = QFileInfo(prev->filename()).fileName();
+        const QString reqFile = QFileInfo(assetName).fileName();
+        if (!curFile.isEmpty() && curFile.compare(reqFile, Qt::CaseInsensitive) == 0) {
+            RPC_LOG("RPC setBrushTipAsset same file, keep preset attrs: %s", reqFile.toUtf8().constData());
+            return true;
+        }
+    }
+    KisBrushSP cloned = brush->clone().dynamicCast<KisBrush>();
+    if (!cloned) {
+        RPC_LOG("RPC setBrushTipAsset clone failed: %s", assetName.toUtf8().constData());
+        return false;
+    }
+    if (KisBrushSP prev = bs->brush()) {
+        cloned->setSpacing(prev->spacing());
+        cloned->setAutoSpacing(prev->autoSpacingActive(), prev->autoSpacingCoeff());
+        cloned->setAngle(prev->angle());
+        const qreal prevEff = prev->userEffectiveSize();
+        if (prevEff > 0.0) {
+            cloned->setUserEffectiveSize(prevEff);
+        }
+    }
     KisBrushOptionProperties prop;
     prop.readOptionSetting(bs, m_brushResources, bs->canvasResourcesInterface());
-    prop.setBrush(brush);
+    prop.setBrush(cloned);
     prop.writeOptionSetting(bs);
     m_tipOverridden = true;
     RPC_LOG("RPC setBrushTipAsset SUCCESS: %s", assetName.toUtf8().constData());

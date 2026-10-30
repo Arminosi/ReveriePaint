@@ -108,6 +108,8 @@ internal fun PaintViewModel.saveProject(
     isBlockingLoading = true
     blockingLoadingMessage = getString(R.string.project_saving_progress)
     var savedFile: File? = null
+    // 退出/手动保存前在 UI 线程先取方向：进引擎线程后读触摸视图不可靠，保存失败不执行退出回调（原有路径）。
+    val orientationJson = canvasOrientationJsonFragment()
     runCore(
         after = {
             isBlockingLoading = false
@@ -169,6 +171,7 @@ internal fun PaintViewModel.saveProject(
         val extraJson =
             """
             {
+                $orientationJson
                 "strokeCount": $totalStrokes,
                 "elapsedSeconds": $elapsedSeconds,
                 "createdTime": $canvasCreatedTime,
@@ -221,6 +224,8 @@ internal fun PaintViewModel.autoSaveProject(isPeriodic: Boolean = true) {
     val layerCount = layers.size
     val currentMasterPath = currentProjectFile?.takeIf { !it.contains(".autosave") && !it.contains(".emergency") } ?: ""
     val referenceProfile = referenceProfileId
+    // 自动保存同步写方向，未手动保存就切换/崩溃时也能按最后快照恢复。
+    val orientationJson = canvasOrientationJsonFragment()
 
     runCore(
         render = false,
@@ -248,6 +253,7 @@ internal fun PaintViewModel.autoSaveProject(isPeriodic: Boolean = true) {
         val extraJson =
             """
             {
+                $orientationJson
                 "strokeCount": $totalStrokes,
                 "elapsedSeconds": $elapsedSeconds,
                 "createdTime": $canvasCreatedTime,
@@ -311,9 +317,12 @@ internal fun PaintViewModel.emergencySaveOnCrash() {
             val name = if (idx in 0 until layers.size) layers[idx].name else ""
             st.copy(layerIndex = idx, layerName = name).toJsonString()
         }
+        // 崩溃抢救同样带方向：恢复的工程按抢救快照的方向打开，与自动保存一致。
+        val orientationJson = canvasOrientationJsonFragment()
         val extraJson =
             """
             {
+                $orientationJson
                 "strokeCount": $totalStrokes,
                 "elapsedSeconds": $elapsedSeconds,
                 "createdTime": $canvasCreatedTime,
@@ -468,6 +477,7 @@ internal fun PaintViewModel.loadProject(p: com.reverie.paint.model.Project) {
     }
 
     var loadedCollapsedGroups: Set<String> = emptySet()
+    var loadedCanvasOrientation: com.reverie.paint.model.CanvasOrientation? = null
     var loaded3DStates: List<com.reverie.paint.model.Model3DState> = emptyList()
     var documentLoaded = false
     var isHealed = false
@@ -477,6 +487,8 @@ internal fun PaintViewModel.loadProject(p: com.reverie.paint.model.Project) {
                 Breadcrumbs.record("IO", "loadProject FAILED for: ${p.name}")
                 isBlockingLoading = false
                 showActionToast(R.string.toast_project_import_unsupported, R.drawable.ic_alert_triangle)
+                // 加载失败不留旧方向。
+                pendingCanvasOrientation = null
                 return@runCore
             }
             Breadcrumbs.record("IO", "loadProject SUCCESS: ${p.name} (healed=$isHealed)")
@@ -485,6 +497,8 @@ internal fun PaintViewModel.loadProject(p: com.reverie.paint.model.Project) {
                 else referenceLoading = false
             }
             collapsedGroupNames = loadedCollapsedGroups
+            // 只在加载成功后交出方向；无记录时 pending 为 null，走默认横向。
+            pendingCanvasOrientation = loadedCanvasOrientation
             initialStrokeCount = p.strokeCount
             totalStrokes = p.strokeCount
             isModified = isRecovered || isHealed // 异常恢复或自愈的工程标记为未保存
@@ -618,6 +632,10 @@ internal fun PaintViewModel.loadProject(p: com.reverie.paint.model.Project) {
                                 if (idx in 0 until nLayers) {
                                     targetLayer = idx
                                 }
+                                // 只读二值方向，不恢复缩放/平移/视图中心；缺失或非法值返回 null。
+                                loadedCanvasOrientation = com.reverie.paint.model.CanvasOrientation.fromJsonValue(
+                                    json.optString(com.reverie.paint.model.CanvasOrientation.META_KEY),
+                                )
                                 val arr3D = json.optJSONArray("active3DLayers")
                                 if (arr3D != null && arr3D.length() > 0) {
                                     val parsedStates = ArrayList<com.reverie.paint.model.Model3DState>()
@@ -1405,6 +1423,8 @@ internal fun PaintViewModel.goHome() {
     // 渲染/保存调用在 C++ 侧空文档防护中安全返回。
     runCore(render = false) { ReverieCoreBridge.closeDocument() }
     currentProjectFile = null
+    // 退出即清待恢复方向；丢弃退出不写盘，方向回落到上次保存值。
+    pendingCanvasOrientation = null
     docName = ""
     isModified = false
     selectionDirty = false
@@ -1480,6 +1500,8 @@ internal fun PaintViewModel.startPainting(
     resetProjectReferences()
     val actualName = name?.ifBlank { null } ?: generateNextProjectName()
     currentProjectFile = null // Reset so new artwork won't overwrite previous project file
+    // 新建工程无记录：默认横向（0°），不继承上一工程的方向。
+    pendingCanvasOrientation = null
     docName = actualName
     isModified = false
     selectionDirty = false

@@ -91,6 +91,7 @@ import androidx.compose.ui.zIndex
 import com.reverie.paint.ui.components.ReTextButton
 import com.reverie.paint.R
 import com.reverie.paint.core.*
+import com.reverie.paint.model.CanvasOrientation
 import com.reverie.paint.model.Tool
 import com.reverie.paint.model.ToolGroup
 import com.reverie.paint.model.UiPanelSlot
@@ -213,6 +214,20 @@ fun PaintingPage(
             kotlinx.coroutines.delay(1000)
             vm.clearActionToast()
         }
+    }
+
+    // 单次消费工程恢复的二值方向（0°/90°），只改旋转角，不改缩放/平移/历史；触摸视图已建立走 applyViewTransform，
+    // 否则只改本页 rotation，由 CanvasView 的 update 块同步。
+    LaunchedEffect(vm.pendingCanvasOrientation) {
+        val restored = vm.pendingCanvasOrientation ?: return@LaunchedEffect
+        val view = com.reverie.paint.ui.painting.canvas.CanvasTouchView.activeTouchView
+        if (view != null) {
+            view.applyViewTransform(view.canvasZoom, restored.rotationDegrees, view.canvasPanX, view.canvasPanY)
+        } else {
+            rotation = restored.rotationDegrees
+        }
+        vm.pendingCanvasOrientation = null
+        flashIndicator()
     }
 
     var textDialogPos by remember { mutableStateOf<Pair<Float, Float>?>(null) }
@@ -2770,6 +2785,24 @@ private fun TransformIndicatorHud(
                 Text(
                     stringResource(R.string.canvas_rotation_format, rotDeg),
                     color = if (rotSnapped) Morandi.accent else Morandi.text,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+                Box(
+                    Modifier
+                        .size(2.5.dp)
+                        .background(Morandi.border, CircleShape),
+                )
+                // 度数是自由角，标识才是会保存的二值方向（任意角显示就近方向）。
+                Text(
+                    stringResource(
+                        if (CanvasOrientation.fromAngleDegrees(rotation) == CanvasOrientation.PORTRAIT) {
+                            R.string.canvas_orientation_portrait
+                        } else {
+                            R.string.canvas_orientation_landscape
+                        },
+                    ),
+                    color = Morandi.subText,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Medium,
                 )

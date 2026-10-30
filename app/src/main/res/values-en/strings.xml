@@ -2254,6 +2254,8 @@
     <string name="selection_cancel">Cancel Selection</string>
     <string name="canvas_zoom_format">Zoom %d%%</string>
     <string name="canvas_rotation_format">Rotate %d°</string>
+    <string name="canvas_orientation_landscape">Landscape</string>
+    <string name="canvas_orientation_portrait">Portrait</string>
     <string name="nav_back_to_canvas">Back to Canvas</string>
     <string name="settings_more_title">More Settings</string>
     <string name="loading_please_wait">Please wait...</string>

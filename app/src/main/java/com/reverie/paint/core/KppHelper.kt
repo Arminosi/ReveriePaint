@@ -346,7 +346,7 @@ object KppHelper {
         return out.toString()
     }
 
-    /** 用新的 preset XML 替换 .kpp 里的 zTXt preset 块, PNG 其余 chunk 原样保留。 */
+    /** 用新的 preset XML 替换 .kpp 里的 preset 文本块(写成 iTXt/UTF-8), PNG 其余 chunk 原样保留。 */
     /**
      * Rewrites the preset text chunk of a .kpp, keeping every other PNG chunk as is.
      *
@@ -370,17 +370,12 @@ object KppHelper {
      * wrong position when the original chunk already sat after IDAT.
      */
     internal fun replacePresetXml(kppBytes: ByteArray, newXml: String): ByteArray {
-        val presetChunk = buildTextChunkData(
-            keyword = "preset",
-            payload = deflateXml(newXml),
-            isCompressed = true,
-        )
+        val presetChunk = buildPresetITxtData(deflateXml(newXml))
         // Reuse the version already present in the base image; only fall back to the default
         // when the base is a generated PNG that has no text chunk at all.
         val versionChunk = buildTextChunkData(
             keyword = "version",
             payload = (readExistingVersion(kppBytes) ?: PRESET_XML_VERSION).toByteArray(Charsets.ISO_8859_1),
-            isCompressed = false,
         )
 
         val out = ByteArrayOutputStream()
@@ -417,7 +412,7 @@ object KppHelper {
                     writeChunk(out, "tEXt", versionChunk)
                     versionWritten = true
                 }
-                writeChunk(out, "zTXt", presetChunk)
+                writeChunk(out, "iTXt", presetChunk)
                 presetWritten = true
             }
 
@@ -428,12 +423,33 @@ object KppHelper {
         // Fallback for a truncated PNG that has neither IDAT nor IEND.
         if (!presetWritten) {
             if (!versionWritten) writeChunk(out, "tEXt", versionChunk)
-            writeChunk(out, "zTXt", presetChunk)
+            writeChunk(out, "iTXt", presetChunk)
         }
         return out.toByteArray()
     }
 
-    /** Deflates the preset XML, which is the payload of the zTXt chunk. */
+    /**
+     * Data section of the `preset` iTXt chunk: keyword, 0x00, compression flag 1, method 0,
+     * empty language tag + 0x00, empty translated keyword + 0x00, then the deflated UTF-8 XML.
+     *
+     * It has to be iTXt, not zTXt: Krita reads the preset through `QImageReader::text("preset")`,
+     * and Qt's PNG reader decodes tEXt/zTXt as Latin-1 but iTXt as UTF-8. A UTF-8 XML in a zTXt
+     * turns every non-ASCII character into mojibake on the Krita side; for an ABR pack named in
+     * Chinese the tip `filename="铅笔质感勾线_tip_1.png"` then never matches the resource
+     * (`bestMatch(md5, filename)`), the png_brush degrades to the default auto_brush (round dots,
+     * spacing 1.0) at preset load.
+     */
+    private fun buildPresetITxtData(payload: ByteArray): ByteArray {
+        val kw = "preset".toByteArray(Charsets.ISO_8859_1)
+        val head = byteArrayOf(0, 1, 0, 0, 0) // kw terminator, compFlag=1, method=0, lang\0, translated\0
+        val data = ByteArray(kw.size + head.size + payload.size)
+        System.arraycopy(kw, 0, data, 0, kw.size)
+        System.arraycopy(head, 0, data, kw.size, head.size)
+        System.arraycopy(payload, 0, data, kw.size + head.size, payload.size)
+        return data
+    }
+
+    /** Deflates the preset XML (UTF-8), the payload of the preset iTXt chunk. */
     private fun deflateXml(xml: String): ByteArray {
         val deflater = Deflater(Deflater.DEFAULT_COMPRESSION)
         deflater.setInput(xml.toByteArray(Charsets.UTF_8))
@@ -447,17 +463,9 @@ object KppHelper {
         return out.toByteArray()
     }
 
-    /** Builds the data section of a text chunk: keyword + 0x00 (+ method 0x00) + payload. */
-    private fun buildTextChunkData(keyword: String, payload: ByteArray, isCompressed: Boolean): ByteArray {
-        val kw = keyword.toByteArray(Charsets.ISO_8859_1)
-        val head = if (isCompressed) 2 else 1
-        val data = ByteArray(kw.size + head + payload.size)
-        System.arraycopy(kw, 0, data, 0, kw.size)
-        data[kw.size] = 0
-        if (isCompressed) data[kw.size + 1] = 0
-        System.arraycopy(payload, 0, data, kw.size + head, payload.size)
-        return data
-    }
+    /** Data section of an uncompressed tEXt chunk: keyword + 0x00 + payload. */
+    private fun buildTextChunkData(keyword: String, payload: ByteArray): ByteArray =
+        keyword.toByteArray(Charsets.ISO_8859_1) + byteArrayOf(0) + payload
 
     /** Writes a complete chunk: length + type + data + CRC32(type + data). */
     private fun writeChunk(out: ByteArrayOutputStream, type: String, data: ByteArray) {

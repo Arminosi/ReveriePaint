@@ -876,6 +876,8 @@ public:
     bool loadSingleBrushResource(const QString &baseName);
     void ensureBrushForPreset(const QString &kppPath);
     bool loadBrushPreset(int index);
+    bool loadBrushPresetFile(const QString &path);
+    bool currentTipResolved();
     // #116: 临时橡皮覆盖的活状态快照。begin 保存当前 preset 对象 (共享指针, 其 settings
     // 已含全部现场 setter 写入) 与引擎镜像变量; 覆盖期间引擎持有橡皮预设, 不会触碰该对象;
     // end 原样换回, 恢复的就是覆盖前正在作画的引擎状态, 与磁盘/v2 持久化时序无关。
@@ -1227,6 +1229,7 @@ private:
     QString m_patternDir;
     QVector<QPair<QString, QString>> m_presets;  // name -> path
     int m_brushPresetIndex = -1;
+    QString m_currentPresetPath;
     int m_presetIsEraserOverride = -1; // -1 unknown (use name heuristic), 0 false, 1 true
     // 预设只读元数据缓存: 一次 .kpp 解析同时提取 defaults/paintOpId/tipFilename。
     // 选择预设时 Kotlin 会在 after{} (主线程) 连查这三个值, 每次都完整解析
@@ -1247,6 +1250,7 @@ private:
     QSet<QString> m_loadedResourceNames;
     // 解析并缓存预设只读元数据; 失败返回 false (out 不保证有效)
     bool ensurePresetInfo(int index, CachedPresetInfo &out);
+    bool loadBrushPresetCommon(const QString &path, const QString &name, int index);
     // 当前 m_brushPreset 的笔尖是否被 setBrushTipAsset(非空) 覆盖过。
     // loadBrushPreset 每次都重新解析预设文件, 出厂笔尖天然在场,
     // 覆盖未发生时 setBrushTipAsset("") 无需再解析原文件。
@@ -1267,6 +1271,8 @@ private:
     ToolMode m_overrideSnapshotToolMode = ToolBrush;
     bool m_overrideSnapshotTipOverridden = false;
     QString m_overrideSnapshotTipAsset;
+    QString m_overrideSnapshotCompositeOp;
+    QString m_overrideSnapshotPresetPath;
     // Size 压感曲线缓存（预设切换时失效；光标环每帧查询用）
     mutable QMutex m_sizeCurveMutex;
     const void *m_sizeCurveOwner = nullptr;   // settings 指针，变更即重解析

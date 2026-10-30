@@ -78,6 +78,22 @@ Java_com_reverie_paint_core_ReverieCoreBridge_loadBrushPreset(JNIEnv *, jobject,
 }
 
 JNIEXPORT jboolean JNICALL
+Java_com_reverie_paint_core_ReverieCoreBridge_loadBrushPresetFile(JNIEnv *env, jobject, jstring path)
+{
+    if (!path) return JNI_FALSE;
+    const char *p = env->GetStringUTFChars(path, nullptr);
+    const bool ok = core()->loadBrushPresetFile(QString::fromUtf8(p));
+    env->ReleaseStringUTFChars(path, p);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_reverie_paint_core_ReverieCoreBridge_currentTipResolved(JNIEnv *, jobject)
+{
+    return core()->currentTipResolved() ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
 Java_com_reverie_paint_core_ReverieCoreBridge_beginPresetOverrideSnapshot(JNIEnv *, jobject)
 {
     return core()->beginPresetOverrideSnapshot() ? JNI_TRUE : JNI_FALSE;

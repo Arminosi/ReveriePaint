@@ -2213,6 +2213,8 @@
     <string name="selection_cancel">取消选区</string>
     <string name="canvas_zoom_format">缩放 %d%%</string>
     <string name="canvas_rotation_format">旋转 %d°</string>
+    <string name="canvas_orientation_landscape">横向</string>
+    <string name="canvas_orientation_portrait">竖向</string>
     <string name="nav_back_to_canvas">返回画布</string>
     <string name="settings_more_title">更多设置</string>
     <string name="loading_please_wait">请稍候...</string>

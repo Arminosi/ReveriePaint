@@ -6320,6 +6320,11 @@ class PaintViewModel : ViewModel() {
     internal fun isAppContextReady(): Boolean = ::appContext.isInitialized
 
     var currentProjectFile by mutableStateOf<String?>(null)
+
+    /**
+     * 待绘画页单次消费的工程画布方向；null 走默认横向（0°），新建工程与回主页时清掉，绝不串工程。
+     */
+    var pendingCanvasOrientation by mutableStateOf<CanvasOrientation?>(null)
     var isBlockingLoading by mutableStateOf(false)
     var blockingLoadingMessage by mutableStateOf("")
     var currentFolder by mutableStateOf<com.reverie.paint.model.Project?>(null)

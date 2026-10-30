@@ -490,6 +490,16 @@ class MainActivity : ComponentActivity() {
             if (!vm.isShortcutRecordingActive && driver.onStylusKeyEvent(event)) {
                 return true
             }
+            // 三星 S Pen 隔空手势: 系统注入的单键 (AT/POUND/F7..F12) KeyEvent
+            if (vm.currentPage == com.reverie.paint.core.Page.PAINTING &&
+                !vm.isTextInputActive && !vm.isShortcutRecordingActive
+            ) {
+                val strokeActive = com.reverie.paint.ui.painting.canvas.CanvasTouchView
+                    .activeTouchView?.let { it.isAttachedToWindow && it.isInteracting } == true
+                if (vm.handleSpenAirKeyEvent(event, strokeActive)) {
+                    return true
+                }
+            }
             if (vm.currentPage == com.reverie.paint.core.Page.PAINTING) {
                 // 处于文本编辑/重命名对话框或快捷键录制状态时跳过全局快捷键拦截，确保输入与录制正常工作
                 if (!vm.isTextInputActive && !vm.isShortcutRecordingActive && vm.handleNativeKeyEvent(event)) {

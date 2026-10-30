@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.VolumeDown
@@ -50,6 +51,7 @@ import com.reverie.paint.ui.home.stylus.OppoStylusConfigDialog
 import com.reverie.paint.ui.home.stylus.PressureCurveDetailDialog
 import com.reverie.paint.ui.home.stylus.PressureCurveHelpDialog
 import com.reverie.paint.ui.home.stylus.SamsungStylusConfigDialog
+import com.reverie.paint.ui.home.stylus.SpenAirActionsDialog
 import com.reverie.paint.ui.home.stylus.VivoStylusConfigDialog
 import com.reverie.paint.ui.home.stylus.XiaomiStylusConfigDialog
 import com.reverie.paint.ui.home.stylus.GenericStylusConfigDialog
@@ -67,6 +69,7 @@ internal fun StylusSettingsSubPage(
 
     var showHelpDialog by remember { mutableStateOf(false) }
     var showPressureCurveDialog by remember { mutableStateOf(false) }
+    var showSpenAirDialog by remember { mutableStateOf(false) }
     var activeConfigBrand by remember { mutableStateOf<StylusBrand?>(null) }
 
     val stylusDriver = remember { vm.getOrCreateStylusDriver(context) }
@@ -299,13 +302,33 @@ internal fun StylusSettingsSubPage(
                             )
                         }
                         StylusBrand.SAMSUNG_SPEN -> {
+                            val isFirst = index == 0
+                            val isLast = index == detectedDevices.size - 1
                             SettingStylusDeviceRow(
                                 title = device.deviceName,
                                 summary = stringResource(R.string.stylus_samsung_features),
                                 isCurrentDevice = device.isCurrentDeviceSupported,
                                 isConnected = device.isConnected,
-                                shape = shape,
+                                shape = RoundedCornerShape(
+                                    topStart = if (isFirst) 18.dp else 4.dp,
+                                    topEnd = if (isFirst) 18.dp else 4.dp,
+                                    bottomStart = 4.dp,
+                                    bottomEnd = 4.dp,
+                                ),
                                 onClick = { activeConfigBrand = StylusBrand.SAMSUNG_SPEN },
+                            )
+                            SettingStylusDeviceRow(
+                                title = stringResource(R.string.spen_air_title),
+                                summary = stringResource(R.string.spen_air_subtitle),
+                                isCurrentDevice = device.isCurrentDeviceSupported,
+                                isConnected = device.isConnected,
+                                shape = RoundedCornerShape(
+                                    topStart = 4.dp,
+                                    topEnd = 4.dp,
+                                    bottomStart = if (isLast) 18.dp else 4.dp,
+                                    bottomEnd = if (isLast) 18.dp else 4.dp,
+                                ),
+                                onClick = { showSpenAirDialog = true },
                             )
                         }
                         StylusBrand.XIAOMI_STYLUS -> {
@@ -360,6 +383,10 @@ internal fun StylusSettingsSubPage(
             onSelectPreset = { vm.updatePressureCurvePreset(it) },
             onDismiss = { showPressureCurveDialog = false },
         )
+    }
+
+    if (showSpenAirDialog) {
+        SpenAirActionsDialog(vm = vm, onDismiss = { showSpenAirDialog = false })
     }
 
     when (activeConfigBrand) {

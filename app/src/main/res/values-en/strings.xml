@@ -1970,6 +1970,32 @@
     <string name="stylus_samsung_long_press_action">Long Press Action</string>
     <string name="stylus_samsung_hint">Tip: If side button does not respond, open Samsung Settings -> Advanced Features -> S Pen and disable Air Command button trigger</string>
 
+    <!-- S Pen Air Actions -->
+    <string name="spen_air_title">S Pen Air Actions</string>
+    <string name="spen_air_subtitle">Configure air gesture action mappings</string>
+    <string name="spen_air_open_system_settings">Open System Air Actions Settings</string>
+    <string name="spen_air_hint">Enable Air Actions for this app in System S Pen settings, supported Galaxy devices only</string>
+    <string name="spen_air_reset_default">Reset to Default</string>
+    <string name="spen_gesture_click">Single Click</string>
+    <string name="spen_gesture_double_click">Double Click</string>
+    <string name="spen_gesture_swipe_left">Swipe Left</string>
+    <string name="spen_gesture_swipe_right">Swipe Right</string>
+    <string name="spen_gesture_swipe_up">Swipe Up</string>
+    <string name="spen_gesture_swipe_down">Swipe Down</string>
+    <string name="spen_gesture_circle_cw">Circle Clockwise</string>
+    <string name="spen_gesture_circle_ccw">Circle Counter-Clockwise</string>
+    <string name="stylus_action_brush_size_inc">Increase Brush Size</string>
+    <string name="stylus_action_brush_size_dec">Decrease Brush Size</string>
+    <string name="stylus_action_brush_opacity_inc">Increase Opacity</string>
+    <string name="stylus_action_brush_opacity_dec">Decrease Opacity</string>
+    <string name="stylus_action_zoom_in">Zoom In Canvas</string>
+    <string name="stylus_action_zoom_out">Zoom Out Canvas</string>
+    <string name="stylus_action_flip">Flip View</string>
+    <string name="stylus_action_layer_prev">Previous Layer</string>
+    <string name="stylus_action_layer_next">Next Layer</string>
+    <string name="stylus_action_quick_menu">Quick Menu</string>
+    <string name="stylus_action_ref_window">Reference Window</string>
+
     <!-- Xiaomi Stylus -->
     <string name="stylus_xiaomi_title">Xiaomi Stylus Settings</string>
     <string name="stylus_xiaomi_model">Stylus Hardware Model</string>

@@ -48,7 +48,7 @@
         android:largeHeap="true"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
-        android:label="@string/app_name"
+        android:label="ReveriePaint"
         android:supportsRtl="true"
         android:theme="@style/Theme.ReveriePaint">
         <uses-library android:name="vendor.oplus.hardware.touch-V1" android:required="false" />
@@ -121,6 +121,16 @@
                 <data android:pathPattern=".*\\.gbr" />
                 <data android:pathPattern=".*\\.gih" />
             </intent-filter>
+
+            <!-- 三星 S Pen 隔空操作(Air Actions)协议声明。
+                 intent-filter 与 meta-data 缺一不可: 系统扫描应用列表靠 intent-filter
+                 识别支持隔空操作的应用, 只有 meta-data 时应用不会出现在隔空操作列表里 -->
+            <intent-filter>
+                <action android:name="com.samsung.android.support.REMOTE_ACTION" />
+            </intent-filter>
+            <meta-data
+                android:name="com.samsung.android.support.REMOTE_ACTION"
+                android:resource="@xml/remote_action" />
         </activity>
 
         <provider

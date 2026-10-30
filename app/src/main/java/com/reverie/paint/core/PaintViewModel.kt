@@ -2011,6 +2011,16 @@ class PaintViewModel : ViewModel() {
     var samsungDoubleClickAction by mutableStateOf("undo")
     var samsungLongPressAction by mutableStateOf("tool_picker")
 
+    // 三星 S Pen 隔空手势动作映射 (8 种手势)
+    var spenAirClickAction by mutableStateOf(SpenAirActions.defaultBinding(SpenAirGesture.CLICK))
+    var spenAirDoubleClickAction by mutableStateOf(SpenAirActions.defaultBinding(SpenAirGesture.DOUBLE_CLICK))
+    var spenAirSwipeLeftAction by mutableStateOf(SpenAirActions.defaultBinding(SpenAirGesture.SWIPE_LEFT))
+    var spenAirSwipeRightAction by mutableStateOf(SpenAirActions.defaultBinding(SpenAirGesture.SWIPE_RIGHT))
+    var spenAirSwipeUpAction by mutableStateOf(SpenAirActions.defaultBinding(SpenAirGesture.SWIPE_UP))
+    var spenAirSwipeDownAction by mutableStateOf(SpenAirActions.defaultBinding(SpenAirGesture.SWIPE_DOWN))
+    var spenAirCircleCwAction by mutableStateOf(SpenAirActions.defaultBinding(SpenAirGesture.CIRCLE_CW))
+    var spenAirCircleCcwAction by mutableStateOf(SpenAirActions.defaultBinding(SpenAirGesture.CIRCLE_CCW))
+
     // HUAWEI M-Pencil 适配参数
     var huaweiPencilModelMode by mutableStateOf("AUTO") // "AUTO", "PRO", "GEN3_NEARLINK", "GEN2", "GEN1"
     val detectedHuaweiPencilModel: com.reverie.paint.core.stylus.HuaweiPencilModel
@@ -3494,6 +3504,17 @@ class PaintViewModel : ViewModel() {
             com.reverie.paint.core.stylus.StylusAction.COLOR_PICKER -> showActionToast(R.string.stylus_action_eyedropper, R.drawable.ic_picker)
             com.reverie.paint.core.stylus.StylusAction.TOGGLE_LAST_TOOL -> showActionToast(R.string.toast_toggle_last_tool, R.drawable.ic_brush)
             com.reverie.paint.core.stylus.StylusAction.SHOW_COLOR_PALETTE -> showActionToast(R.string.toast_color_palette, R.drawable.ic_palette)
+            com.reverie.paint.core.stylus.StylusAction.BRUSH_SIZE_INC -> showActionToast(R.string.stylus_action_brush_size_inc, R.drawable.ic_brush)
+            com.reverie.paint.core.stylus.StylusAction.BRUSH_SIZE_DEC -> showActionToast(R.string.stylus_action_brush_size_dec, R.drawable.ic_brush)
+            com.reverie.paint.core.stylus.StylusAction.BRUSH_OPACITY_INC -> showActionToast(R.string.stylus_action_brush_opacity_inc, R.drawable.ic_brush)
+            com.reverie.paint.core.stylus.StylusAction.BRUSH_OPACITY_DEC -> showActionToast(R.string.stylus_action_brush_opacity_dec, R.drawable.ic_brush)
+            com.reverie.paint.core.stylus.StylusAction.ZOOM_IN -> showActionToast(R.string.stylus_action_zoom_in, R.drawable.ic_zoom_in)
+            com.reverie.paint.core.stylus.StylusAction.ZOOM_OUT -> showActionToast(R.string.stylus_action_zoom_out, R.drawable.ic_zoom_out)
+            com.reverie.paint.core.stylus.StylusAction.FLIP_CANVAS -> showActionToast(R.string.stylus_action_flip, R.drawable.ic_flip_h)
+            com.reverie.paint.core.stylus.StylusAction.LAYER_PREV -> showActionToast(R.string.stylus_action_layer_prev, R.drawable.ic_layers)
+            com.reverie.paint.core.stylus.StylusAction.LAYER_NEXT -> showActionToast(R.string.stylus_action_layer_next, R.drawable.ic_layers)
+            com.reverie.paint.core.stylus.StylusAction.TOGGLE_QUICK_MENU -> showActionToast(R.string.stylus_action_quick_menu, R.drawable.ic_menu)
+            com.reverie.paint.core.stylus.StylusAction.TOGGLE_REF_WINDOW -> showActionToast(R.string.stylus_action_ref_window, R.drawable.ic_reference)
             else -> {}
         }
     }
@@ -4082,6 +4103,14 @@ class PaintViewModel : ViewModel() {
             samsungSingleClickAction = prefs.getString("samsungSingleClickAction", "toggle_eraser") ?: "toggle_eraser"
             samsungDoubleClickAction = prefs.getString("samsungDoubleClickAction", "undo") ?: "undo"
             samsungLongPressAction = prefs.getString("samsungLongPressAction", "tool_picker") ?: "tool_picker"
+            prefs.getString("spenAirClickAction", null)?.let { spenAirClickAction = SpenAirActions.sanitize(it, SpenAirGesture.CLICK) }
+            prefs.getString("spenAirDoubleClickAction", null)?.let { spenAirDoubleClickAction = SpenAirActions.sanitize(it, SpenAirGesture.DOUBLE_CLICK) }
+            prefs.getString("spenAirSwipeLeftAction", null)?.let { spenAirSwipeLeftAction = SpenAirActions.sanitize(it, SpenAirGesture.SWIPE_LEFT) }
+            prefs.getString("spenAirSwipeRightAction", null)?.let { spenAirSwipeRightAction = SpenAirActions.sanitize(it, SpenAirGesture.SWIPE_RIGHT) }
+            prefs.getString("spenAirSwipeUpAction", null)?.let { spenAirSwipeUpAction = SpenAirActions.sanitize(it, SpenAirGesture.SWIPE_UP) }
+            prefs.getString("spenAirSwipeDownAction", null)?.let { spenAirSwipeDownAction = SpenAirActions.sanitize(it, SpenAirGesture.SWIPE_DOWN) }
+            prefs.getString("spenAirCircleCwAction", null)?.let { spenAirCircleCwAction = SpenAirActions.sanitize(it, SpenAirGesture.CIRCLE_CW) }
+            prefs.getString("spenAirCircleCcwAction", null)?.let { spenAirCircleCcwAction = SpenAirActions.sanitize(it, SpenAirGesture.CIRCLE_CCW) }
             huaweiPencilModelMode = prefs.getString("huaweiPencilModelMode", "AUTO") ?: "AUTO"
             huaweiDoubleTapAction = prefs.getString("huaweiDoubleTapAction", "toggle_eraser") ?: "toggle_eraser"
             huaweiSqueezeAction = prefs.getString("huaweiSqueezeAction", "tool_color") ?: "tool_color"

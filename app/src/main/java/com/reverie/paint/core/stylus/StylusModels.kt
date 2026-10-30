@@ -21,6 +21,17 @@ enum class StylusAction(val title: String, val actionId: String) {
     COLOR_PICKER("吸管取色", "tool_picker"),
     TOGGLE_LAST_TOOL("切换上一工具", "toggle_last_tool"),
     SHOW_COLOR_PALETTE("快捷调色盘", "tool_color"),
+    BRUSH_SIZE_INC("增大笔刷", "brush_size_inc"),
+    BRUSH_SIZE_DEC("减小笔刷", "brush_size_dec"),
+    BRUSH_OPACITY_INC("提高不透明度", "brush_opacity_inc"),
+    BRUSH_OPACITY_DEC("降低不透明度", "brush_opacity_dec"),
+    ZOOM_IN("放大画布", "zoom_in"),
+    ZOOM_OUT("缩小画布", "zoom_out"),
+    FLIP_CANVAS("翻转视图", "flip_canvas"),
+    LAYER_PREV("上一图层", "layer_prev"),
+    LAYER_NEXT("下一图层", "layer_next"),
+    TOGGLE_QUICK_MENU("快捷菜单", "toggle_quick_menu"),
+    TOGGLE_REF_WINDOW("参考图浮窗", "toggle_ref_window"),
     NONE("无操作", "none");
 
     companion object {

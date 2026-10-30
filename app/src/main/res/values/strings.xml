@@ -528,7 +528,10 @@
     <string name="crash_report_dismiss">我知道了</string>
     <string name="crash_report_copied_toast">崩溃日志已复制到剪贴板</string>
     <string name="crash_report_long_hint">现场日志较长，已优化为文件导出和分享，防止系统剪贴板截断</string>
-    <string name="crash_report_upload">上报这条</string>
+    <string name="crash_report_auto_reporting">崩溃报告会自动匿名上报，可在设置里关闭</string>
+    <string name="crash_report_auto_off">自动上报已关闭</string>
+    <string name="crash_report_upload_once">仅上报这一条</string>
+    <string name="crash_report_uploaded">已上报</string>
     <string name="crash_report_uploading">正在上报…</string>
     <string name="crash_report_upload_ok">已上报，感谢反馈</string>
     <string name="crash_report_upload_failed">上报失败，请稍后再试</string>

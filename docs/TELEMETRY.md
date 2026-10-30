@@ -74,7 +74,7 @@ addr2line -f -C -e /tmp/ch/crashhost 0x<帧偏移>
 崩溃发生
   ├─ Java 崩溃   → CrashHandler 写 crash_java_<ts>.log
   └─ Native 信号 → ReverieCrashHandler 写 crash_native_<ts>.log
-                        ↓ (下次启动, 或用户在崩溃弹窗点"上报这条")
+                        ↓ (下次启动 30s 后自动; 关掉自动上报时弹窗才有"仅上报这一条")
 TelemetryReporter.scan()  扫描 crash_logs/,跳过已上报水位
                         ↓
 TelemetryPayload.build()  解析 → 白名单规约 → 脱敏 → 组装 JSON

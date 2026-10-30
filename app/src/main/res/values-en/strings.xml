@@ -528,7 +528,10 @@
     <string name="crash_report_dismiss">Dismiss</string>
     <string name="crash_report_copied_toast">Crash log copied to clipboard</string>
     <string name="crash_report_long_hint">Log is long and optimized for file export/sharing to avoid clipboard truncation</string>
-    <string name="crash_report_upload">Report</string>
+    <string name="crash_report_auto_reporting">Crash report is sent automatically. Turn off in Settings</string>
+    <string name="crash_report_auto_off">Automatic reporting is off</string>
+    <string name="crash_report_upload_once">Send this one</string>
+    <string name="crash_report_uploaded">Sent</string>
     <string name="crash_report_uploading">Reporting…</string>
     <string name="crash_report_upload_ok">Report sent, thank you</string>
     <string name="crash_report_upload_failed">Report failed, try again later</string>

@@ -1193,7 +1193,7 @@ internal fun LayerDetailPage(
             // Group-specific page
             Column {
                 OpItem(R.drawable.ic_rename, stringResource(R.string.layer_op_rename)) { onRename(name) }
-                OpItem(R.drawable.ic_trash, stringResource(R.string.layer_op_delete_group), enabled = !isBg) {
+                OpItem(R.drawable.ic_trash, stringResource(R.string.layer_op_delete_group), enabled = !isBg && layer?.locked != true) {
                     vm.removeLayer(index)
                     onBack()
                 }
@@ -1265,7 +1265,7 @@ internal fun LayerDetailPage(
             Column {
                 OpItem(R.drawable.ic_copy, stringResource(R.string.layer_op_duplicate)) { vm.copyLayer(index) }
                 OpItem(R.drawable.ic_rename, stringResource(R.string.layer_op_rename)) { onRename(name) }
-                OpItem(R.drawable.ic_trash, stringResource(R.string.layer_op_delete_layer), enabled = !isBg) {
+                OpItem(R.drawable.ic_trash, stringResource(R.string.layer_op_delete_layer), enabled = !isBg && layer?.locked != true) {
                     vm.removeLayer(index)
                     onBack()
                 }

@@ -1254,6 +1254,11 @@
     <string name="canvas_toast_selection_mask_not_drawable">Selection mask preserves selection, brush painting is not supported</string>
     <string name="canvas_toast_layer_locked">Layer is locked and cannot be edited</string>
     <string name="canvas_toast_layer_hidden">Layer is hidden and cannot be edited</string>
+    <string name="toast_layer_delete_background">The background layer cannot be deleted</string>
+    <string name="toast_layer_delete_locked">Layer is locked — unlock it before deleting</string>
+    <string name="toast_layer_delete_stale">Layer list changed, please try again</string>
+    <string name="toast_transform_nothing_applied">Nothing to transform — the selection has no pixels</string>
+    <string name="toast_transform_copy_overlaps">Copy overlaps the original — drag it to see the duplicated content</string>
     <string name="canvas_toast_group_empty">Layer group is empty, cannot transform</string>
     <string name="quick_shape_title">Quick Shape: %s</string>
     <string name="quick_shape_to_ellipse">To Ellipse</string>

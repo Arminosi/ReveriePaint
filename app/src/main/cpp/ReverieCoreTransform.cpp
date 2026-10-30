@@ -368,16 +368,31 @@ bool ReverieCore::applyTransformLayers(const QVector<int> &layers,
     const bool activeSel = hasSelection();
     QVector<KUndo2Command *> children;
     for (KisPaintDeviceSP device : devices) {
-        KisTransaction *txn = new KisTransaction(kundo2_i18n("Transform"), device, nullptr, -1, nullptr);
+        KisTransaction *txn = nullptr;
         if (activeSel) {
             QRect selBounds = m_selection->selectedExactRect().intersected(canvasRect);
             if (selBounds.isEmpty()) selBounds = shared;
 
+            // 先把选区内容抠进临时设备, **确认抠到了东西** 再动原件。
+            // 旧顺序是"建事务 → clearSelection → 贴回": 选区里一个像素都没有
+            // (或只剩全透明) 时, 贴回去的是一块空气 —— 剪切语义下原件已经被抹掉,
+            // 用户看到的就是「内容凭空消失」, 而且日志里一行都没有。
             KisPaintDeviceSP temp = new KisPaintDevice(image->colorSpace());
-            KisPainter p0(temp);
-            p0.setSelection(m_selection);
-            p0.bitBlt(selBounds.topLeft(), device, selBounds);
+            {
+                KisPainter p0(temp);
+                p0.setSelection(m_selection);
+                p0.bitBlt(selBounds.topLeft(), device, selBounds);
+                p0.end();
+            }
+            if (temp->exactBounds().isEmpty()) {
+                RPC_LOG("transformLayers: selection has no pixels, layer skipped "
+                        "(copyOnly=%d sel=%d,%d %dx%d)",
+                        copyOnly ? 1 : 0, selBounds.x(), selBounds.y(),
+                        selBounds.width(), selBounds.height());
+                continue;
+            }
 
+            txn = new KisTransaction(kundo2_i18n("Transform"), device, nullptr, -1, nullptr);
             if (!copyOnly) {
                 device->clearSelection(m_selection);
             }
@@ -391,14 +406,30 @@ bool ReverieCore::applyTransformLayers(const QVector<int> &layers,
                                          KisFilterStrategyRegistry::instance()->value("Bicubic"));
             workerSel.run();
 
-            KisPainter p2(device);
-            p2.setCompositeOpId(COMPOSITE_OVER);
-            QRect tempBounds = temp->exactBounds();
-            p2.bitBlt(tempBounds.topLeft(), temp, tempBounds);
+            // 变换后的副本必须与画布有交集才贴: 落在画布外时贴了也看不见,
+            // 而剪切语义下原件已经没了 —— 这种情况留日志, 下次报告能直接定位。
+            const QRect tempBounds = temp->exactBounds();
+            if (!tempBounds.isEmpty() && tempBounds.intersects(canvasRect)) {
+                KisPainter p2(device);
+                p2.setCompositeOpId(COMPOSITE_OVER);
+                p2.bitBlt(tempBounds.topLeft(), temp, tempBounds);
+                p2.end();
+            } else if (!copyOnly) {
+                RPC_LOG("transformLayers: cut result falls outside canvas, content dropped "
+                        "(sel=%d,%d %dx%d tx=%.1f ty=%.1f)",
+                        selBounds.x(), selBounds.y(), selBounds.width(), selBounds.height(),
+                        effectiveTx, effectiveTy);
+            }
         } else {
+            txn = new KisTransaction(kundo2_i18n("Transform"), device, nullptr, -1, nullptr);
             // Krita's transformAndMergeDevice pattern per device
             KisPaintDeviceSP src = new KisPaintDevice(*device);
-            device->clear();
+            // 复制语义 (copyOnly) 下原件必须留着: 这一支是「选区在提交时已经不在
+            // 引擎里」的兜底路径, 旧代码无条件 clear() → 整个图层被抹掉再贴回变换后的
+            // 副本, 用户看到的就是「选了复制, 原处内容却没了」。
+            if (!copyOnly) {
+                device->clear();
+            }
 
             KisPaintDeviceSP tmp = new KisPaintDevice(src->colorSpace());
             tmp->prepareClone(src);
@@ -434,8 +465,18 @@ bool ReverieCore::applyTransformLayers(const QVector<int> &layers,
             painter.end();
         }
         device->setDirty();
-        children << txn->endAndTake();
-        delete txn;
+        if (txn) {
+            children << txn->endAndTake();
+            delete txn;
+        }
+    }
+
+    // 整个目标集都没写出任何像素 (选区里没内容 / 目标层全空): 不动文档,
+    // 返回 false 让调用方能把「这次变换等于没发生」说出来, 而不是静默成功。
+    if (children.isEmpty()) {
+        RPC_LOG("transformLayers: nothing to transform (targets=%d activeSel=%d copyOnly=%d)",
+                int(devices.size()), activeSel ? 1 : 0, copyOnly ? 1 : 0);
+        return false;
     }
 
     // Transform the selection mask once for the whole group
@@ -519,7 +560,13 @@ bool ReverieCore::startTransformPreview(const QVector<int> &layers, QImage* outI
             KisPainter p0(m_previewTempDevice);
             p0.bitBlt(bounds.topLeft(), device, bounds);
             p0.end();
-            device->clear();
+            // 复制语义 (copyOnly) 下预览**绝不能**涂改原件: 「复制到当前图层」
+            // 只要引擎侧选区为空就会走到这里, 一旦无条件 clear() 整层就被清空,
+            // 屏幕上只剩那张预览位图在飘 —— 预览位图没送到 UI (返回失败/首帧未到)
+            // 或者用户此时切走, 看到的就是「内容凭空消失」。
+            if (!copyOnly) {
+                device->clear();
+            }
         }
         device->setDirty();
     }

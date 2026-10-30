@@ -1520,11 +1520,24 @@ internal fun PaintViewModel.applyTransform(
         clearSelectionOverlayLocal()
     }
 
+    // 引擎返回 false = 这次变换一个像素都没写出去 (选区里没有内容 / 落点全在画布外)。
+    // 「复制到当前图层」这种语义下就是用户点了复制却什么都看不到, 必须说出来,
+    // 否则只能收获一句「复制完内容消失了」。
+    var applied = true
     runCore(render = true, after = {
         notifyLayerChanged(pixelChanged = true)
         transformPreviewBitmap = null
         transformCopyOnly = false
         isSelectionTransformPending = false
+        if (!applied && copyOnly) {
+            showActionToast(R.string.toast_transform_nothing_applied, R.drawable.ic_lasso)
+        } else if (copyOnly && xtranslate == 0.0 && ytranslate == 0.0 &&
+            (xscale != 1.0 || yscale != 1.0 || rotationRad != 0.0)
+        ) {
+            // 纯翻转/旋转/缩放的副本以选区中心为轴, 落点与原件完全重合 —— 屏幕上
+            // 只能看到"原件被改", 用户很容易以为复制出来的那份没了。说清楚一句。
+            showActionToast(R.string.toast_transform_copy_overlaps, R.drawable.ic_copy)
+        }
         if (wasSelectionPending) {
             clearSelection()
         } else if (shouldStashSelection) {
@@ -1537,19 +1550,20 @@ internal fun PaintViewModel.applyTransform(
             stashPreTransformSelectionCore()
         }
         val targets = layers.toIntArray()
-        ReverieCoreBridge.applyTransformLayersEx(
-            targets,
-            xscale,
-            yscale,
-            xshear,
-            yshear,
-            rotationRad,
-            xtranslate,
-            ytranslate,
-            originX,
-            originY,
-            copyOnly,
-        )
+        applied =
+            ReverieCoreBridge.applyTransformLayersEx(
+                targets,
+                xscale,
+                yscale,
+                xshear,
+                yshear,
+                rotationRad,
+                xtranslate,
+                ytranslate,
+                originX,
+                originY,
+                copyOnly,
+            )
         if (shouldStashSelection && !wasSelectionPending) {
             stashPostTransformAndClearSelectionCore()
         }

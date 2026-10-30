@@ -337,4 +337,25 @@ class LocalBackupEngineTest {
             root.deleteRecursively()
         }
     }
+
+    @Test
+    fun `备份笔刷预设时 myb 和 kpp 一样会被带上`() {
+        val root = Files.createTempDirectory("backup-myb").toFile()
+        try {
+            val brushDir = File(root, "paintoppresets").apply { mkdirs() }
+            File(brushDir, "ink.kpp").writeText("kpp data")
+            File(brushDir, "chalk.myb").writeText("{\"version\":3}")
+            val out = ByteArrayOutputStream()
+            LocalBackupEngine.createBackup(
+                filesDir = root, prefsMap = emptyMap<String, Any>(),
+                selectedCategories = setOf(BackupCategory.BRUSHES), outputStream = out,
+            )
+            val inspection = LocalBackupEngine.inspectBackup(root, ByteArrayInputStream(out.toByteArray()))
+            assertEquals(listOf("chalk.myb", "ink.kpp"), inspection.manifest.brushPresets.sorted())
+            val est = LocalBackupEngine.estimateCategory(root, emptyMap<String, Any>(), BackupCategory.BRUSHES)
+            assertEquals(2, est.count)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
 }

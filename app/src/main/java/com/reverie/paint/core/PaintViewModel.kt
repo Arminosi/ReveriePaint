@@ -4,6 +4,8 @@
 
 package com.reverie.paint.core
 
+import com.reverie.paint.core.brushstore.toCurveXml
+
 import android.graphics.Bitmap
 import android.os.Build
 import android.os.Handler
@@ -84,6 +86,10 @@ class PaintViewModel : ViewModel() {
     var totalStrokes by mutableIntStateOf(0)
     var initialStrokeCount by mutableIntStateOf(0)
     var isModified by mutableStateOf(false)
+    var brushModifiedEpoch by mutableLongStateOf(0L)
+    fun notifyBrushModified() {
+        brushModifiedEpoch++
+    }
     var elapsedSeconds by mutableLongStateOf(0L)
     var canvasCreatedTime by mutableLongStateOf(System.currentTimeMillis())
     var colorMode by mutableStateOf("RGB 8位 (sRGB)")
@@ -574,36 +580,94 @@ class PaintViewModel : ViewModel() {
     var renderScheduleMode by mutableStateOf(com.reverie.paint.model.RenderScheduleMode.PERFORMANCE)
 
     // Brush state
-    var brushSize by mutableDoubleStateOf(20.0)
+    /**
+     * 笔刷参数的唯一所有者：下面的 brushXxx 全是它的只读派生（getter，每次读都是 brushParams 的一次状态读，
+     * 没有第二份拷贝）。写只许 `brushParams = ...`；预设参数的乐观更新由 BrushStoreVm.stage 一处完成。
+     */
+    var brushParams by mutableStateOf(BrushParams(paintOpId = "paintbrush"))
+    val brushSize: Double get() = brushParams.size
+    val brushOpacity: Double get() = brushParams.opacity
+    val brushFlow: Double get() = brushParams.flow
+    val brushSpacing: Double get() = brushParams.spacing
+    val brushAngle: Double get() = brushParams.angle
+    val brushScatter: Double get() = brushParams.scatter
+    val brushFade: Double get() = brushParams.fade
+    val brushSoftness: Double get() = brushParams.softness
+    val brushRatio: Double get() = brushParams.ratio
+    val brushSharpness: Double get() = brushParams.sharpness
+    val brushRotation: Double get() = brushParams.rotation
+    val brushCompositeOp: String get() = brushParams.compositeOp
+    val brushAntiAliasing: Int get() = brushParams.antiAliasing
+    val brushTipShape: Int get() = brushParams.tipShape
+    val brushRandomFlipX: Boolean get() = brushParams.randomFlipX
+    val brushRandomFlipY: Boolean get() = brushParams.randomFlipY
+    val brushFollowDirection: Boolean get() = brushParams.followDirection
+    val brushStreamline: Double get() = brushParams.streamline
+    val brushTaper: Double get() = brushParams.taper
+    val brushTextureEnabled: Boolean get() = brushParams.textureEnabled
+    val brushTextureScale: Double get() = brushParams.textureScale
+    val brushTextureStrength: Double get() = brushParams.textureStrength
+    val brushTextureMode: String get() = brushParams.textureMode
+    val brushTexturePattern: String get() = brushParams.texturePattern
+    val brushHueJitter: Double get() = brushParams.hueJitter
+    val brushSatJitter: Double get() = brushParams.satJitter
+    val brushValJitter: Double get() = brushParams.valJitter
+    val brushSecondaryMix: Double get() = brushParams.secondaryMix
+    val brushPressureColorMix: Boolean get() = brushParams.pressureColorMix
+    val brushPressureEnabled: Boolean get() = brushParams.pressureEnabled
+    val brushPressureSize: Double get() = brushParams.pressureSize
+    val brushPressureOpacity: Double get() = brushParams.pressureOpacity
+    val brushPressureFlow: Double get() = brushParams.pressureFlow
+    val brushSpeedSize: Double get() = brushParams.speedSize
+    val brushPressureCurve: Int get() = brushParams.pressureCurve
+    val brushMinSizeLimit: Double get() = brushParams.minSizeLimit
+    val brushMaxSizeLimit: Double get() = brushParams.maxSizeLimit
+    val brushTipAsset: String get() = brushParams.tipAsset
+    val brushPaintOpId: String get() = brushParams.paintOpId
+    val brushAirbrush: Boolean get() = brushParams.airbrush
+    val brushAirbrushRate: Double get() = brushParams.airbrushRate
+    val brushSmudgeRate: Double get() = brushParams.smudgeRate
+    val brushSmudgeLength: Double get() = brushParams.smudgeLength
+    val brushColorRate: Double get() = brushParams.colorRate
+    val brushSmudgeMode: Int get() = brushParams.smudgeMode
+    val brushSpikes: Int get() = brushParams.spikes
+    val brushJitterAngle: Double get() = brushParams.jitterAngle
+    val brushJitterSize: Double get() = brushParams.jitterSize
+    val brushMaskingEnabled: Boolean get() = brushParams.maskingEnabled
+    val brushMaskingCompositeOp: String get() = brushParams.maskingCompositeOp
+    val brushMaskingSizeRatio: Double get() = brushParams.maskingSizeRatio
+    val brushMaskingSpacing: Double get() = brushParams.maskingSpacing
+    val brushMaskingTipAsset: String get() = brushParams.maskingTipAsset
+    val brushMaskingTipShape: Int get() = brushParams.maskingTipShape
+    val brushMaskingFade: Double get() = brushParams.maskingFade
+    val brushMaskingSoftness: Double get() = brushParams.maskingSoftness
+    val brushRotationSensor: String get() = brushParams.rotationSensor
+    val brushScatterSensor: String get() = brushParams.scatterSensor
+    val brushSizeSensor: String get() = brushParams.sizeSensor
+    val brushOpacitySensor: String get() = brushParams.opacitySensor
+    val brushFlowSensor: String get() = brushParams.flowSensor
+    val brushAuthor: String get() = brushParams.author
+    val brushIsAuthorLocked: Boolean get() = brushParams.isAuthorLocked
+    val brushDescription: String get() = brushParams.description
+    val brushVersion: String get() = brushParams.version
     var brushColor by mutableStateOf("#000000")
     var brushSecondaryColor by mutableStateOf("#ffffff")
-    var brushOpacity by mutableDoubleStateOf(1.0)
     var brushPresets by mutableStateOf<List<BrushPresetInfo>>(emptyList())
     var isBrushPresetsLoading by mutableStateOf(false)
     var brushPresetsLoaded = false
         internal set
     var brushPresetIndex by mutableIntStateOf(-1)
 
-    // User-defined brush groups: preset name -> group name; and the list of
+    // User-defined brush groups: preset ID -> group name (按 id 存, 见 BrushIdPrefs); and the list of
     // custom group names the user created (persisted in SharedPreferences)
     var userBrushGroups by mutableStateOf<Map<String, String>>(emptyMap())
     var customBrushGroups by mutableStateOf<List<String>>(emptyList())
     /** 笔刷导入进度: Pair(当前处理数, 总数), 非导入状态时为 null */
     var brushImportProgress by mutableStateOf<Pair<Int, Int>?>(null)
 
-    // Custom display order of presets (persisted); empty = default (sorted)
+    // Custom display order of presets (persisted, 笔刷 id); empty = default (sorted)
     var brushOrder by mutableStateOf<List<String>>(emptyList())
     var categoryOrder by mutableStateOf<List<String>>(emptyList())
-    var brushFlow by mutableDoubleStateOf(1.0)
-    var brushSpacing by mutableDoubleStateOf(0.1)
-    var brushAngle by mutableDoubleStateOf(0.0)
-    var brushScatter by mutableDoubleStateOf(0.0)
-    var brushFade by mutableDoubleStateOf(KppHelper.FADE_SOLID)
-    var brushSoftness by mutableDoubleStateOf(KppHelper.SOFTNESS_NEUTRAL)
-    var brushRatio by mutableDoubleStateOf(1.0)
-    var brushSharpness by mutableDoubleStateOf(0.0)
-    var brushRotation by mutableDoubleStateOf(0.0)
-    var brushCompositeOp by mutableStateOf("normal")
 
     // 上一次使用的工具 (toggle_last_tool 快捷键用)
     var lastToolId by mutableStateOf("brush")
@@ -641,31 +705,6 @@ class PaintViewModel : ViewModel() {
     var pendingUiCommand by mutableStateOf<String?>(null)
 
     // Extended brush studio properties
-    var brushAntiAliasing by mutableIntStateOf(1) // 0: 无, 1: 正常, 2: 强化, 3: 分级
-    var brushTipShape by mutableIntStateOf(0) // 0: 圆形笔触, 1: 方形笔触
-    var brushRandomFlipX by mutableStateOf(false)
-    var brushRandomFlipY by mutableStateOf(false)
-    var brushFollowDirection by mutableStateOf(false)
-    var brushStreamline by mutableDoubleStateOf(0.0)
-    var brushTaper by mutableDoubleStateOf(0.0)
-    var brushTextureEnabled by mutableStateOf(false)
-    var brushTextureScale by mutableDoubleStateOf(1.0)
-    var brushTextureStrength by mutableDoubleStateOf(0.5)
-    var brushTextureMode by mutableStateOf("multiply")
-    var brushTexturePattern by mutableStateOf("")
-    var brushHueJitter by mutableDoubleStateOf(0.0)
-    var brushSatJitter by mutableDoubleStateOf(0.0)
-    var brushValJitter by mutableDoubleStateOf(0.0)
-    var brushSecondaryMix by mutableDoubleStateOf(0.0)
-    var brushPressureColorMix by mutableStateOf(false)
-    var brushPressureEnabled by mutableStateOf(true)
-    var brushPressureSize by mutableDoubleStateOf(1.0)
-    var brushPressureOpacity by mutableDoubleStateOf(1.0)
-    var brushPressureFlow by mutableDoubleStateOf(1.0)
-    var brushSpeedSize by mutableDoubleStateOf(0.0)
-    var brushPressureCurve by mutableIntStateOf(0) // 0: 线性, 1: 柔和, 2: 硬朗, 3: S型
-    var brushMinSizeLimit by mutableDoubleStateOf(1.0)
-    var brushMaxSizeLimit by mutableDoubleStateOf(500.0)
     var brushSizeScalesWithCanvas by mutableStateOf(true)
 
     // 独立参数动态响应曲线配置映射表 (Size, Opacity, Flow, Softness, Rotation, Spacing, Scatter, SmudgeRate)
@@ -684,7 +723,7 @@ class PaintViewModel : ViewModel() {
     internal var brushStudioInitialKppBytes: ByteArray? = null
 
     /** v2：进入工作台时的覆盖（null = 该预设不归 v2 管，走 [brushStudioInitialKppBytes]） */
-    internal var brushStudioInitialOverrides: com.reverie.paint.core.brushstore.BrushOverrideStore.Overrides? = null
+    internal var brushStudioInitial: BrushStoreVm.StudioSnapshot? = null
 
     fun updateBrushDynamicOption(config: com.reverie.paint.model.DynamicOptionConfig) {
         updateBrushDynamicOption(config.optionKey, config)
@@ -695,39 +734,43 @@ class PaintViewModel : ViewModel() {
         config: com.reverie.paint.model.DynamicOptionConfig,
     ) {
         brushDynamicOptions[key] = config
-        when (key.lowercase()) {
-            "size" -> {
-                brushPressureSize = if (config.enabled) config.strength.toDouble() else 0.0
-                if (config.enabled) brushPressureEnabled = true
-                brushSizeSensor = config.sensorId
-            }
-            "opacity" -> {
-                brushPressureOpacity = if (config.enabled) config.strength.toDouble() else 0.0
-                if (config.enabled) brushPressureEnabled = true
-                brushOpacitySensor = config.sensorId
-            }
-            "flow" -> {
-                brushPressureFlow = if (config.enabled) config.strength.toDouble() else 0.0
-                if (config.enabled) brushPressureEnabled = true
-                brushFlowSensor = config.sensorId
-            }
-            "scatter" -> {
-                brushScatterSensor = config.sensorId
-            }
-            "rotation" -> {
-                brushRotationSensor = config.sensorId
-            }
-        }
-        runCore(render = false) {
-            ReverieCoreBridge.setBrushOptionDynamics(
-                optionName = key,
-                enabled = config.enabled,
-                sensorId = config.sensorId,
-                curvePoints = config.toKritaCurveString(),
-                strength = config.strength.toDouble(),
+        val strength = if (config.enabled) config.strength.toDouble() else 0.0
+        brushParams = when (key.lowercase()) {
+            "size" -> brushParams.copy(
+                pressureSize = strength,
+                pressureEnabled = brushPressureEnabled || config.enabled,
+                sizeSensor = config.sensorId,
             )
+            "opacity" -> brushParams.copy(
+                pressureOpacity = strength,
+                pressureEnabled = brushPressureEnabled || config.enabled,
+                opacitySensor = config.sensorId,
+            )
+            "flow" -> brushParams.copy(
+                pressureFlow = strength,
+                pressureEnabled = brushPressureEnabled || config.enabled,
+                flowSensor = config.sensorId,
+            )
+            "scatter" -> brushParams.copy(scatterSensor = config.sensorId)
+            "rotation" -> brushParams.copy(rotationSensor = config.sensorId)
+            else -> brushParams
         }
-        saveBrushParam(dynamicsChanged = true)
+        val cid = when (key.lowercase()) {
+            "size" -> com.reverie.paint.core.brushstore.ControlId.CURVE_SIZE
+            "opacity" -> com.reverie.paint.core.brushstore.ControlId.CURVE_OPACITY
+            "flow" -> com.reverie.paint.core.brushstore.ControlId.CURVE_FLOW
+            "rotation" -> com.reverie.paint.core.brushstore.ControlId.CURVE_ROTATION
+            "scatter" -> com.reverie.paint.core.brushstore.ControlId.CURVE_SCATTER
+            "softness" -> com.reverie.paint.core.brushstore.ControlId.CURVE_SOFTNESS
+            "spacing" -> com.reverie.paint.core.brushstore.ControlId.CURVE_SPACING
+            "smudgerate" -> com.reverie.paint.core.brushstore.ControlId.CURVE_SMUDGE_RATE
+            "colorrate" -> com.reverie.paint.core.brushstore.ControlId.CURVE_COLOR_RATE
+            "ratio" -> com.reverie.paint.core.brushstore.ControlId.CURVE_RATIO
+            else -> null
+        }
+        if (cid != null) {
+            BrushStoreVm.stage(this, cid, config.toCurveXml())
+        }
     }
 
     val effectiveBrushMaxSize: Double
@@ -746,45 +789,16 @@ class PaintViewModel : ViewModel() {
             updateBrushSize(maxL)
         }
     }
-    var brushTipAsset by mutableStateOf("")
-    var brushPaintOpId by mutableStateOf("paintbrush")
-    var brushAirbrush by mutableStateOf(false)
-    var brushAirbrushRate by mutableDoubleStateOf(30.0)
-    var brushSmudgeRate by mutableDoubleStateOf(0.5)
-    var brushSmudgeLength by mutableDoubleStateOf(0.5)
-    var brushColorRate by mutableDoubleStateOf(0.5)
-    var brushSmudgeMode by mutableIntStateOf(0) // Krita SmudgeRateMode: 0 = Smearing, 1 = Dulling
-    var brushSpikes by mutableIntStateOf(2)
-    var brushJitterAngle by mutableDoubleStateOf(0.0)
-    var brushJitterSize by mutableDoubleStateOf(0.0)
 
     // Masking Brush (双重画笔/蒙版画笔)
-    var brushMaskingEnabled by mutableStateOf(false)
-    var brushMaskingCompositeOp by mutableStateOf("multiply")
-    var brushMaskingSizeRatio by mutableDoubleStateOf(1.0)
-    var brushMaskingSpacing by mutableDoubleStateOf(0.1)
-    var brushMaskingTipAsset by mutableStateOf("")
-    var brushMaskingTipShape by mutableIntStateOf(0) // 0: 圆形, 1: 矩形
-    var brushMaskingFade by mutableDoubleStateOf(0.0)
-    var brushMaskingSoftness by mutableDoubleStateOf(1.0)
 
     // Sensor dynamics
-    var brushRotationSensor by mutableStateOf("drawingangle")
-    var brushScatterSensor by mutableStateOf("fuzzy")
-    var brushSizeSensor by mutableStateOf("pressure")
-    var brushOpacitySensor by mutableStateOf("pressure")
-    var brushFlowSensor by mutableStateOf("pressure")
 
     // Metadata properties
-    var brushAuthor by mutableStateOf("ReveriePaint")
-    var brushIsAuthorLocked by mutableStateOf(false)
-    var brushDescription by mutableStateOf("")
-    var brushVersion by mutableStateOf("1.0")
 
     // Per-preset independent size/opacity/flow (persisted). Switching presets
     // restores that brush's own values; adjusting a slider only affects the
     // current brush.
-    internal val brushParams = mutableStateMapOf<String, BrushParams>()
 
     // Display bitmap (managed as front/back double buffer, updated in place via renderToBuffer).
     // Decoupled from Compose state: hardware Canvas draws it directly with 0 recomposition overhead.
@@ -797,7 +811,6 @@ class PaintViewModel : ViewModel() {
     var layerPanelOpen by mutableStateOf(false)
     var brushPanelOpen by mutableStateOf(false)
     var brushStudioOpen by mutableStateOf(false)
-    var brushStudioInitialParams by mutableStateOf<BrushParams?>(null)
 
     // Brush panel persistence state
     var brushPanelSelectedCategory by mutableStateOf("全部")
@@ -809,8 +822,11 @@ class PaintViewModel : ViewModel() {
     var categoryPresetScrollMap: Map<String, Pair<Int, Int>> = emptyMap()
     var brushPropertyScrollValue: Int = 0
     var brushPanelGridView by mutableStateOf(false)
-    var favoriteBrushNames by mutableStateOf<Set<String>>(emptySet())
-    var recentBrushNames by mutableStateOf<List<String>>(emptyList())
+    /** 常用 / 最近：笔刷 id（不是显示名；改名、重名都不影响）。见 [com.reverie.paint.core.brushstore.BrushIdPrefs] */
+    var favoriteBrushIds by mutableStateOf<Set<String>>(emptySet())
+    var recentBrushIds by mutableStateOf<List<String>>(emptyList())
+    /** 按 id 的四项偏好已读入内存之前不写盘，免得空状态盖掉磁盘上的数据 */
+    @Volatile internal var brushIdPrefsLoaded = false
     var settingsPanelOpen by mutableStateOf(false)
     var drawingGuidePanelOpen by mutableStateOf(false)
     var targetSettingsTab by mutableStateOf<String?>(null)
@@ -829,22 +845,22 @@ class PaintViewModel : ViewModel() {
     internal var shadingAssistComputeJob: kotlinx.coroutines.Job? = null
     internal var shadingAssistRawDepth: ShadingAssistEngine.RawDepthData? = null
 
-    fun toggleFavoriteBrush(name: String) {
-        if (name.isBlank()) return
-        favoriteBrushNames = if (favoriteBrushNames.contains(name)) {
-            favoriteBrushNames - name
+    fun toggleFavoriteBrush(id: String) {
+        if (id.isBlank()) return
+        favoriteBrushIds = if (favoriteBrushIds.contains(id)) {
+            favoriteBrushIds - id
         } else {
-            favoriteBrushNames + name
+            favoriteBrushIds + id
         }
         persistBrushPanelState()
     }
 
-    fun isFavoriteBrush(name: String): Boolean = favoriteBrushNames.contains(name)
+    fun isFavoriteBrush(id: String): Boolean = favoriteBrushIds.contains(id)
 
-    fun recordRecentBrush(name: String) {
-        if (name.isBlank()) return
-        val list = (listOf(name) + recentBrushNames.filter { it != name }).take(16)
-        recentBrushNames = list
+    fun recordRecentBrush(id: String) {
+        if (id.isBlank()) return
+        val list = (listOf(id) + recentBrushIds.filter { it != id }).take(com.reverie.paint.core.brushstore.BrushIdPrefs.RECENT_MAX)
+        recentBrushIds = list
         persistBrushPanelState()
     }
 
@@ -899,11 +915,9 @@ class PaintViewModel : ViewModel() {
     data class ToolBrushState(
         val presetIndex: Int = -1,
         /**
-         * 预设名字 = 稳定身份。#136 A：`presetIndex` 是「当前目录里按名排序」的产物，
-         * 导入/删除预设会整表重排，只存索引会让工具槽在重排后指到别的笔（橡皮变喷漆）。
-         * 解析顺序见 [com.reverie.paint.core.ToolPresetMemory]：先名字，名字缺失才退回索引并自愈回填。
+         * 预设稳定身份 (BrushIdentity.id)。#136 A / v5 S3：工具槽以 presetId 为身份存储。
          */
-        val presetName: String = "",
+        val presetId: String = "",
         val category: String = "全部",
         val categoryScrollIndex: Int = 0,
         val categoryScrollOffset: Int = 0,
@@ -927,12 +941,16 @@ class PaintViewModel : ViewModel() {
     /** 当前笔画临时覆盖工具 (如物理橡皮擦末端 TOOL_TYPE_ERASER 或侧键临时擦除生效时设为 "eraser") */
     var activeStrokeToolOverride by mutableStateOf<String?>(null)
         internal set
-    internal var activeStrokeOriginalPresetIndex: Int = -1
-    internal var activeStrokeOriginalSize: Double = 0.0
-    internal var activeStrokeOriginalOpacity: Double = 1.0
-    internal var activeStrokeOriginalFlow: Double = 1.0
-    internal var activeStrokeOriginalCompositeOp: String = "normal"
-    internal var activeStrokeOriginalToolMode: Int = 0
+    /** 临时橡皮擦覆盖生效前的现场（只在 touchStart 写一次、只在 restore 读；这是真正会丢的旧状态，不是镜像） */
+    internal data class StrokeSaved(
+        val presetIndex: Int = -1,
+        val size: Double = 0.0,
+        val opacity: Double = 1.0,
+        val flow: Double = 1.0,
+        val compositeOp: String = "normal",
+        val toolMode: Int = 0,
+    )
+    internal var strokeSaved: StrokeSaved = StrokeSaved()
     internal var activeStrokePresetSwitched: Boolean = false
 
     /**
@@ -941,9 +959,11 @@ class PaintViewModel : ViewModel() {
     fun getToolEffectiveSize(toolId: String): Double {
         val state = toolBrushStates[toolId]
         val curPreset = brushPresets.firstOrNull { it.index == state?.presetIndex }
-        val saved = curPreset?.let { brushParams[it.name] }
-        val mem = curPreset?.let { state?.paramMemory?.get(it.name) }
-        return mem?.getOrNull(0) ?: saved?.size ?: brushSize
+        val pid = curPreset?.id ?: state?.presetId
+        val mem = pid?.takeIf { it.isNotBlank() }?.let { state?.paramMemory?.get(it) }
+        mem?.getOrNull(0)?.let { return it }
+        val saved = pid?.takeIf { it.isNotBlank() }?.let { BrushStoreVm.readback(it)?.first }
+        return saved?.size ?: brushSize
     }
 
     /** 最近一次活跃的绘制类工具 (brush / eraser / smudge), 用于在临时工具 (如吸管) 切换回笔刷时保留笔刷尺寸与参数 */
@@ -1114,7 +1134,9 @@ class PaintViewModel : ViewModel() {
             p.putBoolean("quick_brush_collapsed", quickBrushCollapsed)
             p.putString("quick_brush_orientation", quickBrushOrientation)
             p.putInt("quick_brush_max_length", quickBrushMaxLength)
-            p.putString("quick_brush_order", quickBrushOrder.joinToString(","))
+            if (brushIdPrefsLoaded) {
+                p.putString(com.reverie.paint.core.brushstore.BrushIdPrefs.QUICK_IDS, com.reverie.paint.core.brushstore.BrushIdPrefs.encodeList(quickBrushOrder))
+            }
             p.apply()
         } catch (_: Exception) {}
     }
@@ -1495,10 +1517,10 @@ class PaintViewModel : ViewModel() {
     }
 
     fun getOrderedFavoriteBrushes(): List<BrushPresetInfo> {
-        val favs = brushPresets.filter { isFavoriteBrush(it.name) }
+        val favs = brushPresets.filter { isFavoriteBrush(it.id) }
         if (quickBrushOrder.isEmpty()) return favs
         val orderMap = quickBrushOrder.withIndex().associate { it.value to it.index }
-        return favs.sortedWith(compareBy({ orderMap[it.name] ?: Int.MAX_VALUE }, { it.name }))
+        return favs.sortedWith(compareBy({ orderMap[it.id] ?: Int.MAX_VALUE }, { it.name }))
     }
 
     fun executeQuickAction(action: com.reverie.paint.model.QuickAction) {
@@ -1660,10 +1682,10 @@ class PaintViewModel : ViewModel() {
             }
 
             p.putBoolean("brush_panel_grid_view", brushPanelGridView)
-            p.putStringSet("brush_favorite_names", favoriteBrushNames)
-            val recentsArr = org.json.JSONArray()
-            recentBrushNames.forEach { recentsArr.put(it) }
-            p.putString("brush_recent_names", recentsArr.toString())
+            if (brushIdPrefsLoaded) {
+                p.putString(com.reverie.paint.core.brushstore.BrushIdPrefs.FAV_IDS, com.reverie.paint.core.brushstore.BrushIdPrefs.encodeList(favoriteBrushIds))
+                p.putString(com.reverie.paint.core.brushstore.BrushIdPrefs.RECENT_IDS, com.reverie.paint.core.brushstore.BrushIdPrefs.encodeList(recentBrushIds))
+            }
 
             p.apply()
         } catch (_: Exception) {}
@@ -4288,18 +4310,9 @@ class PaintViewModel : ViewModel() {
             }
 
             brushPanelGridView = prefs.getBoolean("brush_panel_grid_view", false)
-            favoriteBrushNames = prefs.getStringSet("brush_favorite_names", null)?.toSet() ?: emptySet()
-            val recentsJsonStr = prefs.getString("brush_recent_names", null)
-            if (!recentsJsonStr.isNullOrEmpty()) {
-                try {
-                    val arr = org.json.JSONArray(recentsJsonStr)
-                    val list = mutableListOf<String>()
-                    for (i in 0 until arr.length()) {
-                        list.add(arr.getString(i))
-                    }
-                    recentBrushNames = list
-                } catch (_: Exception) {}
-            }
+            // 常用 / 最近 / 快捷栏顺序按 id：启动时等笔刷库就绪后在 loadBrushIdPrefs 里读；
+            // 之后（恢复备份等）再次同步时，库已打开就在这里重读。
+            if (com.reverie.paint.core.brushstore.BrushIdentity.isOpen()) loadBrushIdPrefs()
 
             // Window placement remains a device preference; images and view state belong to the document.
             // 面板 x/y 不再读取: 打开时由 PaintingQuickWindows 按屏幕居中 (防止旧位置在屏外)
@@ -4384,10 +4397,6 @@ class PaintViewModel : ViewModel() {
             quickBrushOrientation = if (isLand) quickBrushOrientation_land else quickBrushOrientation_port
             quickBrushCollapsed = prefs.getBoolean("quick_brush_collapsed", false)
             quickBrushMaxLength = prefs.getInt("quick_brush_max_length", 6)
-            val brushOrderStr = prefs.getString("quick_brush_order", "") ?: ""
-            if (brushOrderStr.isNotBlank()) {
-                quickBrushOrder = brushOrderStr.split(",").filter { it.isNotBlank() }
-            }
 
             // 快捷颜色浮窗持久化恢复
             quickColorWindowOpen = prefs.getBoolean("quick_color_open", false)
@@ -5167,10 +5176,9 @@ class PaintViewModel : ViewModel() {
         stylusDriver?.release()
         stylusDriver = null
         stopAirbrush()
-        mainHandler.removeCallbacks(persistParamsRunnable)
-        persistBrushParams()
         mainHandler.removeCallbacks(persistToolStatesRunnable)
         persistToolBrushStates()
+        BrushStoreVm.flushAllPending()
         recorder.endSession()
         replaySession?.stop()
         closePerformanceHintSession()
@@ -5230,12 +5238,6 @@ class PaintViewModel : ViewModel() {
             } catch (_: Throwable) {}
             performanceHintSession = null
         }
-    }
-
-    private val persistParamsRunnable = Runnable { persistBrushParams() }
-    internal fun schedulePersistBrushParams(delayMs: Long = 250L) {
-        mainHandler.removeCallbacks(persistParamsRunnable)
-        mainHandler.postDelayed(persistParamsRunnable, delayMs)
     }
 
     // Same debounced-write pattern for per-tool brush states: slider ticks
@@ -6424,6 +6426,7 @@ class PaintViewModel : ViewModel() {
 
     /** Injected by MainActivity; the engine needs it for file paths. */
     lateinit var appContext: android.content.Context
+    internal val appContextReady: Boolean get() = ::appContext.isInitialized
 
     internal fun hasAppContext(): Boolean = ::appContext.isInitialized
     var selectionMask: ByteArray? by mutableStateOf(null)

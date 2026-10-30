@@ -173,29 +173,33 @@ internal fun PaintViewModel.touchStart(
     var effEraserFlow = 1.0
     if (isEraserOverride) {
         activeStrokeToolOverride = toolOverride
-        activeStrokeOriginalPresetIndex = brushPresetIndex
-        activeStrokeOriginalSize = brushSize
-        activeStrokeOriginalOpacity = brushOpacity
-        activeStrokeOriginalFlow = brushFlow
-        activeStrokeOriginalCompositeOp = brushCompositeOp
-        activeStrokeOriginalToolMode = when (currentToolId) {
-            "brush" -> 0
-            "eraser" -> 1
-            "smudge" -> 3
-            else -> 0
-        }
+        strokeSaved = PaintViewModel.StrokeSaved(
+            presetIndex = brushPresetIndex,
+            size = brushSize,
+            opacity = brushOpacity,
+            flow = brushFlow,
+            compositeOp = brushCompositeOp,
+            toolMode = when (currentToolId) {
+                "brush" -> 0
+                "eraser" -> 1
+                "smudge" -> 3
+                else -> 0
+            },
+        )
 
         val eraserState = toolBrushStates["eraser"]
         val defaultEraserIdx = brushPresets.firstOrNull { it.name == "a)_Eraser_Circle" }?.index
             ?: brushPresets.firstOrNull { it.name == "Eraser_circle" }?.index
             ?: brushPresets.firstOrNull { it.group == "橡皮擦" }?.index
             ?: -1
-        // #136 A：先按名字解析（索引会随导入/删除重排），解析不到才退回默认橡皮
+        // #136 A / v5 S3：先按 id 解析，解析不到才退回旧名字/默认橡皮
         eraserPresetIdx = ToolPresetMemory.resolve(
-            eraserState?.presetName ?: "",
+            eraserState?.presetId ?: "",
             eraserState?.presetIndex ?: -1,
             brushPresets,
         )?.index ?: defaultEraserIdx
+        val eraserPreset = brushPresets.firstOrNull { it.index == eraserPresetIdx }
+        val eraserId = eraserPreset?.id ?: ""
         if (eraserState == null && eraserPresetIdx >= 0) {
             toolBrushStates = toolBrushStates.toMutableMap().apply {
                 put(
@@ -203,14 +207,14 @@ internal fun PaintViewModel.touchStart(
                     PaintViewModel.ToolBrushState(
                         category = "橡皮擦",
                         presetIndex = eraserPresetIdx,
-                        presetName = brushPresets.firstOrNull { it.index == eraserPresetIdx }?.name ?: "",
+                        presetId = eraserId,
                     ),
                 )
             }
         }
-        val eraserPreset = brushPresets.firstOrNull { it.index == eraserPresetIdx }
-        val savedEraserParam = eraserPreset?.let { brushParams[it.name] }
-        val eraserMem = eraserPreset?.let { eraserState?.paramMemory?.get(it.name) }
+        val eraserMem = eraserId.takeIf { it.isNotBlank() }?.let { eraserState?.paramMemory?.get(it) }
+        // 笔画起手在主线程：工具记忆已有值就不读盘；没有才回读一次预设（避免每笔读文件 + 解析 XML）
+        val savedEraserParam by lazy { eraserId.takeIf { it.isNotBlank() }?.let { BrushStoreVm.readback(it)?.first } }
 
         effEraserSize = eraserMem?.getOrNull(0) ?: savedEraserParam?.size ?: brushSize
         effEraserOpacity = eraserMem?.getOrNull(1) ?: savedEraserParam?.opacity ?: 1.0
@@ -244,7 +248,8 @@ internal fun PaintViewModel.touchStart(
             color = strokeColor,
             layer = currentLayerIndex,
         )
-        val strokeParams = brushPresets.firstOrNull { it.index == strokePreset }?.let { brushParams[it.name] }
+        val strokePid = brushPresets.firstOrNull { it.index == strokePreset }?.id
+        val strokeCustomized = strokePid?.let { BrushStoreVm.hasEffectivePreset(it) } == true
         recorder.captureContextExt(
             softness = brushSoftness,
             spacing = brushSpacing,
@@ -258,8 +263,9 @@ internal fun PaintViewModel.touchStart(
             secondaryColor = brushSecondaryColor,
             airbrushEnabled = brushAirbrush,
             airbrushRate = brushAirbrushRate,
-            isCustomized = strokeParams != null,
-            spacingCustomized = strokeParams?.spacingCustomized == true,
+            // 与回读非空等价（回读恒标这两项为 true），只 stat 不读盘
+            isCustomized = strokeCustomized,
+            spacingCustomized = strokeCustomized,
         )
         recorder.captureBrushFade(brushFade)
         recorder.strokeStart(x, y, effPressure.toFloat())
@@ -287,18 +293,15 @@ internal fun PaintViewModel.touchStart(
         }
         if (isEraserOverride) {
             // #116: 先保存引擎活状态, 松开后原样换回, 避免从磁盘重载打回未落盘的调整
-            ReverieCoreBridge.beginPresetOverrideSnapshot()
-            if (eraserPresetIdx >= 0 && eraserPresetIdx != brushPresetIndex) {
-                ReverieCoreBridge.loadBrushPreset(eraserPresetIdx)
-            }
-            ReverieCoreBridge.setPresetIsEraser(true)
-            ReverieCoreBridge.setBrushCompositeOp("erase")
-            ReverieCoreBridge.setBrushSize(effEraserSize)
-            ReverieCoreBridge.setBrushOpacity(effEraserOpacity)
-            ReverieCoreBridge.setBrushFlow(effEraserFlow)
-            ReverieCoreBridge.setToolMode(1)
+            com.reverie.paint.core.brushstore.BrushApply.beginEraserOverride(
+                eraserPresetIdx = eraserPresetIdx,
+                currentPresetIdx = brushPresetIndex,
+                size = effEraserSize,
+                opacity = effEraserOpacity,
+                flow = effEraserFlow,
+            )
         } else {
-            ReverieCoreBridge.setToolMode(mode)
+            com.reverie.paint.core.brushstore.BrushApply.applyToolMode(mode)
         }
         try {
             ReverieCoreBridge.touchStrokeStartWithSensors(
@@ -633,7 +636,7 @@ internal fun PaintViewModel.touchEnd(
             realInkSink?.onStrokeCommitted(strokeSeq)
             engineMirrorSeq = 0
             if (hadOverride && !deferOverrideRestore) {
-                val engineRestored = ReverieCoreBridge.endPresetOverrideSnapshot()
+                val engineRestored = com.reverie.paint.core.brushstore.BrushApply.endOverride()
                 if (!engineRestored) {
                     restoreCurrentBrushToNative(reloadPreset = presetSwitched)
                 } else {
@@ -651,7 +654,7 @@ internal fun PaintViewModel.touchEnd(
             realInkSink?.onStrokeCommitted(strokeSeq)
             engineMirrorSeq = 0
             if (hadOverride && !deferOverrideRestore) {
-                val engineRestored = ReverieCoreBridge.endPresetOverrideSnapshot()
+                val engineRestored = com.reverie.paint.core.brushstore.BrushApply.endOverride()
                 if (!engineRestored) {
                     restoreCurrentBrushToNative(reloadPreset = presetSwitched)
                 } else {
@@ -688,7 +691,7 @@ internal fun PaintViewModel.touchCancel() {
         ReverieCoreBridge.touchStrokeCancel()
         engineMirrorSeq = 0
         if (hadOverride) {
-            val engineRestored = ReverieCoreBridge.endPresetOverrideSnapshot()
+            val engineRestored = com.reverie.paint.core.brushstore.BrushApply.endOverride()
             if (!engineRestored) {
                 restoreCurrentBrushToNative(reloadPreset = presetSwitched)
             } else {
@@ -714,7 +717,7 @@ internal fun PaintViewModel.replaySymmetricBranches(
 
     val restoreOverrideNative = {
         if (hadOverride) {
-            val engineRestored = ReverieCoreBridge.endPresetOverrideSnapshot()
+            val engineRestored = com.reverie.paint.core.brushstore.BrushApply.endOverride()
             if (!engineRestored) {
                 restoreCurrentBrushToNative(reloadPreset = presetSwitched)
             } else {
@@ -804,11 +807,7 @@ internal fun PaintViewModel.replaySymmetricBranches(
                 val startX = buf[0]
                 val startY = buf[1]
                 if (!startX.isFinite() || !startY.isFinite()) continue
-                ReverieCoreBridge.setToolMode(mode)
-                if (isEraser) {
-                    ReverieCoreBridge.setPresetIsEraser(true)
-                    ReverieCoreBridge.setBrushCompositeOp("erase")
-                }
+                com.reverie.paint.core.brushstore.BrushApply.applySymmetry(mode, isEraser)
                 val startP = buf[2].toDouble().coerceIn(0.0, 1.0)
                 val startTiltX = buf[3].toDouble()
                 val startTiltY = buf[4].toDouble()
@@ -900,7 +899,8 @@ private fun PaintViewModel.recordMirroredBranchesToRecorder(
             color = brushColor,
             layer = currentLayerIndex,
         )
-        val strokeParams = brushPresets.firstOrNull { it.index == brushPresetIndex }?.let { brushParams[it.name] }
+        val curPid = brushPresets.firstOrNull { it.index == brushPresetIndex }?.id
+        val curCustomized = curPid?.let { BrushStoreVm.hasEffectivePreset(it) } == true
         recorder.captureContextExt(
             softness = brushSoftness,
             spacing = brushSpacing,
@@ -914,8 +914,8 @@ private fun PaintViewModel.recordMirroredBranchesToRecorder(
             secondaryColor = brushSecondaryColor,
             airbrushEnabled = brushAirbrush,
             airbrushRate = brushAirbrushRate,
-            isCustomized = strokeParams != null,
-            spacingCustomized = strokeParams?.spacingCustomized == true,
+            isCustomized = curCustomized,
+            spacingCustomized = curCustomized,
         )
         recorder.captureBrushFade(brushFade)
         val effStartP = buf[2].coerceIn(0f, 1f)
@@ -990,7 +990,7 @@ internal fun PaintViewModel.applyTool(toolId: String) {
     if (mode >= 0) {
         // Serialize with flushStrokeBatch: setToolMode mutating m_toolMode
         // mid-stroke from the UI thread tore the dab pipeline
-        runCore(render = false) { ReverieCoreBridge.setToolMode(mode) }
+        runCore(render = false) { com.reverie.paint.core.brushstore.BrushApply.applyToolMode(mode) }
     }
     if (toolId != "lasso") {
         lassoMultiPoints = emptyList()
@@ -1060,17 +1060,18 @@ internal fun PaintViewModel.applyTool(toolId: String) {
             } else {
                 defaultIdx
             }
+            val initialId = brushPresets.firstOrNull { it.index == initialPresetIdx }?.id ?: ""
             state = PaintViewModel.ToolBrushState(
                 category = cat,
                 presetIndex = initialPresetIdx,
-                presetName = brushPresets.firstOrNull { it.index == initialPresetIdx }?.name ?: "",
+                presetId = initialId,
             )
             toolBrushStates = toolBrushStates.toMutableMap().apply { put(toolId, state) }
         }
 
-        // #136 A：工具槽以名字为身份（索引会随导入/删除重排）。解析不到就退回本工具的默认笔，
+        // #136 A / v5 S3：工具槽以 presetId 为身份（索引会随导入/删除重排）。解析不到就退回本工具的默认笔，
         // 并把槽修好，避免下一次又拿着漂移的索引去选笔。
-        var resolved = ToolPresetMemory.resolve(state.presetName, state.presetIndex, brushPresets)
+        var resolved = ToolPresetMemory.resolve(state.presetId, state.presetIndex, brushPresets)
         if (isBrushTool && resolved != null) {
             // Self-healing: if brush tool mistakenly inherited an eraser preset, revert to default drawing brush
             val isEraser = resolved.group == "橡皮擦" || resolved.name.startsWith("a)_Eraser") ||
@@ -1088,8 +1089,9 @@ internal fun PaintViewModel.applyTool(toolId: String) {
             }
             resolved = brushPresets.firstOrNull { it.index == fallbackIdx }
         }
-        if (resolved != null && (resolved.index != state.presetIndex || resolved.name != state.presetName)) {
-            state = state.copy(presetIndex = resolved.index, presetName = resolved.name)
+        val resolvedId = resolved?.id ?: ""
+        if (resolved != null && (resolved.index != state.presetIndex || resolvedId != state.presetId)) {
+            state = state.copy(presetIndex = resolved.index, presetId = resolvedId)
             toolBrushStates = toolBrushStates.toMutableMap().apply { put(toolId, state) }
         }
 
@@ -1108,12 +1110,7 @@ internal fun PaintViewModel.applyTool(toolId: String) {
                 // 用户从吸管等临时工具切回当前正在使用的同一个绘制工具, 笔刷预设索引未改变:
                 // 此时用户调好的笔刷大小/不透明度/流量应当保持原样, 严禁被旧快照覆盖!
                 runCore(render = false) {
-                    ReverieCoreBridge.setBrushSize(brushSize)
-                    ReverieCoreBridge.setBrushOpacity(brushOpacity)
-                    ReverieCoreBridge.setBrushFlow(brushFlow)
-                    ReverieCoreBridge.setBrushSmudgeRate(brushSmudgeRate)
-                    ReverieCoreBridge.setBrushSmudgeLength(brushSmudgeLength)
-                    ReverieCoreBridge.setBrushAirbrush(brushAirbrush, brushAirbrushRate)
+                    com.reverie.paint.core.brushstore.BrushApply.applyToolResume(brushSize, brushOpacity, brushFlow)
                 }
             } else {
                 // 工具切换或预设改变: 统一走标准预设加载流程, 保证间距、动态、笔尖与 compositeOp 完整恢复并覆盖工具记忆

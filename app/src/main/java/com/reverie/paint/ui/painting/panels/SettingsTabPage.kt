@@ -253,6 +253,76 @@ internal fun SettingsTabPage(
 
                         SettingsInnerDivider()
 
+                        // ABR 导入混合模式策略 (柔和容错 vs 严格精准)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                                Text(
+                                    text = stringResource(R.string.settings_abr_blend_policy_title),
+                                    color = Morandi.text,
+                                    fontSize = 13.sp,
+                                )
+                                Text(
+                                    text = stringResource(R.string.settings_abr_blend_policy_desc),
+                                    color = Morandi.subText,
+                                    fontSize = 11.sp,
+                                )
+                            }
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                val isCompat = vm.abrBlendPolicy == com.reverie.paint.core.AbrBlendModes.Policy.COMPAT_SAFE
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.clickable { vm.abrBlendPolicy = com.reverie.paint.core.AbrBlendModes.Policy.COMPAT_SAFE },
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(16.dp)
+                                            .border(
+                                                width = if (isCompat) 5.dp else 1.5.dp,
+                                                color = if (isCompat) Morandi.accent else Morandi.subText,
+                                                shape = CircleShape,
+                                            ),
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        stringResource(R.string.settings_abr_blend_policy_compat),
+                                        color = if (isCompat) Morandi.text else Morandi.subText,
+                                        fontSize = 12.sp,
+                                    )
+                                }
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.clickable { vm.abrBlendPolicy = com.reverie.paint.core.AbrBlendModes.Policy.PRECISION },
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(16.dp)
+                                            .border(
+                                                width = if (!isCompat) 5.dp else 1.5.dp,
+                                                color = if (!isCompat) Morandi.accent else Morandi.subText,
+                                                shape = CircleShape,
+                                            ),
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        stringResource(R.string.settings_abr_blend_policy_precision),
+                                        color = if (!isCompat) Morandi.text else Morandi.subText,
+                                        fontSize = 12.sp,
+                                    )
+                                }
+                            }
+                        }
+
+                        SettingsInnerDivider()
+
                         // 图层面板顶部按钮行为 (默认关闭为剪切蒙版，开启为继承透明度)
                         Row(
                             modifier = Modifier

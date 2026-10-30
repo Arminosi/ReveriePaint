@@ -420,16 +420,6 @@ Java_com_reverie_paint_core_ReverieCoreBridge_touchStrokeMoveBatch(JNIEnv *env, 
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_reverie_paint_core_ReverieCoreBridge_setBrushTipAsset(JNIEnv *env, jobject, jstring jAssetName)
-{
-    if (!jAssetName) return JNI_FALSE;
-    const char *chars = env->GetStringUTFChars(jAssetName, nullptr);
-    const QString assetName = QString::fromUtf8(chars);
-    env->ReleaseStringUTFChars(jAssetName, chars);
-    return core()->setBrushTipAsset(assetName) ? JNI_TRUE : JNI_FALSE;
-}
-
-JNIEXPORT jboolean JNICALL
 Java_com_reverie_paint_core_ReverieCoreBridge_touchStrokeKickIdle(JNIEnv *, jobject)
 {
     return core()->touchStrokeKickIdle() ? JNI_TRUE : JNI_FALSE;
@@ -586,28 +576,6 @@ JNIEXPORT void JNICALL
 Java_com_reverie_paint_core_ReverieCoreBridge_scratchpadEnd(JNIEnv *, jobject)
 {
     core()->scratchpadEnd();
-}
-
-JNIEXPORT void JNICALL
-Java_com_reverie_paint_core_ReverieCoreBridge_setBrushTexture(JNIEnv *env, jobject, jboolean enabled, jdouble scale, jdouble strength, jstring mode, jstring patternName)
-{
-    QString modeStr;
-    if (mode) {
-        const char *m = env->GetStringUTFChars(mode, nullptr);
-        if (m) {
-            modeStr = QString::fromUtf8(m);
-            env->ReleaseStringUTFChars(mode, m);
-        }
-    }
-    QString patStr;
-    if (patternName) {
-        const char *p = env->GetStringUTFChars(patternName, nullptr);
-        if (p) {
-            patStr = QString::fromUtf8(p);
-            env->ReleaseStringUTFChars(patternName, p);
-        }
-    }
-    core()->setBrushTexture(enabled == JNI_TRUE, scale, strength, modeStr, patStr);
 }
 
 JNIEXPORT jfloatArray JNICALL

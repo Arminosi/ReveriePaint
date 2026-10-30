@@ -1744,6 +1744,43 @@ void ReverieCore::liquifyAt(qreal fx, qreal fy, qreal tx, qreal ty, qreal streng
             const int ay = (bounds.y() / precision) * precision;
             bounds = QRect(ax, ay, bounds.right() - ax + 1, bounds.bottom() - ay + 1);
         }
+        // ---- 窗口最少 2 个格点 (修「液化一下就崩」的边界) ----
+        // Krita 的网格实现里 calcGridDimension() 对 1px 宽/高的窗口返回 2 个格点,
+        // 而 processGrid() 只产出 1 个点 —— 两者不一致时 preparePoints() 的
+        // KIS_ASSERT_RECOVER_RETURN(numPoints == gridSize.width() * gridSize.height())
+        // 直接 qFatal ⇒ SIGABRT。真机崩溃栈正是
+        //   KisLiquifyTransformWorker ctor ← ReverieCore::liquifyAt ← liquifyDabs。
+        // 触发条件是「画布边缘把窗口裁成 1px」: 触点恰好落在画布外 R 处
+        // (tx == -R, 或 tx == docW-1+R; 纵向同理)。这里补齐到 2 个格点, 只向画布内侧扩。
+        {
+            const int minLen = 2 * precision;
+            if (bounds.width() < minLen) {
+                if (bounds.left() + minLen <= image->width()) {
+                    bounds.setWidth(minLen);
+                } else if (bounds.right() - minLen + 1 >= 0) {
+                    bounds.setLeft(bounds.right() - minLen + 1);
+                } else {
+                    RPC_LOG("liquify: window too narrow after canvas clip, skip rebase "
+                            "(w=%d precision=%d docW=%d)",
+                            bounds.width(), precision, image->width());
+                    if (ownBracket) liquifyEnd();
+                    return;
+                }
+            }
+            if (bounds.height() < minLen) {
+                if (bounds.top() + minLen <= image->height()) {
+                    bounds.setHeight(minLen);
+                } else if (bounds.bottom() - minLen + 1 >= 0) {
+                    bounds.setTop(bounds.bottom() - minLen + 1);
+                } else {
+                    RPC_LOG("liquify: window too short after canvas clip, skip rebase "
+                            "(h=%d precision=%d docH=%d)",
+                            bounds.height(), precision, image->height());
+                    if (ownBracket) liquifyEnd();
+                    return;
+                }
+            }
+        }
         m_liquifyPrecision = precision;
         m_liquifyWorkerBounds = bounds;
         for (LiquifyTarget &t : m_liquifyTargets) {

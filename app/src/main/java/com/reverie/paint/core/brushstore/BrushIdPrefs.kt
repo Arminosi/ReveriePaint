@@ -193,7 +193,13 @@ object BrushIdPrefs {
                 var n = 0
                 for ((name, g) in pairs) {
                     val id = resolve(name)
-                    if (id == null) { miss("groups", name); unmappedGroupPairs += name to g } else { merged.putIfAbsent(id, g); n++ }
+                    if (id == null) {
+                        miss("groups", name)
+                        unmappedGroupPairs += name to g
+                    } else {
+                        if (!merged.containsKey(id)) merged[id] = g
+                        n++
+                    }
                 }
                 mapped["groups"] = n
                 gPuts[GROUPS_IDS] = encodeGroups(merged)

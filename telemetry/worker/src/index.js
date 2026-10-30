@@ -43,6 +43,15 @@ export default {
       if (path === '/t/v1/stats' && request.method === 'POST') {
         return await handleLogin(request, url, env);
       }
+      if (path === '/t/v1/alerts/test') {
+        await requireStatsAuth(request, url, env);
+        if (url.searchParams.get('mode') === 'scan') {
+          const result = await runAlerts(env);
+          return json({ ok: true, ...result });
+        }
+        const sent = await notify(env, 'ReveriePaint 告警通道自测', '如果你收到这条, 说明告警通道已接通。');
+        return json({ ok: true, sent });
+      }
       if (path === '/t/v1/logout') {
         return new Response(null, {
           status: 303,
@@ -68,8 +77,13 @@ export default {
    */
   async scheduled(event, env) {
     if (!env.DB) return;
-    const cutoff = Math.floor(Date.now() / 1000) - RETENTION_DAYS * 86400;
-    await env.DB.prepare('DELETE FROM crashes WHERE received < ?').bind(cutoff).run();
+    // 两个 cron 共用一个入口: 每小时跑告警, 每天跑保留期清理
+    if (event && event.cron && event.cron.startsWith('17 3')) {
+      const cutoff = Math.floor(Date.now() / 1000) - RETENTION_DAYS * 86400;
+      await env.DB.prepare('DELETE FROM crashes WHERE received < ?').bind(cutoff).run();
+      return;
+    }
+    await runAlerts(env);
   },
 };
 
@@ -454,6 +468,124 @@ button:hover{filter:brightness(1.05)}
   <p class="foot">密码由上架时设置 · Cookie 保留一年</p>
 </form>
 </body></html>`;
+}
+
+// ---------------------------------------------------------------- 告警
+
+const ALERT_WINDOW_SEC = 3600;      // 每小时看过去 1 小时
+const SPIKE_THRESHOLD = 5;          // 同一签名 1 小时内 ≥5 次算突增
+const ALERT_COOLDOWN_SEC = 6 * 3600; // 同一签名 6 小时内不重复提醒
+
+async function requireStatsAuth(request, url, env) {
+  if (await isStatsAuthed(request, env, url)) return;
+  throw new HttpError(401, 'need_key');
+}
+
+/**
+ * 每小时跑一次:
+ *  - 从没见过的签名 → 立刻提醒(这才是需要人介入的)
+ *  - 老签名 1 小时内次数超过阈值 → 提醒一次, 之后 6 小时冷却
+ * 提醒完把基线写回 known_sigs, 避免重启后重复轰炸。
+ */
+async function runAlerts(env) {
+  if (isDisabled(env) || !env.DB) return { new: 0, spike: 0 };
+  const now = Math.floor(Date.now() / 1000);
+
+  const recent = await env.DB
+    .prepare(
+      `SELECT sig, kind, COUNT(*) AS n, COUNT(DISTINCT install) AS people,
+              MAX(app_ver) AS ver, MAX(model) AS model
+         FROM crashes WHERE at >= ? GROUP BY sig, kind`,
+    )
+    .bind(now - ALERT_WINDOW_SEC)
+    .all();
+  const rows = recent.results ?? [];
+  if (rows.length === 0) return { new: 0, spike: 0 };
+
+  const known = await env.DB.prepare('SELECT sig, last_alert FROM known_sigs').all();
+  const baseline = new Map((known.results ?? []).map((r) => [r.sig, r.last_alert ?? 0]));
+
+  let newCount = 0;
+  let spikeCount = 0;
+  for (const r of rows) {
+    const lastAlert = baseline.get(r.sig);
+    const isNew = lastAlert === undefined;
+    const isSpike = !isNew && r.n >= SPIKE_THRESHOLD && now - lastAlert > ALERT_COOLDOWN_SEC;
+    if (!isNew && !isSpike) continue;
+
+    const title = isNew ? '新的崩溃签名' : '崩溃突增';
+    const body = [
+      `**${isNew ? '首次出现' : '突增'}**：${r.kind} · \`${String(r.sig).slice(0, 10)}\``,
+      `次数：${r.n}（近 1 小时）· 设备：${r.people}`,
+      `版本：${r.ver ?? '-'} · 机型：${r.model ?? '-'}`,
+      `时间：${new Date(now * 1000).toISOString().replace('T', ' ').slice(0, 16)}Z`,
+    ].join('\n');
+
+    await notify(env, title, body);
+    const stamp = now;
+    await env.DB
+      .prepare(
+        `INSERT INTO known_sigs (sig, kind, first_seen, last_alert) VALUES (?, ?, ?, ?)
+         ON CONFLICT(sig) DO UPDATE SET last_alert = excluded.last_alert`,
+      )
+      .bind(r.sig, r.kind, isNew ? now : (baseline.get(r.sig) ? now : now), stamp)
+      .run();
+    if (isNew) newCount++;
+    else spikeCount++;
+  }
+  return { new: newCount, spike: spikeCount };
+}
+
+/**
+ * 通知出口。按配置的 secret 自动选择, 可同时配多个:
+ *   ALERT_WEBHOOK_URL   飞书 / 钉钉 群机器人, 或任意接受 JSON 的地址
+ *   ALERT_GITHUB_REPO   形如 LanRhyme/ReveriePaint, 配合 ALERT_GITHUB_TOKEN 开 issue
+ */
+async function notify(env, title, body) {
+  const sent = [];
+
+  const hook = (env.ALERT_WEBHOOK_URL ?? '').trim();
+  if (hook) {
+    let payload;
+    if (hook.includes('open.feishu.cn') || hook.includes('larksuite.com')) {
+      payload = { msg_type: 'text', content: { text: `${title}\n${stripMd(body)}` } };
+    } else if (hook.includes('oapi.dingtalk.com')) {
+      payload = { msgtype: 'text', text: { content: `${title}\n\n${stripMd(body)}` } };
+    } else {
+      payload = { title, text: `${title}\n\n${stripMd(body)}`, markdown: `### ${title}\n${body}` };
+    }
+    const r = await fetch(hook, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).catch(() => null);
+    sent.push(`webhook:${r ? r.status : 'error'}`);
+  }
+
+  const repo = (env.ALERT_GITHUB_REPO ?? '').trim();
+  const token = (env.ALERT_GITHUB_TOKEN ?? '').trim();
+  if (repo && token) {
+    const r = await fetch(`https://api.github.com/repos/${repo}/issues`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${token}`,
+        accept: 'application/vnd.github+json',
+        'content-type': 'application/json',
+        'user-agent': 'reveriepaint-telemetry',
+      },
+      body: JSON.stringify({ title: `[crash] ${title}`, body }),
+    }).catch(() => null);
+    sent.push(`github:${r ? r.status : 'error'}`);
+  }
+
+  return sent;
+}
+
+/** 群机器人不解析 Markdown, 去掉标记避免原样显示 */
+function stripMd(text) {
+  return String(text)
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/`(.+?)`/g, '$1');
 }
 
 async function handleStats(request, url, env) {

@@ -200,6 +200,7 @@ sig = sha256(kind + "|" + app.code + "|" + 异常类名 + "|" + 前 3 个帧的 
 | `POST` | `/t/v1/crash` | 上报入口,`Content-Type: application/json`,`Content-Encoding: gzip` |
 | `GET` | `/t/v1/stats?days=7` | 看板:固定公开链接 + 登录门(`STATS_PASSWORD`);未登录给登录页,脚本用 `?key=` 或 `x-stats-key` 免登录 |
 | `GET` | `/t/v1/stats?format=csv` / `format=md` | 按当前筛选导出逐条 CSV 或按签名汇总的 Markdown |
+| `GET` | `/t/v1/alerts/test` | 发一条测试通知到已配置的出口(`?mode=scan` 则立刻跑一次扫描并返回 new/spike 计数) |
 | `GET` | `/t/v1/health` | 存活探针,回显 `disabled` 状态 |
 
 保留期 180 天,由 `scheduled` 定时任务每日删除(`wrangler.toml` 的 `[triggers]`)。
@@ -244,8 +245,8 @@ Worker 不读 `CF-Connecting-IP`,不写任何 IP 或 IP 哈希。滥用防护靠
 | Worker | `reveriepaint-telemetry` |
 | 对外端点 | `https://telemetry.lanrhyme.top`(**自定义域,必需**) |
 | D1 | `reveriepaint_telemetry` · `f183220b-73ca-4f85-945a-4af05c77a8ab`(region APAC) |
-| 定时任务 | `17 3 * * *` 保留期清理 |
-| 密钥 | `INGEST_KEY`(写入,客户端用 `-PtelemetryKey` / `TELEMETRY_KEY` 注入) · `STATS_KEY`(脚本只读) · `STATS_PASSWORD`(登录页密码,可随时改) |
+| 定时任务 | `0 * * * *` 告警扫描 · `17 3 * * *` 保留期清理 |
+| 密钥 | `INGEST_KEY`(写入,客户端用 `-PtelemetryKey` / `TELEMETRY_KEY` 注入) · `STATS_KEY`(脚本只读) · `STATS_PASSWORD`(登录页密码,可随时改) · `ALERT_WEBHOOK_URL` / `ALERT_GITHUB_TOKEN` + `ALERT_GITHUB_REPO`(告警出口,可选) |
 
 > **为什么必须走自定义域**: 真机实测 `*.workers.dev` 在国内移动网络下 DNS 被污染,连接直接吊死成
 > `SocketTimeoutException`;换成 `telemetry.lanrhyme.top` 后同一份 APK 立刻 200。
@@ -272,6 +273,24 @@ Worker 不读 `CF-Connecting-IP`,不写任何 IP 或 IP 哈希。滥用防护靠
 - **相对时间**:列表里用"12 小时前"这类表述,悬停可看绝对时间
 
 主题与「书签固定」共用同一套重定向:带 `?theme=` 或 `?key=` 的请求都会先落 Cookie,再 302 回干净 URL。
+
+### 7.6 告警
+
+每小时 cron 在最近 1 小时的窗口里判断两件事:
+
+| 条件 | 行为 |
+|---|---|
+| 出现**从未见过的签名** | 立刻推送一次,并把该签名写进 `known_sigs` 基线 |
+| 老签名 1 小时内 **≥5 次** | 推送一次,同签名 6 小时内冷却,不重复轰炸 |
+
+出口按 secret 自动启用,可同时配多个:
+
+- `ALERT_WEBHOOK_URL` —— 群机器人。识别 `open.feishu.cn` / `larksuite.com`(飞书)与
+  `oapi.dingtalk.com`(钉钉)的格式,其它地址收到 `{title, text, markdown}` 的通用 JSON
+- `ALERT_GITHUB_REPO` + `ALERT_GITHUB_TOKEN` —— 直接在仓库开 issue(标题带 `[crash]`)
+
+没配任何出口时**仍然维护基线**:不会发通知,但也不会在之后配好时把历史签名当成"新的"再炸一遍。
+代价是出口故障期间的告警会丢,不会补发(宁可少一条,不要一次补几百条)。
 
 ## 8. 配额、退避与 kill switch
 
@@ -313,8 +332,9 @@ Worker 不读 `CF-Connecting-IP`,不写任何 IP 或 IP 哈希。滥用防护靠
 
 ## 11. 未做(后续版本再议)
 
-- **符号化**: 已提供半自动脚本(见 §11.1),但还没有"CI 保存未 strip 的 `.so`"这一环 ——
-  官方 Release 用的是 `third_party` 里已 strip 的预编译库,所以只有本地 `-PbuildNative` 构建出来的那份产物能对得上
+- **符号化的云端化**: 现在是本机归档 + 本机符号化(§11.1)。官方 Release 用的仍是
+  `third_party` 里已 strip 的预编译库,所以线上崩溃要能符号化,前提是发版前在本地跑过
+  `build_native.sh` + `archive_symbols.sh 48` 并保留 `~/.cache/revp-symbols/`
 - 功能采用率埋点(需要用户显式 opt-in,与崩溃遥测不是同一个开关)
 - 性能画像(帧率/笔画延迟矩阵),设计见 `docs/RENDER-OPTIMIZATION.md`,是否上报单独评审
 - 多维度看板(现在只有一张聚合简表)
@@ -325,7 +345,12 @@ Worker 不读 `CF-Connecting-IP`,不写任何 IP 或 IP 哈希。滥用防护靠
 看板里的帧是 `模块+偏移`,把任意一条崩溃日志丢给脚本即可还原:
 
 ```bash
-./scripts/symbolize_crash.sh /path/to/crash_native_20261030_145449.log
+# 1) 构建出未 strip 的库之后, 按 versionCode 归档(只需做一次)
+./scripts/archive_symbols.sh 48
+#   -> ~/.cache/revp-symbols/48/{libreverie_core.so, libreverie_jni.so, manifest.txt}
+
+# 2) 符号化: 指定版本就从归档里取, 不指定则用构建目录里最新的那份
+./scripts/symbolize_crash.sh --version 48 /path/to/crash_native_20261030_145449.log
 # libreverie_core.so +0x3d07c4 -> capture_backtrace(void**, unsigned long)
 #                                 app/src/main/cpp/ReverieCrashHandler.cpp:162
 ```

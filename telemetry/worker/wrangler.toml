@@ -21,8 +21,8 @@ database_id = "f183220b-73ca-4f85-945a-4af05c77a8ab"
 # 1 = 全局停用(客户端收到 410 后本机永久停用)
 DISABLED = "0"
 
-# 保留期清理: 每天 03:17 UTC 删掉 received 超过 180 天的行(对应 docs/PRIVACY.md 的承诺)
+# 每小时告警(新签名/突增) + 每天 03:17 UTC 清理 180 天前的数据
 [triggers]
-crons = ["17 3 * * *"]
+crons = ["17 3 * * *", "0 * * * *"]
 
 # INGEST_KEY 不放这里,用: npx wrangler secret put INGEST_KEY

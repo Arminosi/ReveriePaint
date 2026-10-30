@@ -19,3 +19,11 @@ CREATE TABLE IF NOT EXISTS crashes (
 CREATE INDEX IF NOT EXISTS idx_crashes_sig  ON crashes(sig, at);
 CREATE INDEX IF NOT EXISTS idx_crashes_inst ON crashes(install, received);
 CREATE INDEX IF NOT EXISTS idx_crashes_at   ON crashes(at);
+
+-- 告警用的签名基线: 第一次见到的签名要通知一次, 之后只在"突增"时提醒
+CREATE TABLE IF NOT EXISTS known_sigs (
+  sig        TEXT PRIMARY KEY,
+  kind       TEXT,
+  first_seen INTEGER NOT NULL,
+  last_alert INTEGER NOT NULL DEFAULT 0
+);

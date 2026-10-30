@@ -55,6 +55,9 @@ const env = {
   STATS_KEY: process.env.STATS_KEY ?? '',
   STATS_PASSWORD: process.env.STATS_PASSWORD ?? '',
   DISABLED: process.env.DISABLED ?? '0',
+  ALERT_WEBHOOK_URL: process.env.ALERT_WEBHOOK_URL ?? '',
+  ALERT_GITHUB_REPO: process.env.ALERT_GITHUB_REPO ?? '',
+  ALERT_GITHUB_TOKEN: process.env.ALERT_GITHUB_TOKEN ?? '',
 };
 
 async function readRequestBody(req) {

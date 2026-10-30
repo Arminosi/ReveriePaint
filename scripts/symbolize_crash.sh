@@ -5,6 +5,7 @@
 #
 # 用法:
 #   ./scripts/symbolize_crash.sh <crash_native_*.log>            # 直接给一份落盘日志
+#   ./scripts/symbolize_crash.sh --version 48 <crash_*.log>      # 从归档缓存里取对应版本的库
 #   ./scripts/symbolize_crash.sh <libreverie_core.so> 0x3d07c4 0x2c10
 #   SYMBOLIZE_VERBOSE=1 ./scripts/symbolize_crash.sh <log>       # 同时打印执行的命令
 #
@@ -34,10 +35,15 @@ if [[ -z "$ADDR2LINE" ]]; then
 	exit 1
 fi
 
-# 在构建产物里找最新的同名 .so (优先 Release + arm64-v8a)
+# 找库的顺序: --version 指定的归档缓存 -> 构建产物 -> 预编译闭包
+SYMBOL_VERSION="${SYMBOL_VERSION:-}"
 find_module() {
 	local base="$1"
 	local hit
+	if [[ -n "$SYMBOL_VERSION" ]]; then
+		hit="$(ls -1 "${REVP_SYMBOL_CACHE:-$HOME/.cache/revp-symbols}/$SYMBOL_VERSION/$base" 2>/dev/null | head -1 || true)"
+		[[ -n "$hit" ]] && { echo "$hit"; return; }
+	fi
 	hit="$(ls -1t app/build/intermediates/cxx/Release/*/obj/arm64-v8a/"$base" 2>/dev/null | head -1 || true)"
 	if [[ -z "$hit" ]]; then
 		hit="$(find app/build/intermediates/cxx third_party/android-native-libs -name "$base" -type f 2>/dev/null | head -1 || true)"
@@ -67,8 +73,17 @@ symbolize_module() {
 	"$ADDR2LINE" -f -C -e "$so" "${addrs[@]}" | paste - - | sed 's/^\t//'
 }
 
+if [[ "${1:-}" == "--version" ]]; then
+	SYMBOL_VERSION="${2:-}"
+	shift 2 || true
+	if [[ -z "$SYMBOL_VERSION" ]]; then
+		echo "错误: --version 后面要跟 versionCode" >&2
+		exit 1
+	fi
+fi
+
 if [[ $# -eq 0 ]]; then
-	echo "用法: $0 <crash_native_*.log> | <module.so> <offset>..."
+	echo "用法: $0 [--version <code>] <crash_native_*.log> | <module.so> <offset>..."
 	exit 1
 fi
 

@@ -6,6 +6,8 @@
 //   2. 配额按 install 维度(5 条/天)与签名维度(3 条/天),超限仍回 200(客户端不重试)
 //   3. DISABLED=1 时全局 410,客户端收到后永久停用(kill switch,不必发版)
 
+import { APP_ICON_SVG } from './icon.js';
+
 const CONTRACT_VERSION = 1;
 const MAX_BODY_BYTES = 128 * 1024;
 const DAILY_PER_INSTALL = 5;
@@ -95,6 +97,19 @@ async function checkStatsKey(request, env, url) {
   if (given === secret) return;
   if (given && given === (await statsToken(env))) return;
   throw new HttpError(401, given ? 'bad_key' : 'need_key');
+}
+
+const THEMES = ['auto', 'light', 'dark'];
+
+function cookie(name, value, maxAge = 31536000) {
+  return `${name}=${value}; Path=/t/v1; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
+}
+
+function themeOf(request, url) {
+  const q = url.searchParams.get('theme');
+  if (q && THEMES.includes(q)) return q;
+  const c = cookieValue(request, 'rp_theme');
+  return c && THEMES.includes(c) ? c : 'auto';
 }
 
 function cookieValue(request, name) {
@@ -301,13 +316,17 @@ async function handleStats(request, url, env) {
   const token = await statsToken(env);
   if (token) {
     // 每次通过鉴权都续期一年(滑动窗口): 书签链接才真的"固定"
-    headers.set('set-cookie', `rp_stats=${token}; Path=/t/v1; HttpOnly; Secure; SameSite=Lax; Max-Age=31536000`);
+    headers.append('set-cookie', cookie('rp_stats', token));
   }
 
-  // 首次带 ?key= 访问: 种下 Cookie 后跳转到不带 key 的干净 URL
-  if (url.searchParams.get('key')) {
+  // ?key= / ?theme= 都先落 Cookie, 再跳回不带这些参数的同一条 URL
+  const qTheme = url.searchParams.get('theme');
+  const qKey = url.searchParams.get('key');
+  if (qKey || qTheme) {
+    if (qTheme && THEMES.includes(qTheme)) headers.append('set-cookie', cookie('rp_theme', qTheme));
     const clean = new URL(url);
     clean.searchParams.delete('key');
+    clean.searchParams.delete('theme');
     headers.set('location', clean.pathname + clean.search);
     return new Response(null, { status: 302, headers });
   }
@@ -319,8 +338,10 @@ async function handleStats(request, url, env) {
     since: Math.floor(Date.now() / 1000) - days * 86400,
     model: clampText(url.searchParams.get('model'), 64),
     ver: clampText(url.searchParams.get('ver'), 32),
+    sig: clampText(url.searchParams.get('sig'), 128),
+    theme: themeOf(request, url),
   };
-  const sig = clampText(url.searchParams.get('sig'), 128);
+  const sig = ctx.sig;
 
   const html = sig ? await renderSignature(ctx, sig) : await renderOverview(ctx);
   headers.set('content-type', 'text/html; charset=utf-8');
@@ -353,23 +374,13 @@ async function q1(ctx, sql, params) {
 }
 
 function link(ctx, extra = {}) {
+  const params = { days: ctx.days, model: ctx.model, ver: ctx.ver, sig: ctx.sig, ...extra };
   const qs = new URLSearchParams();
-  qs.set('days', String(ctx.days));
-  if (ctx.model) qs.set('model', ctx.model);
-  if (ctx.ver) qs.set('ver', ctx.ver);
-  for (const [k, v] of Object.entries(extra)) {
-    if (v === null || v === undefined || v === '') continue;
+  for (const [k, v] of Object.entries(params)) {
+    if (v === '' || v === null || v === undefined) continue;
     qs.set(k, String(v));
   }
   return '?' + qs.toString();
-}
-
-function prettyPayload(text) {
-  try {
-    return JSON.stringify(JSON.parse(text), null, 2);
-  } catch {
-    return String(text ?? '');
-  }
 }
 
 function kindChip(kind) {
@@ -578,15 +589,28 @@ function rangeNav(ctx) {
   return [7, 14, 30]
     .map(
       (d) =>
-        `<a class="pill${ctx.days === d ? ' on' : ''}" href="?days=${d}${
-          ctx.model ? '&model=' + encodeURIComponent(ctx.model) : ''
-        }${ctx.ver ? '&ver=' + encodeURIComponent(ctx.ver) : ''}">${d} 天</a>`,
+        `<a class="pill${ctx.days === d ? ' on' : ''}" href="${link(ctx, { days: d })}">${d} 天</a>`,
+    )
+    .join('');
+}
+
+function themeNav(ctx) {
+  const opts = [
+    ['auto', '自动'],
+    ['light', '浅色'],
+    ['dark', '深色'],
+  ];
+  return opts
+    .map(
+      ([v, label]) =>
+        `<a class="pill${ctx.theme === v ? ' on' : ''}" href="${link(ctx, { theme: v })}" title="主题">${label}</a>`,
     )
     .join('');
 }
 
 function layout(title, ctx, body) {
-  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+  return `<!doctype html><html lang="zh-CN" data-theme="${ctx.theme}"><head><meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ReveriePaint 崩溃看板 · ${escapeHtml(title)}</title>
 <style>
@@ -595,23 +619,36 @@ function layout(title, ctx, body) {
   --accent:#5A6E8A; --icon:#636366; --line:rgba(0,0,0,.07);
   --shadow:0 1px 2px rgba(0,0,0,.04), 0 12px 28px -18px rgba(20,20,30,.35);
 }
+/* 深色: 系统偏好自动生效, 但显式选浅色时压过系统 */
 @media (prefers-color-scheme: dark){
-  :root{--bg:#141416; --panel:#1E1E22; --panel-hi:#2A2A2E; --text:#F5F5F7; --sub:#8E8E93;
-        --accent:#8FA1B8; --icon:#98989D; --line:rgba(255,255,255,.08);
-        --shadow:0 1px 2px rgba(0,0,0,.4), 0 16px 32px -22px rgba(0,0,0,.8);}
+  :root:not([data-theme="light"]){
+    --bg:#141416; --panel:#1E1E22; --panel-hi:#2A2A2E; --text:#F5F5F7; --sub:#8E8E93;
+    --accent:#8FA1B8; --icon:#98989D; --line:rgba(255,255,255,.08);
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 16px 32px -22px rgba(0,0,0,.8);
+  }
 }
+/* 手动选深色: 不看系统偏好 */
+:root[data-theme="dark"]{
+  --bg:#141416; --panel:#1E1E22; --panel-hi:#2A2A2E; --text:#F5F5F7; --sub:#8E8E93;
+  --accent:#8FA1B8; --icon:#98989D; --line:rgba(255,255,255,.08);
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 16px 32px -22px rgba(0,0,0,.8);
+}
+:root[data-theme="light"]{ color-scheme: light }
+:root[data-theme="dark"]{ color-scheme: dark }
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);
      font:14px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Noto Sans CJK SC",sans-serif;
      -webkit-font-smoothing:antialiased}
 .wrap{max-width:1000px;margin:0 auto;padding:28px 20px 64px}
 .top{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:22px;flex-wrap:wrap}
-.brand{display:flex;align-items:center;gap:10px;font-weight:650;letter-spacing:.2px}
-.brand .mark{width:26px;height:26px;border-radius:9px;background:var(--accent);opacity:.9;
-             display:inline-block;position:relative}
-.brand .mark::after{content:"";position:absolute;inset:7px 7px auto auto;width:8px;height:8px;
-                    border-radius:50%;background:var(--panel)}
+.brand{display:flex;align-items:center;gap:9px;font-weight:650;letter-spacing:.2px}
+/* 图标来自 art/icon.svg: 白色星芒是给深色底设计的, 所以垫一层应用图标的底色 #0e0f16 */
+.brand .logo{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;
+             flex:none;border-radius:10px;background:#0e0f16;padding:6px;
+             box-shadow:inset 0 0 0 1px rgba(255,255,255,.07)}
+.brand .logo svg{width:100%;height:100%;display:block}
 .brand small{color:var(--sub);font-weight:500;letter-spacing:.4px}
+.controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .range{display:flex;gap:6px;background:var(--panel-hi);padding:4px;border-radius:999px}
 .pill{padding:5px 12px;border-radius:999px;font-size:12.5px;color:var(--sub);text-decoration:none}
 .pill.on{background:var(--panel);color:var(--text);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.08)}
@@ -672,8 +709,11 @@ details.sample pre{margin:0;padding:0 14px 14px;font-size:11.5px;line-height:1.5
 }
 </style></head><body><div class="wrap">
 <header class="top">
-  <div class="brand"><span class="mark"></span>ReveriePaint <small>崩溃看板</small></div>
-  <nav class="range">${rangeNav(ctx)}</nav>
+  <div class="brand"><span class="logo">${APP_ICON_SVG}</span>ReveriePaint <small>崩溃看板</small></div>
+  <div class="controls">
+    <nav class="range">${rangeNav(ctx)}</nav>
+    <nav class="range">${themeNav(ctx)}</nav>
+  </div>
 </header>
 ${body}
 </div></body></html>`;

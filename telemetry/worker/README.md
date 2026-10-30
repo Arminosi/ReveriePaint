@@ -58,6 +58,9 @@ npx wrangler deploy --var DISABLED:1
 
 `/t/v1/stats` 是服务端渲染的只读页面(无 JS、无外部资源):每日趋势条形、按签名聚合(次数/设备数/末见版本)、
 版本分布、机型分布;点机型或版本下钻筛选,点签名看最近 20 条原始样本。
+主题默认跟随系统,页头可手动切换「自动 / 浅色 / 深色」(写进 `rp_theme` Cookie)。
+图标直接内联仓库里的 `art/icon.svg`(白色星芒配 `#0e0f16` 底色,与应用图标一致)。
+
 `STATS_KEY` 与 `INGEST_KEY` 必须分开 —— 看板 key 会进浏览器历史与 Referer, 不能是能写入的凭据。
 未配置 `STATS_KEY` 时会退回 `INGEST_KEY`(仅为兼容旧部署)。
 

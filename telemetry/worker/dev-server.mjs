@@ -72,7 +72,14 @@ const server = createServer(async (req, res) => {
     });
     const response = await worker.fetch(request, env, {});
     const payload = Buffer.from(await response.arrayBuffer());
-    res.writeHead(response.status, Object.fromEntries(response.headers));
+    // Set-Cookie 必须逐条发: 直接 Object.fromEntries 会把多条合并成一个头, 浏览器解析不了
+    const headers = {};
+    for (const [k, v] of response.headers) {
+      if (k.toLowerCase() !== 'set-cookie') headers[k] = v;
+    }
+    const cookies = typeof response.headers.getSetCookie === 'function' ? response.headers.getSetCookie() : [];
+    if (cookies.length > 0) headers['set-cookie'] = cookies;
+    res.writeHead(response.status, headers);
     res.end(payload);
     const kind = response.headers.get('content-type') ?? '';
     console.log(`${req.method} ${req.url} -> ${response.status} ${kind.includes('html') ? '[html]' : ''}`);

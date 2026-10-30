@@ -50,7 +50,7 @@ class KppPresetChunkTest {
 
     private fun textChunkOffset(png: ByteArray, keyword: String): Int? =
         chunkList(png).firstOrNull {
-            (it.first == "tEXt" || it.first == "zTXt") && textKeyword(png, it.second) == keyword
+            (it.first == "tEXt" || it.first == "zTXt" || it.first == "iTXt") && textKeyword(png, it.second) == keyword
         }?.second
 
     /** 模拟导入链路：用 encodePreviewPng 生成的新 PNG 作底图（这正是出问题的场景）。 */

@@ -10,6 +10,8 @@ package com.reverie.paint.model
  * (77=KEYCODE_AT, 18=KEYCODE_POUND, 137..142=KEYCODE_F7..F12;
  * model 层禁用 android 依赖故记为常量)。
  * 三星隔空操作中间件按单键注入 KeyEvent, 不带修饰键。
+ * 笔键类手势 (CLICK/DOUBLE_CLICK) 的动作与侧键物理通道共用一份存储,
+ * 路由到 PaintViewModel.samsungSingleClickAction / samsungDoubleClickAction。
  */
 enum class SpenAirGesture(val gestureKey: String, val keyCode: Int) {
     CLICK("click", 77),
@@ -41,11 +43,14 @@ enum class SpenAirGesture(val gestureKey: String, val keyCode: Int) {
 /**
  * 隔空手势可绑定动作白名单与默认映射。
  * 动作 id 与 PaintViewModelShortcuts.kt 的 executeShortcutAction / StylusAction.actionId 对齐。
+ *
+ * 笔键类手势 (CLICK/DOUBLE_CLICK) 的动作与侧键物理通道共用一份存储,
+ * 路由到 PaintViewModel.samsungSingleClickAction / samsungDoubleClickAction,
+ * 因此 DEFAULT_BINDINGS 仅覆盖隔空挥动类手势 (6 个 motion 手势);
+ * defaultBinding(CLICK/DOUBLE_CLICK) 兜底返回 "none", 无实际消费者。
  */
 object SpenAirActions {
     val DEFAULT_BINDINGS: Map<SpenAirGesture, String> = mapOf(
-        SpenAirGesture.CLICK to "toggle_eraser",
-        SpenAirGesture.DOUBLE_CLICK to "toggle_quick_menu",
         SpenAirGesture.SWIPE_LEFT to "undo",
         SpenAirGesture.SWIPE_RIGHT to "redo",
         SpenAirGesture.SWIPE_UP to "zoom_in",

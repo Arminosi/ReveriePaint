@@ -85,18 +85,31 @@ class SpenAirModelsTest {
     }
 
     @Test
-    fun `DEFAULT_BINDINGS covers all 8 gestures and all default actions are in ALLOWED`() {
-        val allGestures = SpenAirGesture.entries.toSet()
-        assertEquals("DEFAULT_BINDINGS must cover all 8 gestures", allGestures, SpenAirActions.DEFAULT_BINDINGS.keys)
-        assertEquals(8, SpenAirActions.DEFAULT_BINDINGS.size)
+    fun `DEFAULT_BINDINGS covers only the 6 motion gestures and all default actions are in ALLOWED`() {
+        val motionGestures = SpenAirGesture.entries.toSet() -
+            setOf(SpenAirGesture.CLICK, SpenAirGesture.DOUBLE_CLICK)
+        assertEquals(
+            "DEFAULT_BINDINGS must cover exactly the 6 motion gestures",
+            motionGestures,
+            SpenAirActions.DEFAULT_BINDINGS.keys
+        )
+        assertEquals(6, SpenAirActions.DEFAULT_BINDINGS.size)
+        assertFalse(
+            "DEFAULT_BINDINGS must not contain CLICK",
+            SpenAirActions.DEFAULT_BINDINGS.containsKey(SpenAirGesture.CLICK)
+        )
+        assertFalse(
+            "DEFAULT_BINDINGS must not contain DOUBLE_CLICK",
+            SpenAirActions.DEFAULT_BINDINGS.containsKey(SpenAirGesture.DOUBLE_CLICK)
+        )
 
         for (gesture in SpenAirGesture.entries) {
             val actionId = SpenAirActions.defaultBinding(gesture)
             assertTrue("Default action '$actionId' for $gesture must be in ALLOWED", SpenAirActions.isAllowed(actionId))
         }
 
-        assertEquals("toggle_eraser", SpenAirActions.defaultBinding(SpenAirGesture.CLICK))
-        assertEquals("toggle_quick_menu", SpenAirActions.defaultBinding(SpenAirGesture.DOUBLE_CLICK))
+        assertEquals("none", SpenAirActions.defaultBinding(SpenAirGesture.CLICK))
+        assertEquals("none", SpenAirActions.defaultBinding(SpenAirGesture.DOUBLE_CLICK))
         assertEquals("undo", SpenAirActions.defaultBinding(SpenAirGesture.SWIPE_LEFT))
         assertEquals("redo", SpenAirActions.defaultBinding(SpenAirGesture.SWIPE_RIGHT))
         assertEquals("zoom_in", SpenAirActions.defaultBinding(SpenAirGesture.SWIPE_UP))
@@ -119,7 +132,7 @@ class SpenAirModelsTest {
 
     @Test
     fun `sanitize trims whitespace for allowed actions and accepts none`() {
-        val gesture = SpenAirGesture.CLICK
+        val gesture = SpenAirGesture.CIRCLE_CW
 
         assertEquals("undo", SpenAirActions.sanitize("  undo  ", gesture))
         assertEquals("redo", SpenAirActions.sanitize("redo ", gesture))

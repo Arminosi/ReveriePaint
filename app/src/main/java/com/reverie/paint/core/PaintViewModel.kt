@@ -2011,9 +2011,7 @@ class PaintViewModel : ViewModel() {
     var samsungDoubleClickAction by mutableStateOf("undo")
     var samsungLongPressAction by mutableStateOf("tool_picker")
 
-    // 三星 S Pen 隔空手势动作映射 (8 种手势)
-    var spenAirClickAction by mutableStateOf(SpenAirActions.defaultBinding(SpenAirGesture.CLICK))
-    var spenAirDoubleClickAction by mutableStateOf(SpenAirActions.defaultBinding(SpenAirGesture.DOUBLE_CLICK))
+    // 三星 S Pen 隔空手势动作映射 (6 个挥动/画圈手势; 笔键单击/双击与侧键通道共用 samsung*ClickAction)
     var spenAirSwipeLeftAction by mutableStateOf(SpenAirActions.defaultBinding(SpenAirGesture.SWIPE_LEFT))
     var spenAirSwipeRightAction by mutableStateOf(SpenAirActions.defaultBinding(SpenAirGesture.SWIPE_RIGHT))
     var spenAirSwipeUpAction by mutableStateOf(SpenAirActions.defaultBinding(SpenAirGesture.SWIPE_UP))
@@ -4103,8 +4101,6 @@ class PaintViewModel : ViewModel() {
             samsungSingleClickAction = prefs.getString("samsungSingleClickAction", "toggle_eraser") ?: "toggle_eraser"
             samsungDoubleClickAction = prefs.getString("samsungDoubleClickAction", "undo") ?: "undo"
             samsungLongPressAction = prefs.getString("samsungLongPressAction", "tool_picker") ?: "tool_picker"
-            prefs.getString("spenAirClickAction", null)?.let { spenAirClickAction = SpenAirActions.sanitize(it, SpenAirGesture.CLICK) }
-            prefs.getString("spenAirDoubleClickAction", null)?.let { spenAirDoubleClickAction = SpenAirActions.sanitize(it, SpenAirGesture.DOUBLE_CLICK) }
             prefs.getString("spenAirSwipeLeftAction", null)?.let { spenAirSwipeLeftAction = SpenAirActions.sanitize(it, SpenAirGesture.SWIPE_LEFT) }
             prefs.getString("spenAirSwipeRightAction", null)?.let { spenAirSwipeRightAction = SpenAirActions.sanitize(it, SpenAirGesture.SWIPE_RIGHT) }
             prefs.getString("spenAirSwipeUpAction", null)?.let { spenAirSwipeUpAction = SpenAirActions.sanitize(it, SpenAirGesture.SWIPE_UP) }

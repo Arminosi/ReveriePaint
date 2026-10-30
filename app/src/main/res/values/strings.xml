@@ -1964,18 +1964,19 @@
     <string name="stylus_samsung_side_key">侧键行为</string>
     <string name="stylus_samsung_hold_eraser">按住侧键切换橡皮</string>
     <string name="stylus_samsung_hold_eraser_desc">Samsung Notes 标准语义：落笔前或运笔中按住侧键，该笔画自动变为橡皮擦，抬笔恢复原工具</string>
-    <string name="stylus_samsung_key_mapping">侧键动作映射</string>
+    <string name="stylus_samsung_key_mapping">笔键动作映射</string>
     <string name="stylus_samsung_click_action">侧键单击动作</string>
     <string name="stylus_samsung_double_click_action">侧键双击动作</string>
     <string name="stylus_samsung_long_press_action">侧键长按动作</string>
-    <string name="stylus_samsung_hint">提示：若侧键在绘画中未响应，请前往三星系统设置 -> 高级功能 -> S Pen，关闭“使用画笔按钮打开浮空指令”以允许绘图应用接收按键事件</string>
+    <string name="stylus_samsung_hint">隔空操作开启时, 笔键单击与双击执行上方笔键动作映射, 空中挥动与画圈执行隔空挥动手势映射\n若侧键在绘画中未响应, 请到三星设置 -> 高级功能 -> S Pen 关闭使用画笔按钮打开浮空指令\n隔空操作开启时, 外接键盘的 F7..F12 会被识别为隔空手势</string>
 
     <!-- S Pen 隔空手势 -->
     <string name="spen_air_title">S Pen 隔空手势</string>
-    <string name="spen_air_subtitle">配置 S Pen 空中挥动手势的动作映射</string>
     <string name="spen_air_open_system_settings">前往系统设置开启隔空操作</string>
     <string name="spen_air_hint">需在系统 S Pen 设置中允许本应用使用隔空操作, 仅支持的 Galaxy 设备可用</string>
     <string name="spen_air_reset_default">恢复默认映射</string>
+    <string name="spen_air_motion_title">隔空挥动手势</string>
+    <string name="spen_air_button_note">单击与双击同时作用于隔空操作开启时的空中笔键动作, 长按仅在近屏生效</string>
     <string name="spen_gesture_click">单击笔键</string>
     <string name="spen_gesture_double_click">双击笔键</string>
     <string name="spen_gesture_swipe_left">按住向左挥动</string>

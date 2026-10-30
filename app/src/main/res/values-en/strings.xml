@@ -1968,14 +1968,15 @@
     <string name="stylus_samsung_click_action">Single Click Action</string>
     <string name="stylus_samsung_double_click_action">Double Click Action</string>
     <string name="stylus_samsung_long_press_action">Long Press Action</string>
-    <string name="stylus_samsung_hint">Tip: If side button does not respond, open Samsung Settings -> Advanced Features -> S Pen and disable Air Command button trigger</string>
+    <string name="stylus_samsung_hint">When Air actions is on, pen button single/double clicks run the button action mapping above, while swipes and circles run the air motion mapping\nIf the side button does not respond while drawing, disable "Open Air command with pen button" in Samsung Settings -> Advanced features -> S Pen\nWhen Air actions is on, F7..F12 on an external keyboard are treated as air gestures</string>
 
     <!-- S Pen Air Actions -->
     <string name="spen_air_title">S Pen Air Actions</string>
-    <string name="spen_air_subtitle">Configure air gesture action mappings</string>
     <string name="spen_air_open_system_settings">Open System Air Actions Settings</string>
     <string name="spen_air_hint">Enable Air Actions for this app in System S Pen settings, supported Galaxy devices only</string>
     <string name="spen_air_reset_default">Reset to Default</string>
+    <string name="spen_air_motion_title">Air Motion Gestures</string>
+    <string name="spen_air_button_note">Single &amp; double click also apply to in-air button presses when Air actions is on; long press is near-screen only</string>
     <string name="spen_gesture_click">Single Click</string>
     <string name="spen_gesture_double_click">Double Click</string>
     <string name="spen_gesture_swipe_left">Swipe Left</string>

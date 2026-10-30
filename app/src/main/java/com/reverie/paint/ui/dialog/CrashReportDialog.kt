@@ -37,6 +37,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.reverie.paint.R
 import com.reverie.paint.core.CrashHandler
+import com.reverie.paint.core.telemetry.TelemetryReporter
 import com.reverie.paint.ui.components.ReTextButton
 import com.reverie.paint.ui.theme.Theme
 import java.text.SimpleDateFormat
@@ -293,6 +294,34 @@ fun CrashReportDialog(
                             CrashHandler.shareCrashLog(context, logInfo.file)
                         },
                         modifier = Modifier.weight(1f),
+                    )
+                }
+
+                // 手动上报这条崩溃 (构建未注入端点时整个按钮不存在)
+                if (TelemetryReporter.isConfigured) {
+                    var uploading by remember { mutableStateOf(false) }
+                    val okMsg = stringResource(R.string.crash_report_upload_ok)
+                    val failMsg = stringResource(R.string.crash_report_upload_failed)
+                    ReTextButton(
+                        text = if (uploading) {
+                            stringResource(R.string.crash_report_uploading)
+                        } else {
+                            stringResource(R.string.crash_report_upload)
+                        },
+                        onClick = {
+                            if (!uploading) {
+                                uploading = true
+                                TelemetryReporter.uploadNow(context, logInfo.file) { ok ->
+                                    uploading = false
+                                    Toast.makeText(
+                                        context,
+                                        if (ok) okMsg else failMsg,
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
                     )
                 }
 

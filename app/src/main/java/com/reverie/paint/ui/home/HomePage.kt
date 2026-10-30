@@ -75,6 +75,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.reverie.paint.ui.components.ReTextButton
+import com.reverie.paint.ui.components.TelemetryNoticeBar
 import com.reverie.paint.R
 import com.reverie.paint.ui.components.ReIconButton
 import com.reverie.paint.ui.dialog.RecentAutoSavesDialog
@@ -687,6 +688,11 @@ fun HomePage(vm: PaintViewModel) {
                                 }
                             }
                         }
+
+                        // 崩溃遥测首启一次性告知条 (非模态; 未注入端点时自身不渲染)
+                        TelemetryNoticeBar(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        )
 
                         // Clean Animated Folder Transition with Staggered Per-Card Cascade Unfolding
                         AnimatedContent(

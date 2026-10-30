@@ -528,6 +528,20 @@
     <string name="crash_report_dismiss">我知道了</string>
     <string name="crash_report_copied_toast">崩溃日志已复制到剪贴板</string>
     <string name="crash_report_long_hint">现场日志较长，已优化为文件导出和分享，防止系统剪贴板截断</string>
+    <string name="crash_report_upload">上报这条</string>
+    <string name="crash_report_uploading">正在上报…</string>
+    <string name="crash_report_upload_ok">已上报，感谢反馈</string>
+    <string name="crash_report_upload_failed">上报失败，请稍后再试</string>
+
+    <!-- Crash Telemetry -->
+    <string name="settings_category_privacy">隐私与诊断</string>
+    <string name="settings_telemetry_title">崩溃报告自动上报</string>
+    <string name="settings_telemetry_sub">仅发送崩溃堆栈、设备型号与版本信息，不含画作内容、文件名与账号凭据</string>
+    <string name="settings_telemetry_off_toast">已关闭上报并清除本地标识</string>
+    <string name="telemetry_notice_title">崩溃报告会匿名上报</string>
+    <string name="telemetry_notice_body">用于定位闪退，内容只有崩溃堆栈与设备信息，可在设置里关闭</string>
+    <string name="telemetry_notice_ok">知道了</string>
+    <string name="telemetry_notice_disable">关闭上报</string>
 
     <!-- Tool Action Toasts -->
     <string name="toast_undo">撤销</string>

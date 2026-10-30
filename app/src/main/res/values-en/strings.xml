@@ -528,6 +528,20 @@
     <string name="crash_report_dismiss">Dismiss</string>
     <string name="crash_report_copied_toast">Crash log copied to clipboard</string>
     <string name="crash_report_long_hint">Log is long and optimized for file export/sharing to avoid clipboard truncation</string>
+    <string name="crash_report_upload">Report</string>
+    <string name="crash_report_uploading">Reporting…</string>
+    <string name="crash_report_upload_ok">Report sent, thank you</string>
+    <string name="crash_report_upload_failed">Report failed, try again later</string>
+
+    <!-- Crash Telemetry -->
+    <string name="settings_category_privacy">Privacy &amp; Diagnostics</string>
+    <string name="settings_telemetry_title">Automatic crash reporting</string>
+    <string name="settings_telemetry_sub">Sends only crash stacks, device model and version info. No artwork, file names or credentials</string>
+    <string name="settings_telemetry_off_toast">Reporting disabled and local identifier cleared</string>
+    <string name="telemetry_notice_title">Crash reports are sent anonymously</string>
+    <string name="telemetry_notice_body">Used to fix crashes. Contains only the stack trace and device info. Can be turned off in Settings</string>
+    <string name="telemetry_notice_ok">Got it</string>
+    <string name="telemetry_notice_disable">Turn off</string>
 
     <!-- Tool Action Toasts -->
     <string name="toast_undo">Undo</string>

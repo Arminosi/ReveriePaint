@@ -249,6 +249,9 @@ internal fun GeneralSettingsSubPage(
             // Section 4: 诊断 (性能标尺，Debug 构建专属)
             PerfHud.SettingsSection(vm)
 
+            // Section 5: 隐私与诊断 (崩溃上报)
+            TelemetrySettingsSection()
+
             Spacer(Modifier.height(80.dp))
         }
     }

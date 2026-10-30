@@ -122,11 +122,15 @@ object TelemetryReporter {
     private fun uploadPendingReports(context: Context, prefs: TelemetryPrefs) {
         val dir = runCatching { CrashHandler.getCrashLogDirectory(context) }.getOrNull() ?: return
         val now = System.currentTimeMillis()
-        val pending = dir.listFiles { f -> f.isFile && f.name.startsWith("crash_") && f.name.endsWith(".log") }
-            ?.filter { now - it.lastModified() <= MAX_AGE_MS && !prefs.isUploaded(it.name) }
-            ?.sortedByDescending { it.lastModified() }
-            ?.take(MAX_UPLOADS_PER_RUN)
+        val all = dir.listFiles { f -> f.isFile && f.name.startsWith("crash_") && f.name.endsWith(".log") }
             ?: return
+        // 超过保留期的日志直接销号为"不再尝试", 否则每次启动都要重新列一遍、判一遍, 永远发不出去
+        all.filter { now - it.lastModified() > MAX_AGE_MS && !prefs.isUploaded(it.name) }
+            .forEach { prefs.markUploaded(it.name) }
+        val pending = all
+            .filter { !prefs.isUploaded(it.name) }
+            .sortedByDescending { it.lastModified() }
+            .take(MAX_UPLOADS_PER_RUN)
 
         for (file in pending) {
             if (prefs.todayCount() >= DAILY_LIMIT) {

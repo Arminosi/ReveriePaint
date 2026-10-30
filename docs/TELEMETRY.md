@@ -243,7 +243,7 @@ Worker 不读 `CF-Connecting-IP`,不写任何 IP 或 IP 哈希。滥用防护靠
 |---|---|
 | Worker | `reveriepaint-telemetry` |
 | 对外端点 | `https://telemetry.lanrhyme.top`(**自定义域,必需**) |
-| D1 | `reveriepaint_telemetry` · `2ac5fc7b-9816-410d-9267-9a55f455359d`(region WNAM) |
+| D1 | `reveriepaint_telemetry` · `f183220b-73ca-4f85-945a-4af05c77a8ab`(region APAC) |
 | 定时任务 | `17 3 * * *` 保留期清理 |
 | 密钥 | `INGEST_KEY`(写入,客户端用 `-PtelemetryKey` / `TELEMETRY_KEY` 注入) · `STATS_KEY`(脚本只读) · `STATS_PASSWORD`(登录页密码,可随时改) |
 
@@ -313,11 +313,30 @@ Worker 不读 `CF-Connecting-IP`,不写任何 IP 或 IP 哈希。滥用防护靠
 
 ## 11. 未做(后续版本再议)
 
-- **符号化流水线**: 目前只保证帧可符号化,还差"CI 保存未 strip 的 `.so` → 用 `addr2line`/`llvm-symbolizer` 还原函数名"的后台任务
+- **符号化**: 已提供半自动脚本(见 §11.1),但还没有"CI 保存未 strip 的 `.so`"这一环 ——
+  官方 Release 用的是 `third_party` 里已 strip 的预编译库,所以只有本地 `-PbuildNative` 构建出来的那份产物能对得上
 - 功能采用率埋点(需要用户显式 opt-in,与崩溃遥测不是同一个开关)
 - 性能画像(帧率/笔画延迟矩阵),设计见 `docs/RENDER-OPTIMIZATION.md`,是否上报单独评审
 - 多维度看板(现在只有一张聚合简表)
 - `native_crash` 的 `doc` 字段(§5.3 已知限制)
+
+### 11.1 符号化一个崩溃
+
+看板里的帧是 `模块+偏移`,把任意一条崩溃日志丢给脚本即可还原:
+
+```bash
+./scripts/symbolize_crash.sh /path/to/crash_native_20261030_145449.log
+# libreverie_core.so +0x3d07c4 -> capture_backtrace(void**, unsigned long)
+#                                 app/src/main/cpp/ReverieCrashHandler.cpp:162
+```
+
+- 直接在详情页复制 `llvm-addr2line -f -C -e <模块> 0x<偏移>` 也行,脚本只是帮你批量做
+- **前提是有一份未 strip 的 `.so`**,并且它的源码版本与崩溃的 `versionCode` 对得上。
+  脚本默认在 `app/build/intermediates/cxx/Release/*/obj/arm64-v8a/` 里找最新的同名库
+  (即本地 `-PbuildNative` 的产物)
+- 官方 Release 走预编译库, 进程内库已被 strip, 符号化会得到 `??` —— 所以**发版时的产物
+  建议按 versionCode 归档一份未 strip 的 `libreverie_core.so`**,否则线上崩溃只能看到偏移
+- `const char*` 级别的静态函数可能被内联/优化掉, 看到 `??` 不代表崩溃点不在那一帧
 
 ## 12. 踩过的坑
 

@@ -15,7 +15,7 @@ routes = [
 [[d1_databases]]
 binding = "DB"
 database_name = "reveriepaint_telemetry"
-database_id = "2ac5fc7b-9816-410d-9267-9a55f455359d"
+database_id = "f183220b-73ca-4f85-945a-4af05c77a8ab"
 
 [vars]
 # 1 = 全局停用(客户端收到 410 后本机永久停用)

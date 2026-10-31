@@ -1655,12 +1655,7 @@ fun PaintingPage(
         // ---- Filter Fullscreen HUD (Top Pill & Bottom Dock) ----
         if (filterController != null) {
             FilterTopPillHUD(
-                filterName = filterController.session.filterName,
-                filterId = filterController.session.filterId,
-                st = filterController.state,
-                isHoldingCompare = filterController.isHoldingCompare,
-                onHoldingCompareChange = { filterController.updateHoldingCompare(it) },
-                activeParamIndex = filterController.activeParamIndex,
+                controller = filterController,
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .padding(top = 18.dp)

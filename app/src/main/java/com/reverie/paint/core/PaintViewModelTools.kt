@@ -165,6 +165,15 @@ internal fun PaintViewModel.touchStart(
         return false
     }
 
+    if (currentToolId == "brush" || currentToolId == "eraser" || currentToolId == "smudge") {
+        if (brushPresets.isEmpty()) {
+            return false
+        }
+        if (brushPresetIndex < 0 || brushPresets.none { it.index == brushPresetIndex }) {
+            applyTool(currentToolId, force = true)
+        }
+    }
+
     // 物理橡皮擦末端 (TOOL_TYPE_ERASER) 或侧键临时擦除: 独立联动橡皮擦工具参数
     val isEraserOverride = toolOverride == "eraser" && currentToolId != "eraser"
     var eraserPresetIdx = -1
@@ -964,9 +973,9 @@ internal fun PaintViewModel.recordMirroredBranchesOnly(
     recordMirroredBranchesToRecorder(activeBranches, activeCounts, totalActive, isEraser)
 }
 
-internal fun PaintViewModel.applyTool(toolId: String) {
+internal fun PaintViewModel.applyTool(toolId: String, force: Boolean = false) {
     if (isQuickShapeEditing) return
-    if (toolId == currentToolId && !isTemporaryPicker) {
+    if (toolId == currentToolId && !isTemporaryPicker && !force) {
         return
     }
     if (toolId != currentToolId) {
@@ -1033,15 +1042,18 @@ internal fun PaintViewModel.applyTool(toolId: String) {
             ?: brushPresets.firstOrNull { it.name == "b)_Basic-5_Size_Opacity" }?.index
             ?: brushPresets.firstOrNull { it.group == "基础" && !it.name.startsWith("a)_Eraser", ignoreCase = true) && !it.name.contains("Eraser", ignoreCase = true) }?.index
             ?: brushPresets.firstOrNull { it.group != "橡皮擦" && !it.name.startsWith("a)_Eraser", ignoreCase = true) && !it.name.contains("Eraser", ignoreCase = true) }?.index
+            ?: brushPresets.firstOrNull()?.index
             ?: -1
 
         val defaultEraserIdx = brushPresets.firstOrNull { it.name == "a)_Eraser_Circle" }?.index
             ?: brushPresets.firstOrNull { it.name == "Eraser_circle" }?.index
             ?: brushPresets.firstOrNull { it.group == "橡皮擦" }?.index
+            ?: brushPresets.firstOrNull()?.index
             ?: -1
 
         val defaultSmudgeIdx = brushPresets.firstOrNull { it.name == "k)_Blender_Basic" }?.index
             ?: brushPresets.firstOrNull { it.group == "混合" }?.index
+            ?: brushPresets.firstOrNull()?.index
             ?: -1
 
         if (state == null) {
@@ -1106,7 +1118,7 @@ internal fun PaintViewModel.applyTool(toolId: String) {
         // 说明槽里的预设已被删除且没有可用的默认笔，什么都不做。
         val targetPreset = resolved
         if (targetPreset != null) {
-            if (isResumingSameDrawingTool && targetPreset.index == brushPresetIndex) {
+            if (!force && isResumingSameDrawingTool && targetPreset.index == brushPresetIndex) {
                 // 用户从吸管等临时工具切回当前正在使用的同一个绘制工具, 笔刷预设索引未改变:
                 // 此时用户调好的笔刷大小/不透明度/流量应当保持原样, 严禁被旧快照覆盖!
                 runCore(render = false) {

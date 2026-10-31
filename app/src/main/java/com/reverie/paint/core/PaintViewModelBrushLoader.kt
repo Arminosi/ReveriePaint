@@ -40,7 +40,6 @@ internal fun PaintViewModel.getBuiltInBrushNames(): Set<String> {
 internal fun PaintViewModel.loadBrushPresets(force: Boolean = false) {
     if (brushPresetsLoaded && brushPresets.isNotEmpty() && !force) return
     if (isBrushPresetsLoading && !force) return
-    brushPresetsLoaded = true
     isBrushPresetsLoading = true
     loadToolOptions()
     loadViewSettings()
@@ -63,6 +62,12 @@ internal fun PaintViewModel.loadBrushPresets(force: Boolean = false) {
         } catch (t: Throwable) {
             android.util.Log.e("ReveriePaint", "loadBrushPresets IO failed", t)
             isBrushPresetsLoading = false
+            brushPresetsLoaded = false
+            if (currentPage == Page.PAINTING && isBlockingLoading &&
+                blockingLoadingMessage == getString(R.string.brush_presets_loading)
+            ) {
+                isBlockingLoading = false
+            }
         }
     }
 }
@@ -203,9 +208,19 @@ private fun PaintViewModel.loadBrushPresetsAfterAssets(
                 if (rank.isEmpty()) list.toList()
                 else list.toList().sortedBy { rank[it.id] ?: (rank.size + it.index) }
             brushPresets = ordered
+            brushPresetsLoaded = true
             if (ordered.isNotEmpty()) {
                 val savedToolId = prefs().getString("current_tool_id", "brush") ?: "brush"
-                applyTool(savedToolId)
+                applyTool(savedToolId, force = true)
+            }
+            if (currentPage == Page.PAINTING && isBlockingLoading &&
+                blockingLoadingMessage == getString(R.string.brush_presets_loading)
+            ) {
+                isBlockingLoading = false
+                frontBufferQuietUntilMs = FrontBufferQuiet.onDocumentLoaded(
+                    android.os.SystemClock.uptimeMillis(),
+                    PaintViewModel.NEW_CANVAS_FRONT_BUFFER_QUIET_MS,
+                )
             }
         } finally {
             isBrushPresetsLoading = false

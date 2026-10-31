@@ -554,15 +554,19 @@ internal fun PaintViewModel.loadProject(p: com.reverie.paint.model.Project) {
             } else {
                 active3DLayers = emptyMap()
             }
-            isBlockingLoading = false
             frontBufferQuietUntilMs = FrontBufferQuiet.onDocumentLoaded(
                 android.os.SystemClock.uptimeMillis(),
                 PaintViewModel.NEW_CANVAS_FRONT_BUFFER_QUIET_MS,
             )
             startPaintingTimer()
-            val curPreset = brushPresetIndex
-            if (curPreset >= 0) {
-                selectBrushPreset(curPreset)
+            if (isBrushPresetsLoading || !brushPresetsLoaded || brushPresets.isEmpty()) {
+                loadBrushPresets()
+                isBlockingLoading = true
+                blockingLoadingMessage = getString(R.string.brush_presets_loading)
+            } else {
+                isBlockingLoading = false
+                val targetTool = currentToolId.ifBlank { "brush" }
+                applyTool(targetTool, force = true)
             }
             if (isRecovered) {
                 showActionToast(R.string.toast_project_restored_autosave, R.drawable.ic_save)
@@ -1539,11 +1543,15 @@ internal fun PaintViewModel.startPainting(
                 android.os.SystemClock.uptimeMillis(),
                 PaintViewModel.NEW_CANVAS_FRONT_BUFFER_QUIET_MS,
             )
-            isBlockingLoading = false
             startPaintingTimer()
-            val curPreset = brushPresetIndex
-            if (curPreset >= 0) {
-                selectBrushPreset(curPreset)
+            if (isBrushPresetsLoading || !brushPresetsLoaded || brushPresets.isEmpty()) {
+                loadBrushPresets()
+                isBlockingLoading = true
+                blockingLoadingMessage = getString(R.string.brush_presets_loading)
+            } else {
+                isBlockingLoading = false
+                val targetTool = currentToolId.ifBlank { "brush" }
+                applyTool(targetTool, force = true)
             }
             if (animation) {
                 anim.enabled = true

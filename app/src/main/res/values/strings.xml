@@ -547,6 +547,15 @@
     <string name="settings_telemetry_title">崩溃报告自动上报</string>
     <string name="settings_telemetry_sub">仅发送崩溃堆栈、设备型号与版本信息，不含画作内容、文件名与账号凭据</string>
     <string name="settings_telemetry_off_toast">已关闭上报并清除本地标识</string>
+    <string name="settings_category_advanced">高级</string>
+    <string name="settings_developer_options">开发者选项</string>
+    <string name="settings_developer_options_sub">性能标尺、渲染实验与系统诊断</string>
+    <string name="settings_category_diagnostics_tools">诊断与日志</string>
+    <string name="settings_diagnostics_export">系统运行诊断与日志</string>
+    <string name="settings_diagnostics_export_sub">抓取软硬件环境、内存指标与脱敏运行日志</string>
+    <string name="settings_category_environment">环境与运行时</string>
+    <string name="settings_env_device">设备与系统</string>
+    <string name="settings_env_engine">核心架构</string>
     <string name="telemetry_notice_title">崩溃报告会匿名上报</string>
     <string name="telemetry_notice_body">用于定位闪退，内容只有崩溃堆栈与设备信息，可在设置里关闭</string>
     <string name="telemetry_notice_ok">知道了</string>

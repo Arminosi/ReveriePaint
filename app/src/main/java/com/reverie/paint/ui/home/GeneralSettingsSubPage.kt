@@ -17,6 +17,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ExitToApp
+import androidx.compose.material.icons.rounded.DeveloperMode
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.NotificationsActive
@@ -37,7 +38,6 @@ import com.reverie.paint.R
 import com.reverie.paint.core.AppLanguage
 import com.reverie.paint.core.LanguageManager
 import com.reverie.paint.core.PaintViewModel
-import com.reverie.paint.perf.PerfHud
 import com.reverie.paint.ui.dialog.RecentAutoSavesDialog
 import com.reverie.paint.ui.theme.Theme
 
@@ -52,6 +52,16 @@ internal fun GeneralSettingsSubPage(
     val context = LocalContext.current
     val activity = context as? Activity
     var showAutoSaveHistoryDialog by remember { mutableStateOf(false) }
+    var showDeveloperSettings by remember { mutableStateOf(false) }
+
+    if (showDeveloperSettings) {
+        DeveloperSettingsSubPage(
+            vm = vm,
+            compact = compact,
+            onBack = { showDeveloperSettings = false },
+        )
+        return
+    }
 
     val intervalOptions = listOf(
         1 to stringResource(R.string.settings_minute_unit, 1),
@@ -246,11 +256,17 @@ internal fun GeneralSettingsSubPage(
                 )
             }
 
-            // Section 4: 诊断 (性能标尺，Debug 构建专属)
-            PerfHud.SettingsSection(vm)
-
-            // Section 5: 隐私与诊断 (崩溃上报)
-            TelemetrySettingsSection()
+            // Section 4: 高级与开发者选项
+            SettingCategoryTitle(stringResource(R.string.settings_category_advanced))
+            SettingGroup {
+                SettingNavGroupItem(
+                    icon = Icons.Rounded.DeveloperMode,
+                    title = stringResource(R.string.settings_developer_options),
+                    summary = stringResource(R.string.settings_developer_options_sub),
+                    shape = settingGroupShape(0, 1),
+                    onClick = { showDeveloperSettings = true },
+                )
+            }
 
             Spacer(Modifier.height(80.dp))
         }

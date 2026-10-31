@@ -547,6 +547,15 @@
     <string name="settings_telemetry_title">Automatic crash reporting</string>
     <string name="settings_telemetry_sub">Sends only crash stacks, device model and version info. No artwork, file names or credentials</string>
     <string name="settings_telemetry_off_toast">Reporting disabled and local identifier cleared</string>
+    <string name="settings_category_advanced">Advanced</string>
+    <string name="settings_developer_options">Developer Options</string>
+    <string name="settings_developer_options_sub">Performance HUD, render flags, and diagnostics</string>
+    <string name="settings_category_diagnostics_tools">Diagnostics &amp; Logs</string>
+    <string name="settings_diagnostics_export">System Diagnostics &amp; Logs</string>
+    <string name="settings_diagnostics_export_sub">Capture hardware info, memory metrics, and sanitized logs</string>
+    <string name="settings_category_environment">Environment &amp; Runtime</string>
+    <string name="settings_env_device">Device &amp; OS</string>
+    <string name="settings_env_engine">Core Architecture</string>
     <string name="telemetry_notice_title">Crash reports are sent anonymously</string>
     <string name="telemetry_notice_body">Used to fix crashes. Contains only the stack trace and device info. Can be turned off in Settings</string>
     <string name="telemetry_notice_ok">Got it</string>

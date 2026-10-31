@@ -1854,9 +1854,11 @@ fun BrushPanel(
             onDismiss = { showBatchMoveDialog = false },
             onMove = { g ->
                 vm.moveBrushPresetsBatch(selectedPresets.toList(), g)
+                val appContext = context.applicationContext
+                val groupName = brushCategoryDisplayName(appContext, g)
                 android.widget.Toast.makeText(
-                    context,
-                    context.getString(R.string.brush_batch_move_success, selectedPresets.size, brushCategoryDisplayName(context, g)),
+                    appContext,
+                    appContext.getString(R.string.brush_batch_move_success, selectedPresets.size, groupName),
                     android.widget.Toast.LENGTH_SHORT
                 ).show()
                 selectedCategory = g

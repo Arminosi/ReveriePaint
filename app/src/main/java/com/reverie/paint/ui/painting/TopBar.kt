@@ -55,8 +55,8 @@ fun TopBar(
     onLayers: () -> Unit,
     onSettings: () -> Unit,
     onGuides: () -> Unit = {},
-    onUndo: () -> Unit = { vm.undo() },
-    onRedo: () -> Unit = { vm.redo() },
+    onUndo: () -> Unit = { vm.undoFromPanel() },
+    onRedo: () -> Unit = { vm.redoFromPanel() },
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val shape = if (isFloating) {

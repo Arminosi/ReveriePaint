@@ -1721,7 +1721,8 @@ internal fun PaintViewModel.applyWarpMeshTransform(
     }
 }
 
-internal fun PaintViewModel.undo(settled: (() -> Unit)? = null) {
+internal fun PaintViewModel.undo(fromPanel: Boolean = false, settled: (() -> Unit)? = null) {
+    onHistoryActionTriggered(fromPanel)
     val restoreTransformSel = transientTransformSelectionPending || canUndoTransformSelection
     if (isQuickShapeEditing) { cancelQuickShape(); return }
     if (customUndoHook?.invoke() == true) {
@@ -1822,7 +1823,8 @@ internal fun PaintViewModel.undo(settled: (() -> Unit)? = null) {
     }
 }
 
-internal fun PaintViewModel.redo(settled: (() -> Unit)? = null) {
+internal fun PaintViewModel.redo(fromPanel: Boolean = false, settled: (() -> Unit)? = null) {
+    onHistoryActionTriggered(fromPanel)
     val restoreRedoSel = canRedoTransformSelection
     if (isQuickShapeEditing) return
     if (isCurrentLayer3D && canRedo3D) {

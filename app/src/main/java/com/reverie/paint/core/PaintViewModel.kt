@@ -1544,10 +1544,10 @@ class PaintViewModel : ViewModel() {
             com.reverie.paint.model.QuickAction.ROTATE_CCW -> requestUiCommand(CanvasViewportStep.ROTATE_CCW.command)
             com.reverie.paint.model.QuickAction.ROTATE_CW -> requestUiCommand(CanvasViewportStep.ROTATE_CW.command)
             com.reverie.paint.model.QuickAction.UNDO -> {
-                undo()
+                undoFromPanel()
             }
             com.reverie.paint.model.QuickAction.REDO -> {
-                redo()
+                redoFromPanel()
             }
             com.reverie.paint.model.QuickAction.TOGGLE_ERASER -> {
                 if (currentToolId == "eraser") {

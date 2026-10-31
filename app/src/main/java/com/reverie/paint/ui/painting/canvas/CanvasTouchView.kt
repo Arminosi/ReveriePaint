@@ -758,7 +758,7 @@ class CanvasTouchView(context: Context) : View(context) {
 
     // 防抖撤销任务与 Procreate 风格连续撤销/重做
     private var pendingUndoRunnable: Runnable? = null
-    private var isContinuousUndoing = false
+    internal var isContinuousUndoing = false
     private val editMenuSwipe = com.reverie.paint.model.ThreeFingerSwipe()
     private val editMenuPointerIds = IntArray(3)
     private var editMenuGestureActive = false
@@ -777,6 +777,7 @@ class CanvasTouchView(context: Context) : View(context) {
             // 连续撤销，避免误吃形变
             if (maxTouchPointers == 2 && !isPinchMotion && !isTwoFingerRotation && isInteracting && !isLiquifyGestureActive) {
                 isContinuousUndoing = true
+                v.requestUndoBarShow()
                 v.undo()
                 continuousStepCount++
                 // 阶梯缓动：首步留出 260ms 反应窗口防止误吞多步，随后进入 120ms 连撤
@@ -792,6 +793,7 @@ class CanvasTouchView(context: Context) : View(context) {
             if (!v.gestureContinuousUndo) return
             if (maxTouchPointers >= 3 && !isPinchMotion && isInteracting && !isLiquifyGestureActive) {
                 isContinuousUndoing = true
+                v.requestUndoBarShow()
                 v.redo()
                 continuousStepCount++
                 val nextDelay = if (continuousStepCount == 1) 260L else 120L

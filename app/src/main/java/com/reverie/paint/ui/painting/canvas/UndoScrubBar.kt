@@ -69,9 +69,6 @@ import kotlin.math.roundToInt
 /** 空闲自动隐藏时长: 这段时间内无任何撤销/重做/拖动交互则淡出 */
 private const val UNDO_BAR_IDLE_HIDE_MS = 5000L
 
-/** 显示所需的最低历史总深度 (总步数 > 5 才显示) */
-private const val UNDO_BAR_MIN_DEPTH = 5
-
 /** canShowUndoBar 周期复查间隔: isInteracting 等触摸状态非 Compose 状态, 只能轮询 */
 private const val UNDO_BAR_GUARD_POLL_MS = 250L
 
@@ -102,9 +99,9 @@ private const val UNDO_BAR_BUBBLE = 36
  * - 拖滑轨空白处 (拇指命中半径之外): 重新定位整条 (会话内记忆, 不持久化)。
  *
  * 显隐 (与 [PaintViewModelUndoBar] 的泵契约联动):
- * - 撤销/重做落定刷新镜像后, 总深度 > 5 且 [PaintViewModel.canShowUndoBar]
- *   为真则显示并重置空闲计时; 变 false 时立即隐藏;
- * - 空闲 5 秒自动淡出 (fade 200ms)。
+ * - 仅在「面板按钮撤销」或「连续撤销/重做」时显现, 正常单次手势撤销不弹条打扰画布;
+ * - 空闲 5 秒自动淡出 (fade 200ms);
+ * - 笔画/变换开始时立即隐藏停泵。
  * 可见性镜像写入顶层 undoBarVisible —— 追赶泵只在可见时发步, UI 隐藏即停泵。
  *
  * 防误触: 经 [reportUiSlot] 向画布手势层报备 bounds, 落笔不穿透。
@@ -115,44 +112,26 @@ fun UndoScrubBar(
     hazeState: HazeState?,
     modifier: Modifier = Modifier,
 ) {
-    // —— 显隐状态 (UI 会话态; undoBarVisible 是泵侧镜像, 两者必须同步写) ——
-    var visible by remember { mutableStateOf(false) }
-
-    // 首次进入绘画页: 刷新一次计数镜像 (显示判断由下面的镜像监听 effect 完成)
+    // 首次进入绘画页: 刷新一次计数镜像 (显示判断由 ViewModel 状态驱动)
     LaunchedEffect(Unit) {
         vm.refreshUndoCounts()
     }
 
-    // 隐藏 -> 出现: 任何撤销/重做落定都会刷新 position/max 镜像并重启本 effect;
-    // 总深度 > 5 且当前可显示 (无笔画/变换/QuickShape/3D/lasso 收点) 才出现
-    LaunchedEffect(undoBarPosition, undoBarMax) {
-        if (undoBarMax > UNDO_BAR_MIN_DEPTH && vm.canShowUndoBar()) {
-            visible = true
-            undoBarVisible = true
-            vm.onUndoBarActivity()
-            // 追赶若曾被中断 (笔画/变换期间泵停车), 条恢复后立刻续跑剩余步骤
-            vm.resumeUndoBarPumpIfPending()
-        }
-    }
-
-    // 展开 -> 隐藏: 空闲 5 秒自动淡出 (拖动中 scrubTo 会持续刷新活跃时间戳,
-    // 计时不会在拖动中途触发)
-    LaunchedEffect(visible, undoBarLastActivityAt) {
-        if (!visible) return@LaunchedEffect
+    // 展开 -> 隐藏: 空闲 5 秒自动淡出 (拖动中 scrubTo 会持续刷新活跃时间戳, 计时不会在拖动中途触发)
+    LaunchedEffect(undoBarVisible, undoBarLastActivityAt) {
+        if (!undoBarVisible) return@LaunchedEffect
         delay(UNDO_BAR_IDLE_HIDE_MS)
-        visible = false
-        undoBarVisible = false
+        vm.hideUndoBar()
     }
 
     // canShowUndoBar() 变 false 时立即隐藏。isInteracting/isTransformActive 是
     // 普通字段 (非 Compose 状态), 无重组信号, 周期轮询兜底 (笔画/变换期间隐藏)
-    LaunchedEffect(visible) {
-        if (!visible) return@LaunchedEffect
+    LaunchedEffect(undoBarVisible) {
+        if (!undoBarVisible) return@LaunchedEffect
         while (true) {
             delay(UNDO_BAR_GUARD_POLL_MS)
             if (!vm.canShowUndoBar()) {
-                visible = false
-                undoBarVisible = false
+                vm.hideUndoBar()
                 break
             }
         }
@@ -185,7 +164,7 @@ fun UndoScrubBar(
     val displayFrac = if (undoBarMax > 0) displayPos.toFloat() / undoBarMax else 0f
 
     AnimatedVisibility(
-        visible = visible,
+        visible = undoBarVisible,
         enter = fadeIn(tween(200)),
         exit = fadeOut(tween(200)),
         modifier = modifier,

@@ -1612,6 +1612,13 @@ class PaintViewModel : ViewModel() {
             com.reverie.paint.model.QuickAction.SHADING_ASSIST -> {
                 openShadingAssist()
             }
+            com.reverie.paint.model.QuickAction.PAN -> {
+                if (currentToolId == "pan") {
+                    applyTool(if (lastToolId.isNotEmpty() && lastToolId != "pan") lastToolId else "brush")
+                } else {
+                    applyTool("pan")
+                }
+            }
         }
     }
 
@@ -3527,6 +3534,7 @@ class PaintViewModel : ViewModel() {
             com.reverie.paint.core.stylus.StylusAction.LAYER_NEXT -> showActionToast(R.string.stylus_action_layer_next, R.drawable.ic_layers)
             com.reverie.paint.core.stylus.StylusAction.TOGGLE_QUICK_MENU -> showActionToast(R.string.stylus_action_quick_menu, R.drawable.ic_menu)
             com.reverie.paint.core.stylus.StylusAction.TOGGLE_REF_WINDOW -> showActionToast(R.string.stylus_action_ref_window, R.drawable.ic_reference)
+            com.reverie.paint.core.stylus.StylusAction.PAN_CANVAS -> showActionToast(R.string.stylus_action_pan, R.drawable.ic_hand)
             else -> {}
         }
     }

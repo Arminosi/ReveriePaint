@@ -32,6 +32,7 @@ enum class StylusAction(val title: String, val actionId: String) {
     LAYER_NEXT("下一图层", "layer_next"),
     TOGGLE_QUICK_MENU("快捷菜单", "toggle_quick_menu"),
     TOGGLE_REF_WINDOW("参考图浮窗", "toggle_ref_window"),
+    PAN_CANVAS("移动画布", "pan_canvas"),
     NONE("无操作", "none");
 
     companion object {

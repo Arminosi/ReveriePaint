@@ -69,6 +69,7 @@ val ALL_SHORTCUT_DEFINITIONS = listOf(
     ShortcutDefinition("tool_gradient", ShortcutCategory.TOOLS, "渐变工具", "LeftShift + G", R.string.shortcut_def_gradient),
     ShortcutDefinition("tool_crop", ShortcutCategory.TOOLS, "裁剪工具", "C", R.string.shortcut_def_crop),
     ShortcutDefinition("tool_transform", ShortcutCategory.TOOLS, "变换工具", "V", R.string.shortcut_def_transform),
+    ShortcutDefinition("tool_pan", ShortcutCategory.TOOLS, "抓手工具", "无", R.string.shortcut_def_tool_pan),
 
     // 滤镜 (Filters)
     ShortcutDefinition("filter_hsv", ShortcutCategory.FILTERS, "色相/饱和度/明度", "LeftCtrl + U", R.string.shortcut_def_filter_hsv),
@@ -755,6 +756,13 @@ internal fun PaintViewModel.executeShortcutAction(id: String) {
         "tool_magicwand" -> applyTool("magicwand")
         "tool_crop" -> applyTool("crop")
         "tool_transform", "tool_move" -> applyTool("transform")
+        "tool_pan", "pan_canvas" -> {
+            if (currentToolId == "pan") {
+                applyTool(if (lastToolId.isNotEmpty() && lastToolId != "pan") lastToolId else "brush")
+            } else {
+                applyTool("pan")
+            }
+        }
         "brush_size_inc" -> {
             val maxL = effectiveBrushMaxSize
             val newSize = (brushSize * 1.25).coerceAtMost(maxL)

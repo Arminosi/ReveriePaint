@@ -161,10 +161,12 @@ class SpenAirModelsTest {
             "flip_canvas",
             "layer_prev",
             "layer_next",
-            "toggle_ref_window"
+            "toggle_ref_window",
+            "pan_canvas",
+            "tool_pan"
         )
 
-        assertEquals("ALLOWED must contain exactly 18 items", 18, SpenAirActions.ALLOWED.size)
+        assertEquals("ALLOWED must contain exactly 20 items", 20, SpenAirActions.ALLOWED.size)
         assertEquals("ALLOWED set contents must match expected specification", expectedAllowed, SpenAirActions.ALLOWED)
         for (action in expectedAllowed) {
             assertTrue("Action '$action' must be allowed", SpenAirActions.isAllowed(action))

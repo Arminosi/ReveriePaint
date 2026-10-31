@@ -77,7 +77,9 @@ object SpenAirActions {
         "flip_canvas",
         "layer_prev",
         "layer_next",
-        "toggle_ref_window"
+        "toggle_ref_window",
+        "pan_canvas",
+        "tool_pan"
     )
 
     fun defaultBinding(gesture: SpenAirGesture): String = DEFAULT_BINDINGS[gesture] ?: "none"

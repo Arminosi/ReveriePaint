@@ -4339,7 +4339,7 @@ class CanvasTouchView(context: Context) : View(context) {
                     val v = vm
                     val hideCursor = (effTool() == Tool.BRUSH || effTool() == Tool.ERASER || effTool() == Tool.SMUDGE || effTool() == Tool.LIQUIFY) &&
                         (v?.cursorStyleMode != 4)
-                    val targetIcon = if (v?.isSpacePanning == true) {
+                    val targetIcon = if (v?.isSpacePanning == true || effTool() == Tool.PAN) {
                         if (isSpaceDragging) systemGrabPointer ?: systemHandPointer else systemHandPointer ?: systemDefaultPointer
                     } else if (!overUi && hideCursor && systemNullPointer != null) {
                         systemNullPointer
@@ -4376,38 +4376,47 @@ class CanvasTouchView(context: Context) : View(context) {
             maxTouchPointers = 0
         }
 
-        // 空格键长按临时抓手平移 (Spacebar Hold-to-Pan)
-        if (v.isSpacePanning) {
-            when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    // 空格抓手平移同样写画布变换, 且此分支在统一取消点之前 return:
-                    // 这里先终止动画并失效待执行帧, 避免与旧动画同帧竞争
-                    cancelCanvasTransformAnimators()
-                    spacePanStartPos = Offset(event.x, event.y)
-                    spacePanInitialPan = Offset(canvasPanX, canvasPanY)
-                    isSpaceDragging = true
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && systemGrabPointer != null) {
-                        pointerIcon = systemGrabPointer
-                    }
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    if (isSpaceDragging) {
-                        val dx = event.x - spacePanStartPos.x
-                        val dy = event.y - spacePanStartPos.y
-                        canvasPanX = spacePanInitialPan.x + dx
-                        canvasPanY = spacePanInitialPan.y + dy
-                        onTransform?.invoke(canvasZoom, canvasRotation, canvasPanX, canvasPanY)
-                        invalidate()
-                    }
-                }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+        // 抓手平移 (Spacebar Hold-to-Pan 或 切换到 PAN 抓手工具)
+        val isPanToolActive = effTool() == Tool.PAN
+        if (v.isSpacePanning || isPanToolActive) {
+            if (event.pointerCount >= 2) {
+                if (isSpaceDragging) {
                     isSpaceDragging = false
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && systemHandPointer != null) {
                         pointerIcon = systemHandPointer
                     }
                 }
+            } else {
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        // 抓手平移写画布变换, 这里先终止动画并失效待执行帧, 避免与旧动画同帧竞争
+                        cancelCanvasTransformAnimators()
+                        spacePanStartPos = Offset(event.x, event.y)
+                        spacePanInitialPan = Offset(canvasPanX, canvasPanY)
+                        isSpaceDragging = true
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && systemGrabPointer != null) {
+                            pointerIcon = systemGrabPointer
+                        }
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        if (isSpaceDragging) {
+                            val dx = event.x - spacePanStartPos.x
+                            val dy = event.y - spacePanStartPos.y
+                            canvasPanX = spacePanInitialPan.x + dx
+                            canvasPanY = spacePanInitialPan.y + dy
+                            onTransform?.invoke(canvasZoom, canvasRotation, canvasPanX, canvasPanY)
+                            invalidate()
+                        }
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        isSpaceDragging = false
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && systemHandPointer != null) {
+                            pointerIcon = systemHandPointer
+                        }
+                    }
+                }
+                return true
             }
-            return true
         }
         // 任何新的接触 (新手势第一个触点 / 新落下的触点) 都可能成为画布变换的新写入者:
         // 先终止吸附收敛与满屏复位动画并失效其待执行帧, 避免与手势同帧竞争画布变换

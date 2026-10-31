@@ -64,6 +64,13 @@ jobs:
           chmod +x scripts/copy_jni_libs.sh
           ./scripts/copy_jni_libs.sh
 
+      - name: JNI Symbol Coverage Check
+        # arm64 与 armv7 的预编译 jni 库都必须覆盖 Kotlin 声明的全部符号;
+        # 缺一个就是一个 UnsatisfiedLinkError 崩溃 (2026-10-31 nativeSnapshotMode 事故)
+        run: |
+          chmod +x scripts/check_jni_symbols.sh
+          ./scripts/check_jni_symbols.sh
+
       - name: Decode Keystore
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}

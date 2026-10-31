@@ -115,7 +115,17 @@ internal object BrushStoreVm {
     private val persistJobs = HashMap<String, Job>()
     private val pendingControls = HashMap<String, MutableMap<String, Any>>()
 
-    fun hasPending(id: String): Boolean = synchronized(lock) { pendingControls[id]?.isNotEmpty() == true }
+    /**
+     * 正在进行落盘的 id。暂存表在 materialize **之前**就被取走（其余逻辑要在同一把锁里
+     * 完成合并），所以「暂存为空」不等于「已落盘」。调用方（工作台快照/测试/UI）把
+     * [hasPending] 当「还有没写完的修改」用，这里必须把 in-flight 一起算上，否则会在
+     * 写盘与重载之间读到假的「干净」状态。
+     */
+    private val inflightFlush = HashSet<String>()
+
+    fun hasPending(id: String): Boolean = synchronized(lock) {
+        pendingControls[id]?.isNotEmpty() == true || id in inflightFlush
+    }
 
     fun stage(vm: PaintViewModel, controlId: ControlId, v: Any) {
         val preset = vm.brushPresets.firstOrNull { it.index == vm.brushPresetIndex } ?: return
@@ -231,17 +241,23 @@ internal object BrushStoreVm {
             persistJobs.remove(id)?.cancel()
             val pending = pendingControls.remove(id)
             pending?.forEach { (k, v) -> ControlId.fromKey(k)?.let { mergeControl(id, it, v) } }
-            !pending.isNullOrEmpty()
+            val hadAny = !pending.isNullOrEmpty()
+            if (hadAny) inflightFlush += id
+            hadAny
         }
         if (onlyIfPending && !had) return null
-        val res = EffectivePresetBuilder.materialize(id, dir)
-        if (host != null) {
-            if (host.activeId() == id) {
-                host.reload(id)
+        try {
+            val res = EffectivePresetBuilder.materialize(id, dir)
+            if (host != null) {
+                if (host.activeId() == id) {
+                    host.reload(id)
+                }
+                host.notifyBrushModified()
             }
-            host.notifyBrushModified()
+            return res
+        } finally {
+            synchronized(lock) { inflightFlush -= id }
         }
-        return res
     }
 
     /** 作用域被取消（VM 清理）时：已暂存还没写盘的重建类修改补写一次，并丢掉已取消的防抖任务 */

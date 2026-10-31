@@ -74,6 +74,12 @@
     <string name="blend_value">Value</string>
     <string name="blend_erase">Erase</string>
     <string name="blend_luminosity_sai">Luminosity (SAI)</string>
+    <string name="blend_dissolve">Dissolve</string>
+    <string name="blend_hard_mix">Hard Mix</string>
+    <string name="blend_darker_color">Darker Color</string>
+    <string name="blend_lighter_color">Lighter Color</string>
+    <string name="blend_luminosity">Luminosity</string>
+    <string name="blend_behind">Behind</string>
     <string name="blend_glow">Glow</string>
     <string name="blend_category_basic">Basic</string>
     <string name="blend_category_darken">Darken</string>
@@ -3228,8 +3234,12 @@
     <string name="replay_export_stage_finalizing">Finalizing export file…</string>
     <string name="replay_export_stage_saving_gallery">Saving to system gallery…</string>
     <string name="replay_export_hint_4k">4K export takes longer, 1080p recommended</string>
-
     <string name="undo_bar_a11y">Undo history slider</string>
     <string name="undo_bar_position_a11y">History position %1$d of %2$d steps</string>
+
+    <string name="settings_abr_blend_policy_title">ABR Blend Mode Policy</string>
+    <string name="settings_abr_blend_policy_desc">Mapping algorithm for dual brush and texture during ABR import</string>
+    <string name="settings_abr_blend_policy_compat">Safe Compat</string>
+    <string name="settings_abr_blend_policy_precision">Strict Precision</string>
 </resources>
 

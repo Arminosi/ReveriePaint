@@ -603,7 +603,6 @@ object ReverieCoreBridge {
     external fun setBrushJitter(jitterAngle: Double, jitterSize: Double)
     external fun setBrushMirror(flipX: Boolean, flipY: Boolean)
     external fun setBrushAntiAliasing(level: Int)
-    external fun setBrushTipAsset(assetName: String): Boolean
 
     external fun touchStrokeStart(
         x: Double,
@@ -675,14 +674,6 @@ object ReverieCoreBridge {
     external fun commitStashedStrokePatch()
     external fun revertOpenRestorePatch()
     external fun discardStashedStrokePatch()
-
-    external fun setBrushTexture(
-        enabled: Boolean,
-        scale: Double,
-        strength: Double,
-        mode: String,
-        patternName: String,
-    )
 
     external fun scratchpadStart(width: Int, height: Int): Boolean
     external fun scratchpadStrokeStart(

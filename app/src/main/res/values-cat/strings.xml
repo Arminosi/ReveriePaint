@@ -74,6 +74,12 @@
     <string name="blend_value">明度</string>
     <string name="blend_erase">擦除</string>
     <string name="blend_luminosity_sai">发光 (SAI)</string>
+    <string name="blend_dissolve">溶解</string>
+    <string name="blend_hard_mix">实色混合</string>
+    <string name="blend_darker_color">深色</string>
+    <string name="blend_lighter_color">浅色</string>
+    <string name="blend_luminosity">明度(亮度)</string>
+    <string name="blend_behind">背后</string>
     <string name="blend_glow">发光</string>
     <string name="blend_category_basic">基础</string>
     <string name="blend_category_darken">变暗</string>
@@ -3160,5 +3166,9 @@
     <string name="replay_export_stage_finalizing">正在封装文件…</string>
     <string name="replay_export_stage_saving_gallery">正在写入系统相册…</string>
     <string name="replay_export_hint_4k">4K 导出要等挺久，先用 1080p 吧</string>
+    <string name="settings_abr_blend_policy_title">ABR 导入混合模式策略</string>
+    <string name="settings_abr_blend_policy_desc">控制 ABR 导入时双重画笔与纹理模式映射算法</string>
+    <string name="settings_abr_blend_policy_compat">柔和容错</string>
+    <string name="settings_abr_blend_policy_precision">严格精准</string>
 </resources>
 

@@ -919,8 +919,6 @@ public:
     void setBrushMirror(bool flipX, bool flipY);
     void setBrushAntiAliasing(int level);
     void setPresetIsEraser(bool eraser);
-    bool setBrushTipAsset(const QString &assetName);
-    void setBrushTexture(bool enabled, qreal scale, qreal strength, const QString &mode, const QString &patternName = QString());
     bool scratchpadStart(int w, int h);
     bool scratchpadStrokeStart(qreal x, qreal y, qreal pressure, qreal tiltX = 0.0, qreal tiltY = 0.0, qreal rotation = 0.0);
     bool scratchpadStrokeMove(qreal x, qreal y, qreal pressure, qreal tiltX = 0.0, qreal tiltY = 0.0, qreal rotation = 0.0);
@@ -1223,7 +1221,6 @@ private:
     qreal m_brushSpacing = 0.1;
     qreal m_brushAngle = 0.0;
     qreal m_brushRotation = 0.0;
-    QString m_brushTipAsset;
     ToolMode m_toolMode = ToolBrush;
 
     // Krita brush engine state
@@ -1239,7 +1236,7 @@ private:
     // 预设只读元数据缓存: 一次 .kpp 解析同时提取 defaults/paintOpId/tipFilename。
     // 选择预设时 Kotlin 会在 after{} (主线程) 连查这三个值, 每次都完整解析
     // .kpp (读文件 + PNG zTXt 解压 + XML loadFromDevice) 是"换笔卡顿"主因。
-    // 校验 mtime+size: 用户自定义参数会经 KppHelper.updateKppFile 改写 .kpp,
+    // 校验 mtime+size: 用户自定义预设保存时写入 .kpp,
     // 文件一变即自动失效重解析。互斥锁保护 (主线程查询/渲染线程切换并发)。
     struct CachedPresetInfo {
         bool valid = false;
@@ -1256,10 +1253,6 @@ private:
     // 解析并缓存预设只读元数据; 失败返回 false (out 不保证有效)
     bool ensurePresetInfo(int index, CachedPresetInfo &out);
     bool loadBrushPresetCommon(const QString &path, const QString &name, int index);
-    // 当前 m_brushPreset 的笔尖是否被 setBrushTipAsset(非空) 覆盖过。
-    // loadBrushPreset 每次都重新解析预设文件, 出厂笔尖天然在场,
-    // 覆盖未发生时 setBrushTipAsset("") 无需再解析原文件。
-    bool m_tipOverridden = false;
     // #116 临时橡皮覆盖的活状态快照 (引擎串行线程上 begin/end 配对使用)
     KisPaintOpPresetSP m_overrideSnapshotPreset;
     int m_overrideSnapshotIndex = -1;
@@ -1274,8 +1267,6 @@ private:
     bool m_overrideSnapshotAirbrush = false;
     int m_overrideSnapshotEraserFlag = -1;
     ToolMode m_overrideSnapshotToolMode = ToolBrush;
-    bool m_overrideSnapshotTipOverridden = false;
-    QString m_overrideSnapshotTipAsset;
     QString m_overrideSnapshotCompositeOp;
     QString m_overrideSnapshotPresetPath;
     // Size 压感曲线缓存（预设切换时失效；光标环每帧查询用）

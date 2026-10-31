@@ -697,12 +697,12 @@ fun BrushPanel(
                                         }
                                     }
 
-                                    val filtered = remember(selectedCategory, vm.brushPresets, vm.favoriteBrushNames, vm.recentBrushNames, searchQuery) {
+                                    val filtered = remember(selectedCategory, vm.brushPresets, vm.favoriteBrushIds, vm.recentBrushIds, searchQuery) {
                                         val baseList = when (selectedCategory) {
                                             "全部" -> vm.brushPresets
-                                            "常用" -> vm.brushPresets.filter { vm.isFavoriteBrush(it.name) }
-                                            "最近" -> vm.recentBrushNames.mapNotNull { name ->
-                                                vm.brushPresets.firstOrNull { it.name == name }
+                                            "常用" -> vm.brushPresets.filter { vm.isFavoriteBrush(it.id) }
+                                            "最近" -> vm.recentBrushIds.mapNotNull { id ->
+                                                vm.brushPresets.firstOrNull { it.id == id }
                                             }
                                             else -> vm.brushPresets.filter { it.group == selectedCategory }
                                         }
@@ -1153,7 +1153,7 @@ fun BrushPanel(
                                                             PresetGridCard(
                                                                 preset = preset,
                                                                 isSelected = isSelected,
-                                                                isModified = vm.isBrushModified(preset.name),
+                                                                isModified = vm.isBrushModified(preset.id),
                                                                 isBatchMode = isBatchMode,
                                                                 isChecked = preset.name in selectedPresets,
                                                                 onClick = {
@@ -1199,7 +1199,7 @@ fun BrushPanel(
                                                                 offsetY = presetGridFloatingY,
                                                                 cardWidthDp = if (cardWidthDp > 0.dp) cardWidthDp else 80.dp,
                                                                 cardHeightDp = if (cardHeightDp > 0.dp) cardHeightDp else 96.dp,
-                                                                isModified = vm.isBrushModified(draggedPreset.name)
+                                                                isModified = vm.isBrushModified(draggedPreset.id)
                                                             )
                                                         }
                                                     }
@@ -1222,7 +1222,7 @@ fun BrushPanel(
                                                     ) {
                                                         items(filtered, key = { it.name }, contentType = { "preset_list" }) { preset ->
                                                             val isSelected = preset.index == vm.brushPresetIndex
-                                                            val isFav = vm.isFavoriteBrush(preset.name)
+                                                            val isFav = vm.isFavoriteBrush(preset.id)
                                                             val isDraggingThis = draggingPresetName == preset.name
                                                             val canReorder = !isBatchMode && !isSearchActive && selectedCategory != "最近"
                                                             val subtitleText = if (isSearchActive && searchQuery.isNotBlank() && selectedCategory == "全部") {
@@ -1283,7 +1283,7 @@ fun BrushPanel(
                                                                 preset = preset,
                                                                 isSelected = isSelected,
                                                                 isFav = isFav,
-                                                                isModified = vm.isBrushModified(preset.name),
+                                                                isModified = vm.isBrushModified(preset.id),
                                                                 isBatchMode = isBatchMode,
                                                                 isChecked = preset.name in selectedPresets,
                                                                 subtitleText = subtitleText,
@@ -1305,7 +1305,7 @@ fun BrushPanel(
                                                                     }
                                                                 },
                                                                 onToggleFav = {
-                                                                    vm.toggleFavoriteBrush(preset.name)
+                                                                    vm.toggleFavoriteBrush(preset.id)
                                                                 },
                                                                 itemGestureModifier = itemGesture,
                                                                 modifier = Modifier
@@ -1328,8 +1328,8 @@ fun BrushPanel(
                                                             PresetListDragOverlay(
                                                                 preset = draggedPreset,
                                                                 offsetY = presetListFloatingY,
-                                                                isFav = vm.isFavoriteBrush(draggedPreset.name),
-                                                                isModified = vm.isBrushModified(draggedPreset.name),
+                                                                isFav = vm.isFavoriteBrush(draggedPreset.id),
+                                                                isModified = vm.isBrushModified(draggedPreset.id),
                                                                 modifier = Modifier.padding(horizontal = 12.dp)
                                                             )
                                                         }
@@ -1621,8 +1621,8 @@ fun BrushPanel(
         val preset = vm.brushPresets.firstOrNull { it.name == rp }
         val pIdx = preset?.index ?: -1
         val isBuiltIn = preset?.isBuiltIn == true
-        val isFav = vm.isFavoriteBrush(rp)
-        val isModified = vm.isBrushModified(rp)
+        val isFav = preset?.let { vm.isFavoriteBrush(it.id) } ?: false
+        val isModified = preset?.let { vm.isBrushModified(it.id) } ?: false
         val context = LocalContext.current
         ReorderBrushMenu(
             presetName = rp,
@@ -1634,9 +1634,9 @@ fun BrushPanel(
                 draggingPresetName = null
                 draggingPresetGridName = null
             },
-            onToggleFavorite = { vm.toggleFavoriteBrush(rp) },
-            onShare = { vm.shareBrushPreset(context, rp) },
-            onReset = { vm.resetBrushPresetToDefault(rp) },
+            onToggleFavorite = { preset?.let { vm.toggleFavoriteBrush(it.id) } },
+            onShare = { preset?.let { vm.shareBrushPreset(context, it.id) } },
+            onReset = { preset?.let { vm.resetBrushPresetToDefault(it.id) } },
             onUp = { vm.moveBrushUp(rp) },
             onDown = { vm.moveBrushDown(rp) },
             onMoveGroup = { movePresetName = rp },

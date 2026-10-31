@@ -104,7 +104,7 @@ fun QuickBrushWindow(
 
     val isCollapsed = vm.quickBrushCollapsed
     val isVertical = vm.quickBrushOrientation == "vertical"
-    val favoritePresets = remember(vm.brushPresets, vm.favoriteBrushNames, vm.quickBrushOrder) {
+    val favoritePresets = remember(vm.brushPresets, vm.favoriteBrushIds, vm.quickBrushOrder) {
         vm.getOrderedFavoriteBrushes()
     }
     val maxListLengthDp = remember(vm.quickBrushMaxLength) {

@@ -257,7 +257,7 @@ fun BrushStudioPage(
                             text = stringResource(R.string.brush_share_action),
                             onClick = {
                                 showMenu = false
-                                preset?.let { vm.shareBrushPreset(context, it.name) }
+                                preset?.let { vm.shareBrushPreset(context, it.id) }
                             },
                         )
                         ReDropdownMenuItem(
@@ -299,7 +299,7 @@ fun BrushStudioPage(
                         .padding(horizontal = 14.dp, vertical = 8.dp),
                 ) {
                     // W-16：迁移时标 migrated_possibly_modified 的导入笔刷，提示原件可能被旧版改写过
-                    val possiblyModified = preset?.name?.let { com.reverie.paint.core.brushstore.BrushApplicability.possiblyModified(it) } == true
+                    val possiblyModified = preset?.id?.let { com.reverie.paint.core.brushstore.BrushApplicability.possiblyModified(it) } == true
                     if (possiblyModified) {
                         Text(
                             stringResource(R.string.brush_possibly_modified_hint),

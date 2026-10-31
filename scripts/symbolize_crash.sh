@@ -37,12 +37,39 @@ fi
 
 # 找库的顺序: --version 指定的归档缓存 -> 构建产物 -> 预编译闭包
 SYMBOL_VERSION="${SYMBOL_VERSION:-}"
+CACHE_DIR="${REVP_SYMBOL_CACHE:-$HOME/.cache/revp-symbols}"
+
+# 本机没有这个版本的库时, 从 Worker 的 KV 里取(gzip 传输, 落盘解压)
+# 需要 REVP_STATS_KEY; 端点可用 REVP_TELEMETRY_ENDPOINT 覆盖
+fetch_remote_symbol() {
+	local ver="$1" base="$2"
+	[[ -n "${REVP_STATS_KEY:-}" ]] || return 1
+	local endpoint="${REVP_TELEMETRY_ENDPOINT:-https://telemetry.lanrhyme.top}"
+	local dest="$CACHE_DIR/$ver"
+	mkdir -p "$dest"
+	local gz="$dest/$base.gz"
+	echo "  取回 $ver/$base ..." >&2
+	curl -fsSL --max-time 600 "$endpoint/t/v1/symbols/$ver/$base?key=$REVP_STATS_KEY" -o "$gz" || { rm -f "$gz"; return 1; }
+	gunzip -f "$gz" || return 1
+	[[ -f "$dest/$base" ]] || return 1
+	echo "  已缓存到 $dest/$base" >&2
+}
+
 find_module() {
 	local base="$1"
 	local hit
 	if [[ -n "$SYMBOL_VERSION" ]]; then
-		hit="$(ls -1 "${REVP_SYMBOL_CACHE:-$HOME/.cache/revp-symbols}/$SYMBOL_VERSION/$base" 2>/dev/null | head -1 || true)"
-		[[ -n "$hit" ]] && { echo "$hit"; return; }
+		hit="$CACHE_DIR/$SYMBOL_VERSION/$base"
+		[[ -f "$hit" ]] && { echo "$hit"; return; }
+		# 只对自家产出的库尝试远程取: 系统库/第三方库在 KV 里本来就没有
+		case "$base" in
+			libreverie_core.so | libreverie_jni.so)
+				if fetch_remote_symbol "$SYMBOL_VERSION" "$base" && [[ -f "$hit" ]]; then
+					echo "$hit"
+					return
+				fi
+				;;
+		esac
 	fi
 	hit="$(ls -1t app/build/intermediates/cxx/Release/*/obj/arm64-v8a/"$base" 2>/dev/null | head -1 || true)"
 	if [[ -z "$hit" ]]; then

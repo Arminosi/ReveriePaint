@@ -35,17 +35,18 @@ import java.util.zip.GZIPOutputStream
 object TelemetryReporter {
 
     private const val TAG = "ReverieTelemetry"
-    private const val STARTUP_DELAY_SEC = 30L
+    // 30s 太长: 真机上切后台后进程会被 cgroup freezer 冻住, 定时器根本不跑(实测 WCHAN=do_freezer_trap)
+    private const val STARTUP_DELAY_SEC = 8L
     private const val MAX_UPLOADS_PER_RUN = 3
     private const val MAX_REPORT_BYTES = 2L * 1024 * 1024
     private const val MAX_AGE_MS = 30L * 24 * 60 * 60 * 1000
     private const val DAILY_LIMIT = 5
-    private const val MAX_FAILURES = 3
     private const val CONNECT_TIMEOUT_SEC = 10L
     private const val READ_TIMEOUT_SEC = 15L
 
     private val JSON = "application/json; charset=utf-8".toMediaType()
     private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
+    private val scanRequested = java.util.concurrent.atomic.AtomicBoolean(false)
 
     private val executor = ScheduledThreadPoolExecutor(1) { runnable ->
         Thread(runnable, "reverie-telemetry").apply {
@@ -69,11 +70,30 @@ object TelemetryReporter {
 
     /** Application.onCreate 里调用: 延迟触发一次扫描, 不阻塞启动 */
     fun scheduleStartupScan(context: Context) {
+        Log.d(TAG, "scheduleStartupScan configured=$isConfigured")
         if (!isConfigured) return
         val app = context.applicationContext
         runCatching {
-            executor.schedule({ safely("startup-scan") { performScan(app) } }, STARTUP_DELAY_SEC, TimeUnit.SECONDS)
+            executor.schedule(
+                {
+                    scanRequested.set(true)
+                    safely("startup-scan") { performScan(app) }
+                },
+                STARTUP_DELAY_SEC,
+                TimeUnit.SECONDS,
+            )
         }.onFailure { Log.w(TAG, "schedule failed: ${it.javaClass.simpleName}") }
+    }
+
+    /**
+     * 立刻触发一次扫描(不延迟)。给 Activity.onStop 用: 用户离开应用时进程还没被冻结,
+     * 这是"延迟定时器可能永远不触发"的兜底。同一进程内只会真正跑一次。
+     */
+    fun requestScanNow(context: Context) {
+        if (!isConfigured) return
+        if (!scanRequested.compareAndSet(false, true)) return
+        val app = context.applicationContext
+        runCatching { executor.execute { safely("onstop-scan") { performScan(app) } } }
     }
 
     /**
@@ -112,6 +132,7 @@ object TelemetryReporter {
 
     private fun performScan(context: Context) {
         val prefs = TelemetryPrefs(context)
+        Log.d(TAG, "performScan enabled=${prefs.enabled} serverDisabled=${prefs.serverDisabled} today=${prefs.todayCount()}")
         if (!prefs.enabled || prefs.serverDisabled) return
         if (System.currentTimeMillis() < prefs.nextAttemptAtMs) return
 
@@ -131,6 +152,7 @@ object TelemetryReporter {
             .filter { !prefs.isUploaded(it.name) }
             .sortedByDescending { it.lastModified() }
             .take(MAX_UPLOADS_PER_RUN)
+        Log.d(TAG, "scan all=${all.size} pending=${pending.size}")
 
         for (file in pending) {
             if (prefs.todayCount() >= DAILY_LIMIT) {
@@ -166,21 +188,15 @@ object TelemetryReporter {
     private fun onFailure(prefs: TelemetryPrefs, file: File, code: Int?) {
         val fails = prefs.failCount + 1
         prefs.failCount = fails
-        if (fails >= MAX_FAILURES) {
-            // 放弃这一条(本地文件保留, 只是不再重试), 免得网络常年不通时反复消耗
-            prefs.markUploaded(file.name)
-            prefs.failCount = 0
-            prefs.nextAttemptAtMs = 0L
-            Log.w(TAG, "give up $file after $fails failures (last code=$code)")
-            return
-        }
+        // 不再"失败 N 次就永久放弃": 国内网络抖动/污染很常见, 丢一条崩溃现场比多试几次贵得多。
+        // 退避封顶 24h, 真正的丢弃只由 30 天保留期决定。
         val delayMs = when (fails) {
             1 -> TimeUnit.HOURS.toMillis(1)
             2 -> TimeUnit.HOURS.toMillis(6)
             else -> TimeUnit.HOURS.toMillis(24)
         }
         prefs.nextAttemptAtMs = System.currentTimeMillis() + delayMs
-        Log.w(TAG, "upload failed (code=$code), retry in ${delayMs / 1000}s")
+        Log.w(TAG, "upload failed (code=$code, fails=$fails), retry in ${delayMs / 1000}s")
     }
 
     private fun uploadAnrs(context: Context, prefs: TelemetryPrefs) {
@@ -286,7 +302,8 @@ object TelemetryReporter {
 
         client.newCall(builder.build()).execute().use { it.code }
     }.onFailure {
-        Log.i(TAG, "post failed: ${it.javaClass.simpleName}")
+        // 打全栈: 真机上光看类名分不清是 DNS 污染、证书、还是超时
+        Log.w(TAG, "post failed", it)
     }.getOrNull()
 
     private fun isFatal(code: Int): Boolean = code == 401 || code == 403 || code == 410

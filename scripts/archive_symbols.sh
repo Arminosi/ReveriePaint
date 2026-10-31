@@ -7,6 +7,7 @@
 # 用法:
 #   ./scripts/archive_symbols.sh              # 版本号从 app/build.gradle.kts 读
 #   ./scripts/archive_symbols.sh 49           # 或手动指定
+#   ./scripts/archive_symbols.sh 49 --upload  # 同时推到 Worker 的 KV, 换机器也能符号化
 #   ./scripts/archive_symbols.sh --list       # 看看归档了哪些版本
 #
 # 归档位置: ~/.cache/revp-symbols/<versionCode>/
@@ -31,7 +32,15 @@ if [[ "${1:-}" == "--list" ]]; then
 	exit 0
 fi
 
-VERSION_CODE="${1:-}"
+UPLOAD=0
+ARGS=()
+for a in "$@"; do
+	case "$a" in
+		--upload) UPLOAD=1 ;;
+		*) ARGS+=("$a") ;;
+	esac
+done
+VERSION_CODE="${ARGS[0]:-}"
 if [[ -z "$VERSION_CODE" ]]; then
 	VERSION_CODE="$(grep -E '^[[:space:]]*versionCode = ' app/build.gradle.kts | head -1 | tr -dc '0-9')"
 fi
@@ -93,3 +102,22 @@ fi
 
 echo "已归档到 $DEST ($copied 个库)"
 cat "$DEST/manifest.txt"
+
+if [[ "$UPLOAD" == "1" ]]; then
+	NS_ID="$(grep -A2 'binding = "SYMBOLS"' telemetry/worker/wrangler.toml | grep -E '^\s*id\s*=' | sed 's/.*"\(.*\)".*/\1/' | head -1)"
+	if [[ -z "$NS_ID" ]]; then
+		echo "错误: 读不到 SYMBOLS 的 KV namespace id" >&2
+		exit 1
+	fi
+	echo "== 上传到 KV ($NS_ID) =="
+	TMP_GZ="$(mktemp -t revp-sym.XXXXXX.gz)"
+	for lib in "${OWN_LIBS[@]}"; do
+		[[ -f "$DEST/$lib" ]] || continue
+		gzip -9 -c "$DEST/$lib" > "$TMP_GZ"
+		printf '  %-26s %s\n' "$lib" "$(du -h "$TMP_GZ" | cut -f1)"
+		(cd telemetry/worker && env -u CLOUDFLARE_API_TOKEN npx -y wrangler@4 kv key put --remote --namespace-id "$NS_ID" "$VERSION_CODE/$lib" --path "$TMP_GZ" >/dev/null)
+	done
+	(cd telemetry/worker && env -u CLOUDFLARE_API_TOKEN npx -y wrangler@4 kv key put --remote --namespace-id "$NS_ID" "$VERSION_CODE/manifest.txt" --path "$DEST/manifest.txt" >/dev/null)
+	rm -f "$TMP_GZ"
+	echo "已上传 $VERSION_CODE 的符号到 KV"
+fi

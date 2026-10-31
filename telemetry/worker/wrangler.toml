@@ -17,6 +17,12 @@ binding = "DB"
 database_name = "reveriepaint_telemetry"
 database_id = "f183220b-73ca-4f85-945a-4af05c77a8ab"
 
+# 符号归档: 未 strip 的 .so 先 gzip 再放 KV(单值上限 25MB, core 库压后约 11MB)。
+# Worker 只做透传, 不解压 —— 免费版单请求 CPU 只有 10ms, 解 47MB 会超。
+[[kv_namespaces]]
+binding = "SYMBOLS"
+id = "541de0f29fd543b9a45a09ad54f7696f"
+
 [vars]
 # 1 = 全局停用(客户端收到 410 后本机永久停用)
 DISABLED = "0"

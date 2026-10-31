@@ -59,6 +59,7 @@ npx wrangler deploy --var DISABLED:1
 | `POST` | `/t/v1/stats` | 登录表单(`password` + `next`),成功后 303 + 一年期 Cookie |
 | `GET` | `/t/v1/logout` | 清 Cookie 并跳回看板 |
 | `GET` | `/t/v1/alerts/test` | 发测试通知;`?mode=scan` 立刻跑一次告警扫描 |
+| `GET` | `/t/v1/symbols/<versionCode>/<file>` | 未 strip 的 `.so`(gzip 透传)与 manifest,需登录;由 `scripts/archive_symbols.sh --upload` 上传 |
 | `GET` | `/t/v1/health` | 存活探针,回显 `disabled` 状态 |
 
 ## 看板

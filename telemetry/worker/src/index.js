@@ -43,6 +43,9 @@ export default {
       if (path === '/t/v1/stats' && request.method === 'POST') {
         return await handleLogin(request, url, env);
       }
+      if (path.startsWith('/t/v1/symbols/')) {
+        return await handleSymbols(request, url, env);
+      }
       if (path === '/t/v1/alerts/test') {
         await requireStatsAuth(request, url, env);
         if (url.searchParams.get('mode') === 'scan') {
@@ -468,6 +471,45 @@ button:hover{filter:brightness(1.05)}
   <p class="foot">密码由上架时设置 · Cookie 保留一年</p>
 </form>
 </body></html>`;
+}
+
+// ---------------------------------------------------------------- 符号归档
+
+const SYMBOL_FILES = new Set(['libreverie_core.so', 'libreverie_jni.so', 'manifest.txt']);
+
+/**
+ * GET /t/v1/symbols/<versionCode>/<file>
+ * 返回未 strip 的库(以 gzip 存、gzip 传), 供本机符号化时取用。
+ * 与看板同一套鉴权: 符号文件也算内部资料。
+ */
+async function handleSymbols(request, url, env) {
+  await requireStatsAuth(request, url, env);
+  const rest = url.pathname.replace('/t/v1/symbols/', '');
+  const slash = rest.indexOf('/');
+  const version = slash > 0 ? rest.slice(0, slash).replace(/\D/g, '').slice(0, 8) : '';
+  const file = slash > 0 ? rest.slice(slash + 1) : 'manifest.txt';
+  if (!version || !SYMBOL_FILES.has(file)) throw new HttpError(404, 'not_found');
+  if (!env.SYMBOLS) throw new HttpError(503, 'kv_not_bound');
+
+  const key = `${version}/${file}`;
+  if (file === 'manifest.txt') {
+    const text = await env.SYMBOLS.get(key, 'text');
+    if (!text) throw new HttpError(404, 'not_found');
+    return new Response(text, {
+      headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'private, max-age=300' },
+    });
+  }
+
+  // 大文件走流式透传: KV 里存的就是 gzip 字节, 这里不解压
+  const stream = await env.SYMBOLS.get(key, 'stream');
+  if (!stream) throw new HttpError(404, 'not_found');
+  return new Response(stream, {
+    headers: {
+      'content-type': 'application/gzip',
+      'content-disposition': `attachment; filename="${file}.gz"`,
+      'cache-control': 'private, max-age=300',
+    },
+  });
 }
 
 // ---------------------------------------------------------------- 告警

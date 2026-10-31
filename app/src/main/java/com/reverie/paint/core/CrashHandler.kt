@@ -71,7 +71,7 @@ object CrashHandler : Thread.UncaughtExceptionHandler {
         // 前缓冲原生路径隔离判定 (必须在任何画布挂载之前完成)
         evaluateFrontBufferQuarantine(context, logDir)
         // 原生崩溃报告本身没有设备信息, 这里把环境写进它的状态快照
-        seedNativeStateSnapshot(context)
+        NativeCrashContext.attach(context)
 
         cleanupStaleSwapFiles(context)
     }
@@ -111,7 +111,11 @@ object CrashHandler : Thread.UncaughtExceptionHandler {
      * 把设备/系统/前缓冲开关状态写进 Native 崩溃报告的状态快照。
      * 原生信号处理器拿不到 `android.os.Build`, 只能由 Kotlin 侧提前灌进去。
      */
-    private fun seedNativeStateSnapshot(context: Context) {
+    /**
+     * 拼原生崩溃处理器用的状态快照。除了设备/系统/前缓冲开关, 还带上"崩的时候在干什么":
+     * 页面、工具、画布尺寸、图层数 —— 这些以前是缺的, 导致上报的 doc 字段全 0。
+     */
+    internal fun buildNativeState(context: Context): String {
         val prefs = context.getSharedPreferences("paint_prefs", Context.MODE_PRIVATE)
         val predictionPref = prefs.getBoolean(
             "frontBufferPredictionEnabled",
@@ -134,7 +138,22 @@ object CrashHandler : Thread.UncaughtExceptionHandler {
             .append(" quarantined=")
             .append(com.reverie.paint.core.stylus.FrontBufferProbe.isCrashQuarantined())
             .append('\n')
-        Breadcrumbs.updateState(sb.toString())
+
+        // 崩溃时的应用上下文(ViewModel 还没创建时只有设备信息)
+        val vm = MainActivity.currentViewModel
+        if (vm != null) {
+            runCatching {
+                sb.append("Current Page: ").append(vm.currentPage.name).append('\n')
+                vm.currentToolId.takeIf { it.isNotBlank() }
+                    ?.let { sb.append("Active Tool: ").append(it).append('\n') }
+                // 没有打开文档时 docWidth/docHeight 是默认值(1080x1920), 别当成真实画布
+                if (vm.layers.isNotEmpty() && vm.docWidth > 0 && vm.docHeight > 0) {
+                    sb.append("Document: ").append(vm.docWidth).append(" x ").append(vm.docHeight).append('\n')
+                }
+                sb.append("Layers Count: ").append(vm.layers.size).append('\n')
+            }
+        }
+        return sb.toString()
     }
 
     private fun cleanupStaleSwapFiles(context: Context) {

@@ -68,6 +68,17 @@ addr2line -f -C -e /tmp/ch/crashhost 0x<帧偏移>
 
 现有 15 个调用点中 5 个插值了用户数据(笔刷预设名、画作名)。本地留存无妨(是用户自己点分享的),但**上传路径不得复用 `dump()` 的原文**,必须走 §5.3 的白名单规约。
 
+**(d) native 快照里的"在干什么"**
+
+原生崩溃处理器读的是一块静态缓冲区,原本只在 `CrashHandler.init` 里灌一次设备信息,
+所以 `native_crash` 上报的画布尺寸/图层数永远是 0。现在:
+
+- `NativeCrashContext.attach()` 启动时灌一次基线
+- `Breadcrumbs.record()` 里顺带触发 `requestRefresh()` —— 因为现有的 15 个埋点恰好覆盖了
+  切工具、加删图层、打开工程、切页面这些关键操作
+- 1.5 秒限流 + 内容不变不重复写;刷新统一切到主线程做(避免跨线程读 Compose 状态)
+- `MainActivity` 在 ViewModel 创建后补一次刷新,覆盖"冷启动几秒内就崩"的情况
+
 ## 3. 数据流
 
 ```
@@ -145,7 +156,9 @@ ANR 走另一条支路:启动时读 `ActivityManager.getHistoricalProcessExitRea
 
 > 这几项是"数值型上下文",不含任何用户内容。取舍记录: 曾考虑完全不上报数值以求最保守,但那会让绝大多数崩溃退化为"不知道在什么规模上崩的",归因效率减半,故保留并在 `docs/PRIVACY.md` 中逐条列明。
 >
-> 已知限制: `native_crash` 的 `doc` 目前是全 0 —— 原生信号处理器的状态快照在启动时一次性灌入(`seedNativeStateSnapshot`),里面只有设备/系统/前缓冲开关,没有画布尺寸与图层数。要补这段需要在文档变化时同步 JNI 状态,属于下一步工作。
+> `native_crash` 的 `doc` 现在也会带上:原生侧的状态快照不再只在启动时灌一次,而是由
+> `NativeCrashContext` 在用户操作后刷新(见 §2.1(d))。冷启动后还没打开文档就崩溃时,
+> 只有页面/工具,没有画布尺寸与图层数 —— 这是预期行为。
 
 ### 5.4 `crumbs`(面包屑白名单)
 
@@ -332,13 +345,12 @@ Worker 不读 `CF-Connecting-IP`,不写任何 IP 或 IP 哈希。滥用防护靠
 
 ## 11. 未做(后续版本再议)
 
-- **符号化的云端化**: 现在是本机归档 + 本机符号化(§11.1)。官方 Release 用的仍是
-  `third_party` 里已 strip 的预编译库,所以线上崩溃要能符号化,前提是发版前在本地跑过
-  `build_native.sh` + `archive_symbols.sh 48` 并保留 `~/.cache/revp-symbols/`
+- **符号化的自动化**: 归档/上传已经脚本化(§11.1),但还需要发版前手动跑一次;
+  官方 Release 用的仍是 `third_party` 里已 strip 的预编译库,所以符号只能来自本地构建
 - 功能采用率埋点(需要用户显式 opt-in,与崩溃遥测不是同一个开关)
 - 性能画像(帧率/笔画延迟矩阵),设计见 `docs/RENDER-OPTIMIZATION.md`,是否上报单独评审
 - 多维度看板(现在只有一张聚合简表)
-- `native_crash` 的 `doc` 字段(§5.3 已知限制)
+
 
 ### 11.1 符号化一个崩溃
 
@@ -356,6 +368,9 @@ Worker 不读 `CF-Connecting-IP`,不写任何 IP 或 IP 哈希。滥用防护靠
 ```
 
 - 直接在详情页复制 `llvm-addr2line -f -C -e <模块> 0x<偏移>` 也行,脚本只是帮你批量做
+- 归档可以推到线上(`archive_symbols.sh 48 --upload`),之后在任何机器上
+  `REVP_STATS_KEY=... ./scripts/symbolize_crash.sh --version 48 <log>` 会自动从
+  Worker 的按键归档里取回(§7.4 的 `SYMBOLS` KV, 走登录鉴权)
 - **前提是有一份未 strip 的 `.so`**,并且它的源码版本与崩溃的 `versionCode` 对得上。
   脚本默认在 `app/build/intermediates/cxx/Release/*/obj/arm64-v8a/` 里找最新的同名库
   (即本地 `-PbuildNative` 的产物)

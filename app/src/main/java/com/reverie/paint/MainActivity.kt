@@ -173,6 +173,9 @@ class MainActivity : ComponentActivity() {
             .ensureLoaded()
         val vm = ViewModelProvider(this)[PaintViewModel::class.java]
         currentViewModel = vm
+        // 原生崩溃快照里要带上"当前页面/工具/画布", 这里补一次刷新:
+        // 冷启动后几秒内崩溃时, 光靠 Breadcrumbs 触发可能还没发生过任何用户操作
+        com.reverie.paint.core.NativeCrashContext.requestRefresh()
         vm.appContext = applicationContext
         vm.initPerformanceHintSession()
         vm.syncSettingsFromPrefs()
@@ -517,6 +520,8 @@ class MainActivity : ComponentActivity() {
         currentViewModel?.refreshStylusAudioGate(false)
         // 当软件切入后台时，自动触发后台保存
         currentViewModel?.onAppBackgrounded()
+        // 切后台时进程还没被 cgroup freezer 冻住, 这是崩溃上报"延迟定时器可能永不触发"的兜底
+        com.reverie.paint.core.telemetry.TelemetryReporter.requestScanNow(this)
     }
 
     override fun onDestroy() {

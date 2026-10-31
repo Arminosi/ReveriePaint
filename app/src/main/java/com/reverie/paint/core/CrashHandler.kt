@@ -13,6 +13,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.Debug
 import android.os.Environment
+import android.os.Process
 import android.provider.MediaStore
 import android.util.Log
 import androidx.core.content.FileProvider
@@ -216,6 +217,11 @@ object CrashHandler : Thread.UncaughtExceptionHandler {
         sb.append("Device: ${Build.DEVICE}\n")
         sb.append("Hardware: ${Build.HARDWARE}\n")
         sb.append("Android Release: ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})\n")
+        // 进程位数决定加载的是哪一套 .so: 排查 UnsatisfiedLinkError / ABI 装错包的第一判据
+        sb.append(
+            "ABI: ${Build.SUPPORTED_ABIS.joinToString(",")} " +
+                "(process ${if (Process.is64Bit()) "64-bit" else "32-bit"})\n",
+        )
         sb.append("Fingerprint: ${Build.FINGERPRINT}\n")
 
         val harmonyVersion = detectHarmonyOsVersion()

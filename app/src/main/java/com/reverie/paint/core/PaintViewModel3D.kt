@@ -9,6 +9,7 @@ import android.util.Log
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.reverie.paint.R
 import com.reverie.paint.model.*
 import java.io.BufferedReader
@@ -439,78 +440,85 @@ internal fun PaintViewModel.create3DLayerFromFile(
     uri: Uri,
     fileName: String,
 ) {
-    val cleanName = fileName.replace(Regex("\\.(glb|vrm|pmx|obj)$", RegexOption.IGNORE_CASE), "")
-    val displayName = getString(R.string.layer_3d_tag) + " (" + cleanName + ")"
+    // 3D 模型解析是重 IO + CPU 活 (大 obj 可到数万行): 必须离开主线程, 否则选完文件
+    // 立刻 input dispatch timeout (1.6.2 线上 ANR 的主线程栈就停在 Mesh3D 解析里)。
+    viewModelScope.launch(Dispatchers.IO) {
+        val cleanName = fileName.replace(Regex("\\.(glb|vrm|pmx|obj)$", RegexOption.IGNORE_CASE), "")
+        val displayName = getString(R.string.layer_3d_tag) + " (" + cleanName + ")"
 
-    // 本地持久化缓存，防止设备重启或临时授权失效后丢失外部 3D 模型
-    val modelsDir = java.io.File(appContext.filesDir, "3d_models").apply { mkdirs() }
-    val safeFileName = "model_${System.currentTimeMillis()}_$fileName"
-    val localFile = java.io.File(modelsDir, safeFileName)
-    try {
-        appContext.contentResolver.openInputStream(uri)?.use { input ->
-            localFile.outputStream().use { output ->
-                input.copyTo(output)
+        // 本地持久化缓存，防止设备重启或临时授权失效后丢失外部 3D 模型
+        val modelsDir = java.io.File(appContext.filesDir, "3d_models").apply { mkdirs() }
+        val safeFileName = "model_${System.currentTimeMillis()}_$fileName"
+        val localFile = java.io.File(modelsDir, safeFileName)
+        try {
+            appContext.contentResolver.openInputStream(uri)?.use { input ->
+                localFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
             }
+        } catch (e: Exception) {
+            Log.e("RP_3D", "Failed to cache 3D model file to app internal storage", e)
         }
-    } catch (e: Exception) {
-        Log.e("RP_3D", "Failed to cache 3D model file to app internal storage", e)
-    }
 
-    val modelPathKey = if (localFile.exists() && localFile.length() > 0) {
-        "file:${localFile.absolutePath}"
-    } else {
-        "uri:$uri"
-    }
-
-    try {
-        val stream = if (localFile.exists() && localFile.length() > 0) {
-            localFile.inputStream()
+        val modelPathKey = if (localFile.exists() && localFile.length() > 0) {
+            "file:${localFile.absolutePath}"
         } else {
-            appContext.contentResolver.openInputStream(uri)
+            "uri:$uri"
         }
-        val lowerName = fileName.lowercase()
-        stream?.use { s ->
-            when {
-                lowerName.endsWith(".glb") || lowerName.endsWith(".vrm") -> {
-                    val skinned = GlbParser.parse(s)
-                    skinnedModelCache[modelPathKey] = skinned
-                }
-                lowerName.endsWith(".pmx") -> {
-                    val skinned = PmxParser.parse(s)
-                    skinnedModelCache[modelPathKey] = skinned
-                }
-                else -> {
-                    val mesh = Mesh3D.parseObj(BufferedReader(InputStreamReader(s)))
-                    meshCache[modelPathKey] = mesh
+
+        try {
+            val stream = if (localFile.exists() && localFile.length() > 0) {
+                localFile.inputStream()
+            } else {
+                appContext.contentResolver.openInputStream(uri)
+            }
+            val lowerName = fileName.lowercase()
+            stream?.use { s ->
+                when {
+                    lowerName.endsWith(".glb") || lowerName.endsWith(".vrm") -> {
+                        val skinned = GlbParser.parse(s)
+                        skinnedModelCache[modelPathKey] = skinned
+                    }
+                    lowerName.endsWith(".pmx") -> {
+                        val skinned = PmxParser.parse(s)
+                        skinnedModelCache[modelPathKey] = skinned
+                    }
+                    else -> {
+                        val mesh = Mesh3D.parseObj(BufferedReader(InputStreamReader(s)))
+                        meshCache[modelPathKey] = mesh
+                    }
                 }
             }
+        } catch (e: Exception) {
+            Log.e("RP_3D", "Failed to parse imported 3D model file", e)
+            return@launch
         }
-    } catch (e: Exception) {
-        Log.e("RP_3D", "Failed to parse imported 3D model file", e)
-        return
-    }
 
-    clearLayerSelection()
-    runCore(after = {
-        syncLayersFromNative()
-        val curIdx = currentLayerIndex
-        val layer = layers.getOrNull(curIdx)
-        if (layer != null) {
-            val initialState = Model3DState(
-                layerId = layer.id,
-                modelType = modelPathKey,
-                rotX = 15f,
-                rotY = -30f,
-                zoom = 1.0f,
-                renderMode = RenderMode3D.CLAY,
-            )
-            active3DLayers = active3DLayers + (layer.id to initialState)
-            ensure3DLayerClearedInCore(layer.id)
-            active3DSelectedJointName = null
-            showActionToast(R.string.toast_3d_layer_created, R.drawable.ic_eye)
+        // 解析结果落到缓存后再回主线程改 UI 状态; 引擎调用照旧走 runCore 的队列。
+        withContext(Dispatchers.Main.immediate) {
+            clearLayerSelection()
+            runCore(after = {
+                syncLayersFromNative()
+                val curIdx = currentLayerIndex
+                val layer = layers.getOrNull(curIdx)
+                if (layer != null) {
+                    val initialState = Model3DState(
+                        layerId = layer.id,
+                        modelType = modelPathKey,
+                        rotX = 15f,
+                        rotY = -30f,
+                        zoom = 1.0f,
+                        renderMode = RenderMode3D.CLAY,
+                    )
+                    active3DLayers = active3DLayers + (layer.id to initialState)
+                    ensure3DLayerClearedInCore(layer.id)
+                    active3DSelectedJointName = null
+                    showActionToast(R.string.toast_3d_layer_created, R.drawable.ic_eye)
+                }
+            }) {
+                ReverieCoreBridge.addLayer(displayName)
+            }
         }
-    }) {
-        ReverieCoreBridge.addLayer(displayName)
     }
 }
 

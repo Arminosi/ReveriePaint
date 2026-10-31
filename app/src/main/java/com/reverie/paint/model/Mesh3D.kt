@@ -8,6 +8,13 @@ import java.io.BufferedReader
 import kotlin.math.*
 
 /**
+ * OBJ 每行的空白分隔符。必须提到文件级常量:
+ * 原先 `l.split("\\s+".toRegex())` 在解析循环里逐行编译正则, 大模型会持续触发 ICU
+ * 编译, 主线程导入时直接 ANR (1.6.2 线上 ANR 栈就在 Pattern.compile)。
+ */
+private val OBJ_TOKEN_SEPARATOR = Regex("\\s+")
+
+/**
  * 3D 几何网格数据 (顶点位置、法线、三角面索引与线框线段索引)
  */
 class Mesh3D(
@@ -996,7 +1003,7 @@ class Mesh3D(
                 val l = line!!.trim()
                 if (l.isEmpty() || l.startsWith("#")) continue
 
-                val tokens = l.split("\\s+".toRegex())
+                val tokens = l.split(OBJ_TOKEN_SEPARATOR)
                 if (tokens.isEmpty()) continue
 
                 when (tokens[0]) {

@@ -10,6 +10,9 @@
 #include "ReverieCoreInternal.h"
 #include "PixelAlpha.h"
 
+#include <KisInterstrokeDataFactory.h>
+#include <kundo2command.h>
+
 #include <QRegularExpression>
 #include <QBuffer>
 #include <QUrl>
@@ -1719,6 +1722,61 @@ void ReverieCore::setBrushAntiAliasing(int level)
     s->setProperty("antialiasEdges", aa);
 }
 
+/*
+ * 涂抹类预设 (colorsmudge) 的 Lightness 策略要求画笔设备上挂着
+ * KisColorSmudgeInterstrokeData: 真机笔画里这份数据由 KisTransaction 通过
+ * interstroke factory 注入, 而画笔工作室的取样预览没有事务 —— 策略会走
+ * KIS_SAFE_ASSERT_RECOVER 兜底分支, 那条分支又忘了给 layer overlay 指针赋值,
+ * 第一次 readRects 就解引用空指针 SIGSEGV (1.6.2 线上 51f7f06d17)。
+ *
+ * 这里直接按预设自带的 factory 手工挂一份数据, 让预览与真笔画走同一条策略路径;
+ * 预览结束 (或下一次 Start) 再摘掉。非涂抹预设的 factory 返回空, 调用是 no-op。
+ */
+void ReverieCore::ensureScratchpadInterstrokeData()
+{
+    if (!m_scratchpadDev || !m_brushPreset) {
+        return;
+    }
+    KisInterstrokeDataFactory *factory =
+        KisPaintOpRegistry::instance()->createInterstrokeDataFactory(m_brushPreset);
+    if (!factory) {
+        // 当前预设不需要 interstroke data: 摘掉旧的, 避免别的策略拿到涂抹专用设备
+        detachScratchpadInterstrokeData();
+        return;
+    }
+    // 画笔工作室切换预设不会重建预览设备, 所以每次落笔前都要对齐一次;
+    // 同一类预设 (factory 认为兼容) 直接复用, 不重新分配 overlay。
+    const KisInterstrokeDataSP existing = m_scratchpadDev->interstrokeData();
+    if (existing && factory->isCompatible(existing.data())) {
+        delete factory;
+        return;
+    }
+    KisInterstrokeData *rawData = factory->create(m_scratchpadDev);
+    delete factory;
+    if (!rawData) {
+        return;
+    }
+    KUndo2Command *cmd =
+        m_scratchpadDev->createChangeInterstrokeDataCommand(KisInterstrokeDataSP(rawData));
+    if (cmd) {
+        cmd->redo();
+        delete cmd;
+    }
+}
+
+void ReverieCore::detachScratchpadInterstrokeData()
+{
+    if (!m_scratchpadDev) {
+        return;
+    }
+    KUndo2Command *cmd =
+        m_scratchpadDev->createChangeInterstrokeDataCommand(KisInterstrokeDataSP());
+    if (cmd) {
+        cmd->redo();
+        delete cmd;
+    }
+}
+
 bool ReverieCore::scratchpadStart(int w, int h)
 {
     if (w <= 0 || h <= 0) return false;
@@ -1726,6 +1784,8 @@ bool ReverieCore::scratchpadStart(int w, int h)
         ? m_document->colorSpace()
         : KoColorSpaceRegistry::instance()->rgb8();
     if (!m_scratchpadDev || m_scratchpadWidth != w || m_scratchpadHeight != h) {
+        // 换设备前先摘掉引用旧设备的 interstroke data, 否则涂抹策略会拿着悬空的 overlay
+        detachScratchpadInterstrokeData();
         m_scratchpadDev = new KisPaintDevice(cs);
         m_scratchpadWidth = w;
         m_scratchpadHeight = h;
@@ -1747,6 +1807,8 @@ bool ReverieCore::scratchpadStart(int w, int h)
 bool ReverieCore::scratchpadStrokeStart(qreal x, qreal y, qreal pressure, qreal tiltX, qreal tiltY, qreal rotation)
 {
     if (!m_scratchpadDev || !m_brushPreset) return false;
+    // 涂抹类预设的策略要求设备上挂着 interstroke data (真笔画由事务注入, 预览没有事务)
+    ensureScratchpadInterstrokeData();
     if (m_scratchpadPainter) {
         m_scratchpadPainter->end();
         delete m_scratchpadPainter;

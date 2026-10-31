@@ -921,6 +921,9 @@ public:
     void setPresetIsEraser(bool eraser);
     bool scratchpadStart(int w, int h);
     bool scratchpadStrokeStart(qreal x, qreal y, qreal pressure, qreal tiltX = 0.0, qreal tiltY = 0.0, qreal rotation = 0.0);
+    /// 取样预览的涂抹策略需要设备上挂着 interstroke data (真笔画由事务注入), 见实现处注释。
+    void ensureScratchpadInterstrokeData();
+    void detachScratchpadInterstrokeData();
     bool scratchpadStrokeMove(qreal x, qreal y, qreal pressure, qreal tiltX = 0.0, qreal tiltY = 0.0, qreal rotation = 0.0);
     void scratchpadStrokeEnd();
     void scratchpadClear();

@@ -155,6 +155,14 @@ object AbrParser {
         val colorDynamics: AbrColorDynamicsInfo? = null,
         val airbrush: Boolean = false,
         val compositeOp: String = "normal",
+        /** PS 原生工具类（toolOptions.classId）："SmTl"（涂抹）、"MixB"（混合器）、"PbTl"（画笔）；缺省空字符串 */
+        val toolClass: String = "",
+        /** PS 涂抹强度（toolOptions.Prs，0..100 折算为 0.0..1.0）；缺省 1.0 */
+        val smudgeStrength: Double = 1.0,
+        /** PS 混合器画笔参数（0.0..1.0） */
+        val wetness: Double = 0.0,
+        val mix: Double = 0.0,
+        val dryness: Double = 0.0,
     )
 
     data class AbrPatternResource(
@@ -1223,11 +1231,17 @@ object AbrParser {
                 flowMin = ((extractDouble(prVr["Mnm "]) ?: 0.0) / 100.0).coerceIn(0.0, 1.0)
             }
 
-            // 工具选项：Include Tool Settings（brushPreset=true）时随预设保存的不透明度 / 流量
-            val toolOptions = extractItems(items["toolOptions"])
+            // 工具选项：Include Tool Settings（brushPreset=true）时随预设保存的不透明度 / 流量 / 工具类型
+            val toolOptionsDesc = items["toolOptions"] as? ActionDescriptorValue.Descriptor
+            val toolClass = toolOptionsDesc?.classId ?: ""
+            val toolOptions = toolOptionsDesc?.items ?: extractItems(items["toolOptions"])
             val useToolOptions = extractBool(toolOptions["brushPreset"])
             val toolOpacity = if (useToolOptions) ((extractDouble(toolOptions["Opct"]) ?: 100.0) / 100.0).coerceIn(0.0, 1.0) else 1.0
             val toolFlow = if (useToolOptions) ((extractDouble(toolOptions["flow"]) ?: 100.0) / 100.0).coerceIn(0.0, 1.0) else 1.0
+            val smudgeStrength = ((extractDouble(toolOptions["Prs"]) ?: 100.0) / 100.0).coerceIn(0.0, 1.0)
+            val wetness = (extractDouble(toolOptions["wetness"]) ?: 0.0).coerceIn(0.0, 1.0)
+            val mix = (extractDouble(toolOptions["mix"]) ?: 0.0).coerceIn(0.0, 1.0)
+            val dryness = (extractDouble(toolOptions["dryness"]) ?: 0.0).coerceIn(0.0, 1.0)
 
             // Dual Brush
             // useDualBrush 开关在 Photoshop 新格式里写在嵌套 dualBrush 描述符内部，
@@ -1370,6 +1384,11 @@ object AbrParser {
                     colorDynamics = colorDynamicsInfo,
                     airbrush = airbrush,
                     compositeOp = compOp,
+                    toolClass = toolClass,
+                    smudgeStrength = smudgeStrength,
+                    wetness = wetness,
+                    mix = mix,
+                    dryness = dryness,
                 )
             )
         }

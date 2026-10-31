@@ -19,7 +19,7 @@ import org.json.JSONObject
  */
 internal object AbrPresetConverter {
     /** 快照标签：转换逻辑有改动（会改变产出字节）时 +1；不参与任何分支 */
-    const val CONVERTER_VERSION = 9
+    const val CONVERTER_VERSION = 10
 
     data class Converted(val bp: BrushParams, val kppBytes: ByteArray, val tipScale: Double?)
 
@@ -77,10 +77,15 @@ internal object AbrPresetConverter {
         } else if (preset.pressureSize) {
             dynamicOptions["Size"] = """<!DOCTYPE params><params id="pressure"><curve>$sizeCurve</curve></params>"""
         }
+        // 流量压感镜像：部分计算圆笔刷（如 #2 硬边圆压力不透明度）原生配置仅开启流量压感 prVr 而无 opVr，
+        // 在 COMPAT_SAFE 模式下将流量压感等效镜像至不透明度，确保半透明叠色效果
+        val effectivePressureOpacity = preset.pressureOpacity ||
+            (policy == AbrBlendModes.Policy.COMPAT_SAFE && preset.isComputed && preset.pressureFlow)
+
         // 压感分支：Photoshop 传递面板的 Minimum（压感 0 时的不透明度/流量）→ 曲线起点 `0,min;1,1`（同 sizeCurveWithFloor 的下限做法）；
         // 抖动分支仍用 1−jitter 下限，取两者较大者，永不低于 PS 的 minimum
         // COMPAT_SAFE 模式下，针对喷枪或超小间距压感笔刷，设置 0.12 的保底起笔透明度，防止轻触屏幕时无墨
-        val safeOpacityMin = if (policy == AbrBlendModes.Policy.COMPAT_SAFE && (preset.airbrush || preset.spacing <= 0.02) && preset.pressureOpacity) {
+        val safeOpacityMin = if (policy == AbrBlendModes.Policy.COMPAT_SAFE && (preset.airbrush || preset.spacing <= 0.02) && effectivePressureOpacity) {
             maxOf(preset.opacityMin, 0.12)
         } else {
             preset.opacityMin
@@ -95,7 +100,7 @@ internal object AbrPresetConverter {
                 opacityCurve,
                 forceEnabled = true,
             )
-        } else if (preset.pressureOpacity) {
+        } else if (effectivePressureOpacity) {
             dynamicOptions["Opacity"] = sensorParams("pressure", opacityCurve, forceEnabled = true)
         }
         if (preset.tiltFlow) {
@@ -179,6 +184,30 @@ internal object AbrPresetConverter {
             BrushDiagnostics.log("abr_angle_control_unmapped", "preset" to preset.name, "control" to preset.angleControl)
         }
 
+        // 映射原生工具类型（Tool Preset）：严格基于 ActionDescriptor 的 toolOptions.classId 识别
+        // "SmTl" -> Photoshop Smudge Tool（涂抹工具）
+        // "MixB" -> Photoshop Mixer Brush（混合器画笔）
+        // 其余默认为 "paintbrush" 传统画笔
+        val isSmudge = preset.toolClass == "SmTl"
+        val isMixer = preset.toolClass == "MixB"
+        val isSmudgeFamily = isSmudge || isMixer
+        val targetPaintOpId = if (isSmudgeFamily) "colorsmudge" else "paintbrush"
+        val smudgeLength = when {
+            isSmudge -> preset.smudgeStrength.coerceIn(0.1, 1.0)
+            isMixer -> if (preset.wetness > 0.0) preset.wetness.coerceIn(0.1, 1.0) else 0.5
+            else -> 0.0
+        }
+        val colorRate = when {
+            isSmudge -> 0.0
+            isMixer -> if (preset.mix > 0.0) preset.mix.coerceIn(0.0, 1.0) else (1.0 - preset.dryness).coerceIn(0.0, 1.0)
+            else -> 0.0
+        }
+        val smudgeMode = if (isMixer) 1 else 0
+
+        if (isSmudgeFamily && preset.pressureFlow) {
+            dynamicOptions["SmudgeRate"] = sensorParams("pressure", flowCurve, forceEnabled = true)
+        }
+
         // COMPAT_SAFE 下双重画笔 linear_burn 回退至 burn，避免蒙版下溢吃光墨水；纹理减去在 100% 深度时保留 0.85 留底
         val dualCompositeOp = if (dual != null) {
             if (policy == AbrBlendModes.Policy.COMPAT_SAFE && (dual.compositeOp == "linear_burn" || dual.compositeOp == "burn" || dual.rawMode.equals("linearBurn", ignoreCase = true) || dual.rawMode.equals("CBrn", ignoreCase = true))) {
@@ -196,22 +225,43 @@ internal object AbrPresetConverter {
             }
         } else "multiply"
 
+        // 减法纹理防吞噬：当预设同时具备双重画笔与减法纹理时，主笔尖 Alpha 经双重正片叠底后已降至 0.05~0.15，
+        // Krita 减法公式 max(0, dst - src * depth) 在 depth > 0.10 时会扣光残留 Alpha 造成完全不出墨。
+        // 在 COMPAT_SAFE 下，将有双重画笔时的减法纹理深度锁定在 0.08，既保留纹理雕刻感又确保炭墨丰盈。
+        val isSubtractTex = effectiveTexMode == "subtract" || tex?.rawMode.equals("Sbtr", ignoreCase = true)
         val effectiveTexDepth = if (tex != null) {
-            if (policy == AbrBlendModes.Policy.COMPAT_SAFE && (effectiveTexMode == "subtract" || tex.rawMode.equals("Sbtr", ignoreCase = true)) && (tex.depth >= 0.99 || hasDual)) {
-                0.30
+            if (policy == AbrBlendModes.Policy.COMPAT_SAFE && isSubtractTex && (tex.depth >= 0.99 || hasDual)) {
+                if (hasDual) 0.08 else 0.30
             } else {
                 tex.depth
             }
         } else 0.5
 
+        val effectiveTexDepthMin = if (tex?.depthPressure == true) {
+            if (policy == AbrBlendModes.Policy.COMPAT_SAFE && hasDual && isSubtractTex) {
+                minOf(tex.depthMin, 0.08)
+            } else {
+                tex.depthMin
+            }
+        } else -1.0
+
+        // 物理间距防饱和校准：计算圆笔刷在 1% 极小间距且无散布时（如 19号画笔），
+        // Krita 逐印章 Over 叠加导致 1 像素内累积 100 次印章瞬间饱和至纯黑死硬边缘。
+        // COMPAT_SAFE 模式下平滑校准至 0.06（对齐 Krita 官方 Basic-5 间距标准），消除累积死黑并降低 83% 渲染负荷。
+        val safeSpacing = if (policy == AbrBlendModes.Policy.COMPAT_SAFE && preset.isComputed && preset.spacing <= 0.02 && preset.scatter <= 0.001) {
+            0.06
+        } else {
+            preset.spacing
+        }
+
         val effectiveSpacing = if (preset.scatterCount > 1 && preset.scatter > 0.001) {
-            (preset.spacing / preset.scatterCount).coerceIn(0.01, 5.0).also {
+            (safeSpacing / preset.scatterCount).coerceIn(0.01, 5.0).also {
                 BrushDiagnostics.log(
                     "abr_count_approx", "preset" to preset.name, "count" to preset.scatterCount,
                     "spacing" to preset.spacing, "to" to it,
                 )
             }
-        } else preset.spacing
+        } else safeSpacing
 
         val bp = BrushParams(
             size = preset.diameter,
@@ -242,7 +292,7 @@ internal object AbrPresetConverter {
             randomFlipY = preset.flipYJitter,
             pressureEnabled = hasPressureDynamics,
             pressureSize = if (preset.pressureSize || preset.tiltSize) 1.0 else 0.0,
-            pressureOpacity = if (preset.pressureOpacity || preset.tiltOpacity) 1.0 else 0.0,
+            pressureOpacity = if (effectivePressureOpacity || preset.tiltOpacity) 1.0 else 0.0,
             pressureFlow = if (preset.pressureFlow || preset.tiltFlow) 1.0 else 0.0,
             sizeSensor = sizeSensor,
             opacitySensor = opacitySensor,
@@ -265,7 +315,7 @@ internal object AbrPresetConverter {
             textureEnabled = textureApplied,
             textureScale = tex?.scale ?: 1.0,
             textureStrength = effectiveTexDepth,
-            textureStrengthPressureMin = if (tex?.depthPressure == true) tex.depthMin else -1.0,
+            textureStrengthPressureMin = effectiveTexDepthMin,
             textureMode = effectiveTexMode,
             texturePattern = if (textureApplied) resolvedRef!!.file else "",
             textureInvert = tex?.invert == true,
@@ -282,14 +332,18 @@ internal object AbrPresetConverter {
             secondaryMix = cd?.secondaryMix ?: 0.0,
             airbrush = preset.airbrush,
             tipAsset = matchedTipFileName,
-            paintOpId = "paintbrush",
+            paintOpId = targetPaintOpId,
+            smudgeRate = smudgeLength,
+            smudgeLength = smudgeLength,
+            colorRate = colorRate,
+            smudgeMode = smudgeMode,
             compositeOp = preset.compositeOp,
             author = "外部创作者 (ABR)",
             isAuthorLocked = true,
             description = "导入自 Photoshop ABR 笔刷包: $packBaseName",
             isCustomized = true,
-            dynamicsCustomized = hasDynamics,
-            smudgeCustomized = false,
+            dynamicsCustomized = hasDynamics || isSmudgeFamily,
+            smudgeCustomized = isSmudgeFamily,
         )
 
         // File-backed tips report `max(tipW, tipH) * scale` as the brush size

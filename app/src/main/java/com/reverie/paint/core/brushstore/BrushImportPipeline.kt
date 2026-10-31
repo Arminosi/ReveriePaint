@@ -30,7 +30,7 @@ object BrushImportPipeline {
     /** [tag]：bundle 的 META-INF/manifest.xml 里该预设的标签（Krita bundle 的分组），无则 null */
     data class Incoming(val wantedName: String, val ext: String, val bytes: ByteArray, val pack: String, val tag: String? = null)
 
-    data class Resource(val kind: String, val name: String, val bytes: ByteArray)
+    data class Resource(val kind: String, val name: String, val bytes: ByteArray, val relPath: String = "")
 
     data class Parsed(
         val presets: List<Incoming>,
@@ -67,6 +67,10 @@ object BrushImportPipeline {
                 if (!e.isDirectory && !path.contains("../") && !path.startsWith("__MACOSX/")) {
                     val file = path.substringAfterLast('/')
                     val parent = path.substringBeforeLast('/', "").substringAfterLast('/')
+                    val brushIdx = path.indexOf("brushes/", ignoreCase = true)
+                    val isBrush = brushIdx == 0 || (brushIdx > 0 && path[brushIdx - 1] == '/')
+                    val patIdx = path.indexOf("patterns/", ignoreCase = true)
+                    val isPattern = patIdx == 0 || (patIdx > 0 && path[patIdx - 1] == '/')
                     when {
                         file.isBlank() || file.startsWith(".") -> Unit
                         path.equals(MANIFEST_PATH, true) -> tags = parseManifestTags(zin.readBytes())
@@ -76,8 +80,14 @@ object BrushImportPipeline {
                             val clean = if (file.endsWith(".kpp", true)) KppHelper.stripKpp(raw) else raw
                             presets += Incoming(file.substringBeforeLast('.'), file.substringAfterLast('.').lowercase(), clean, pack)
                         }
-                        parent.equals("brushes", true) -> resources += Resource("brushes", file, zin.readBytes())
-                        parent.equals("patterns", true) -> resources += Resource("patterns", file, zin.readBytes())
+                        isBrush -> {
+                            val relPath = path.substring(brushIdx + 8)
+                            resources += Resource("brushes", file, zin.readBytes(), relPath)
+                        }
+                        isPattern -> {
+                            val relPath = path.substring(patIdx + 9)
+                            resources += Resource("patterns", file, zin.readBytes(), relPath)
+                        }
                         isArchive(file) && depth < MAX_DEPTH -> {
                             val nested = parseArchive(zin.readBytes(), pack, depth + 1)
                             presets += nested.presets
@@ -176,6 +186,10 @@ object BrushImportPipeline {
             } else {
                 BrushDiagnostics.log("import_resource_reuse", "kind" to r.kind, "name" to r.name)
             }
+            if (r.relPath.isNotEmpty() && r.relPath != r.name) {
+                renames[r.relPath] = ref.file
+                BrushDiagnostics.log("import_resource_rel_mapped", "kind" to r.kind, "rel" to r.relPath, "to" to ref.file)
+            }
         }
         return renames
     }
@@ -194,10 +208,20 @@ object BrushImportPipeline {
                 if (tip in parts) raw["requiredBrushFilesList"] = l.replace(tip, newTip)
             }
         }
+        val maskDef = KppXml.get(xml, KppXml.MASK_BRUSH_DEF)
+        if (maskDef != null) {
+            val maskTip = KppXml.tagAttr(maskDef, "Brush", "filename")
+            val newMaskTip = maskTip?.let { renames[it] }
+            if (newMaskTip != null) {
+                raw[KppXml.MASK_BRUSH_DEF] = KppXml.setTagAttr(maskDef, "Brush", "filename", newMaskTip)
+            }
+        }
         val patFile = KppXml.get(xml, "Texture/Pattern/PatternFileName")
         val patName = KppXml.get(xml, "Texture/Pattern/Name")
         // 真实 kpp 的 PatternFileName 常是作者机器上的绝对路径（/home/…/patterns/x.png），按文件名匹配
-        val newPat = (patFile?.substringAfterLast('/')?.substringAfterLast('\\')?.let { renames[it] }) ?: (patName?.let { renames[it] })
+        val newPat = (patFile?.substringAfterLast('/')?.substringAfterLast('\\')?.let { renames[it] })
+            ?: (patFile?.let { renames[it] })
+            ?: (patName?.let { renames[it] })
         if (newPat != null) {
             val refKeys = PresetPropertyMap.patternRefKeys(ResourceStore.Ref(md5 = "", file = newPat, kind = ResourceStore.Kind.PATTERN))
             for ((k, v) in refKeys) {
@@ -284,12 +308,18 @@ object BrushImportPipeline {
                     val path = e.name.replace('\\', '/')
                     if (e.isDirectory || path.contains("../") || path.startsWith("__MACOSX/")) continue
                     val file = path.substringAfterLast('/')
-                    val parent = path.substringBeforeLast('/', "").substringAfterLast('/')
                     if (file.isBlank() || file.startsWith(".")) continue
 
+                    val brushIdx = path.indexOf("brushes/", ignoreCase = true)
+                    val isBrush = brushIdx == 0 || (brushIdx > 0 && path[brushIdx - 1] == '/')
+                    val patIdx = path.indexOf("patterns/", ignoreCase = true)
+                    val isPattern = patIdx == 0 || (patIdx > 0 && path[patIdx - 1] == '/')
+
                     when {
-                        parent.equals("brushes", true) || parent.equals("patterns", true) -> {
-                            val kind = if (parent.equals("patterns", true)) ResourceStore.Kind.PATTERN else ResourceStore.Kind.TIP
+                        isBrush || isPattern -> {
+                            val kind = if (isPattern) ResourceStore.Kind.PATTERN else ResourceStore.Kind.TIP
+                            val prefixLen = if (isPattern) patIdx + 9 else brushIdx + 8
+                            val relPath = path.substring(prefixLen)
                             val rBytes = zip.getInputStream(e).use { it.readBytes() }
                             val existingFile = File(store.dirFor(kind), file)
                             val preferredName = if (existingFile.exists() && (existingFile.length() != rBytes.size.toLong() || !existingFile.readBytes().contentEquals(rBytes))) {
@@ -303,6 +333,10 @@ object BrushImportPipeline {
                                 BrushDiagnostics.log("import_resource_renamed", "kind" to kind.name.lowercase(), "from" to file, "to" to ref.file)
                             } else {
                                 BrushDiagnostics.log("import_resource_reuse", "kind" to kind.name.lowercase(), "name" to file)
+                            }
+                            if (relPath.isNotEmpty() && relPath != file) {
+                                renames[relPath] = ref.file
+                                BrushDiagnostics.log("import_resource_rel_mapped", "kind" to kind.name.lowercase(), "rel" to relPath, "to" to ref.file)
                             }
                         }
                         isArchive(file) && depth < MAX_DEPTH -> {

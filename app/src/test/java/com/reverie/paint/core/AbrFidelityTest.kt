@@ -350,4 +350,82 @@ class AbrFidelityTest {
         assertTrue(bp.dynamicOptions["Rotation"] ?: "", (bp.dynamicOptions["Rotation"] ?: "").contains("fuzzy"))
         assertEquals(0.35, bp.spacing, 1e-9)
     }
+
+    @Test
+    fun real_p19_spacingAndPressure() {
+        val p = realPreset(1)
+        assertEquals("1 十九号画笔 ABR 声明为计算笔", true, p.isComputed)
+        assertEquals("ABR 声明间距 1%", 0.01, p.spacing, 1e-9)
+        val c = realConv(1)
+        val bp = c.bp
+        assertEquals("COMPAT_SAFE 下物理间距校准至 0.06 消除累积死黑", 0.06, bp.spacing, 1e-9)
+        assertEquals(1.0, bp.pressureOpacity, 1e-9)
+        assertEquals(1.0, bp.pressureFlow, 1e-9)
+        val xml = KppHelper.readPresetXml(c.kppBytes)!!
+        assertTrue("XML 包含 PressureOpacity 开关", xml.contains("""name="PressureOpacity"><![CDATA[true]]>"""))
+        assertTrue("XML 包含 PressureFlow 开关", xml.contains("""name="PressureFlow"><![CDATA[true]]>"""))
+    }
+
+    @Test
+    fun real_p2_hardRoundFlowToOpacity() {
+        val p = realPreset(2)
+        assertEquals("2硬边圆 ABR 仅开流量压感", true, p.pressureFlow)
+        assertEquals("2硬边圆 ABR 原生未开不透明度压感", false, p.pressureOpacity)
+        val c = realConv(2)
+        val bp = c.bp
+        assertEquals("COMPAT_SAFE 下镜像启用不透明度压感", 1.0, bp.pressureOpacity, 1e-9)
+        assertEquals(1.0, bp.pressureFlow, 1e-9)
+        assertTrue(bp.dynamicOptions.containsKey("Opacity"))
+        val xml = KppHelper.readPresetXml(c.kppBytes)!!
+        assertTrue("XML 显式包含 PressureOpacity 开关", xml.contains("""name="PressureOpacity"><![CDATA[true]]>"""))
+        assertTrue("XML 显式包含 PressureFlow 开关", xml.contains("""name="PressureFlow"><![CDATA[true]]>"""))
+    }
+
+    @Test
+    fun real_p29_charcoalInkStarvationPrevented() {
+        val p = realPreset(29)
+        assertTrue("干木炭具备双重画笔", p.dualBrush != null)
+        assertTrue("干木炭具备纹理", p.texture != null)
+        assertEquals("Sbtr", p.texture!!.rawMode)
+        val c = realConv(29)
+        val bp = c.bp
+        assertEquals("双重+减法纹理深度上限限制在 0.08 防下溢", 0.08, bp.textureStrength, 1e-9)
+        assertEquals("双重+减法纹理压感深度下限钳位在 0.08", 0.08, bp.textureStrengthPressureMin, 1e-9)
+        assertEquals("双重画笔 linear_burn 回退至 multiply", "multiply", bp.maskingCompositeOp)
+    }
+
+    @Test
+    fun real_p33_p34_smudgeTool() {
+        val p33 = realPreset(33)
+        assertEquals("33 原生声明为 SmTl 涂抹工具", "SmTl", p33.toolClass)
+        val c33 = realConv(33)
+        assertEquals("路由至 colorsmudge 涂抹引擎", "colorsmudge", c33.bp.paintOpId)
+        assertTrue("涂抹强度由 Prs 91 映射", c33.bp.smudgeLength > 0.8)
+        assertEquals("纯涂抹模式", 0, c33.bp.smudgeMode)
+        assertTrue(c33.bp.smudgeCustomized)
+
+        val p34 = realPreset(34)
+        assertEquals("34 原生声明为 SmTl 涂抹工具", "SmTl", p34.toolClass)
+        val c34 = realConv(34)
+        assertEquals("路由至 colorsmudge 涂抹引擎", "colorsmudge", c34.bp.paintOpId)
+    }
+
+    @Test
+    fun real_p35_mixerBrush() {
+        val p35 = realPreset(35)
+        assertEquals("35 原生声明为 MixB 混合器画笔", "MixB", p35.toolClass)
+        val c35 = realConv(35)
+        assertEquals("路由至 colorsmudge 涂抹引擎", "colorsmudge", c35.bp.paintOpId)
+        assertTrue("湿润度映射至 smudgeLength", c35.bp.smudgeLength > 0.8)
+        assertEquals("混色模式", 1, c35.bp.smudgeMode)
+        assertTrue(c35.bp.smudgeCustomized)
+    }
+
+    @Test
+    fun real_p40_paintbrushTool() {
+        val p40 = realPreset(40)
+        assertEquals("40 原生声明为 PbTl 画笔工具", "PbTl", p40.toolClass)
+        val c40 = realConv(40)
+        assertEquals("普通画笔引擎", "paintbrush", c40.bp.paintOpId)
+    }
 }

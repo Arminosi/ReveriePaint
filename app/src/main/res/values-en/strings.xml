@@ -1373,6 +1373,8 @@
     <string name="brush_batch_move_success">Moved %1$d brush(es) to \"%2$s\"</string>
     <string name="brush_group_more_options">Group Actions</string>
     <string name="brush_in_use_hint">In Use · Tap to adjust</string>
+    <string name="brush_locate_current_preset">Locate Current Brush Group</string>
+    <string name="brush_located_toast">Located in: %s</string>
     <string name="brush_fav_add">Favorite</string>
     <string name="brush_fav_remove">Unfavorite</string>
     <string name="brush_group_header">Category: %s</string>

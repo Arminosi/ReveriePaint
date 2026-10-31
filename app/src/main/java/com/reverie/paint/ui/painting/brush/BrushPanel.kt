@@ -65,7 +65,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -217,6 +219,49 @@ fun BrushPanel(
         initialFirstVisibleItemIndex = initialPresetScroll.first,
         initialFirstVisibleItemScrollOffset = initialPresetScroll.second
     )
+
+    val scope = rememberCoroutineScope()
+    val currentActivePreset = remember(vm.brushPresetIndex, vm.brushPresets) {
+        vm.brushPresets.getOrNull(vm.brushPresetIndex) ?: vm.brushPresets.firstOrNull { it.index == vm.brushPresetIndex }
+    }
+    val activePresetCategory = currentActivePreset?.group?.ifBlank { "全部" } ?: "全部"
+
+    val locateCurrentPreset: () -> Unit = {
+        val preset = currentActivePreset
+        if (preset != null) {
+            val targetCat = preset.group.ifBlank { "全部" }
+            if (selectedCategory != targetCat) {
+                selectedCategory = targetCat
+                vm.updateBrushPanelCategory(targetCat)
+                isBatchMode = false
+                selectedPresets = emptySet()
+            }
+            val catIdx = categories.indexOf(targetCat)
+            if (catIdx >= 0) {
+                scope.launch {
+                    categoryScrollState.animateScrollToItem(catIdx)
+                }
+            }
+            scope.launch {
+                val targetList = when (targetCat) {
+                    "全部" -> vm.brushPresets
+                    "常用" -> vm.brushPresets.filter { vm.isFavoriteBrush(it.id) }
+                    "最近" -> vm.recentBrushIds.mapNotNull { id -> vm.brushPresets.firstOrNull { it.id == id } }
+                    else -> vm.brushPresets.filter { it.group == targetCat }
+                }
+                val itemIdx = targetList.indexOfFirst { it.index == preset.index }
+                if (itemIdx >= 0) {
+                    if (vm.brushPanelGridView) {
+                        presetGridScrollState.animateScrollToItem(itemIdx)
+                    } else {
+                        presetScrollState.animateScrollToItem(itemIdx)
+                    }
+                }
+            }
+            val catDisplayName = brushCategoryDisplayName(context, targetCat)
+            Toast.makeText(context, context.getString(R.string.brush_located_toast, catDisplayName), Toast.LENGTH_SHORT).show()
+        }
+    }
 
     // Preload thumbnails in background to eliminate UI thread decoding during scroll
     LaunchedEffect(vm.brushPresets) {
@@ -656,13 +701,24 @@ fun BrushPanel(
                                                         Spacer(Modifier.width(6.dp))
                                                     }
                                                     val catDisplayName = brushCategoryDisplayName(cat)
+                                                    val isCurrentPresetCat = cat == activePresetCategory && activePresetCategory.isNotBlank() && activePresetCategory != "全部"
                                                     Text(
                                                         text = catDisplayName,
                                                         color = if (sel) Morandi.accent else Morandi.subText,
                                                         fontSize = 13.sp,
                                                         maxLines = 1,
-                                                        overflow = TextOverflow.Ellipsis
+                                                        overflow = TextOverflow.Ellipsis,
+                                                        modifier = Modifier.weight(1f, fill = false)
                                                     )
+                                                    if (isCurrentPresetCat) {
+                                                        Spacer(Modifier.width(4.dp))
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .size(5.dp)
+                                                                .clip(CircleShape)
+                                                                .background(Morandi.accent)
+                                                        )
+                                                    }
                                                 }
                                             }
                                         }
@@ -866,6 +922,23 @@ fun BrushPanel(
                                                 color = Morandi.subText,
                                                 fontSize = 11.sp,
                                             )
+                                            Spacer(Modifier.width(6.dp))
+                                            val isAlreadyLocated = selectedCategory == activePresetCategory && activePresetCategory != "全部"
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(28.dp)
+                                                    .clip(RoundedCornerShape(6.dp))
+                                                    .background(if (isAlreadyLocated) Morandi.accent.copy(alpha = 0.18f) else Morandi.panelHi.copy(alpha = 0.5f))
+                                                    .clickable { locateCurrentPreset() },
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Icon(
+                                                    painter = painterResource(R.drawable.ic_focus_view),
+                                                    contentDescription = stringResource(R.string.brush_locate_current_preset),
+                                                    tint = if (isAlreadyLocated) Morandi.accent else Morandi.icon,
+                                                    modifier = Modifier.size(15.dp)
+                                                )
+                                            }
                                             Spacer(Modifier.width(6.dp))
                                             Box(
                                                 modifier = Modifier
@@ -1817,8 +1890,8 @@ private fun PresetGridCard(
     modifier: Modifier = Modifier,
 ) {
     val cellBg = when {
-        isBatchMode && isChecked -> Morandi.accent.copy(alpha = 0.22f)
-        isSelected -> Morandi.accent.copy(alpha = 0.18f)
+        isBatchMode && isChecked -> Morandi.accent.copy(alpha = 0.28f)
+        isSelected -> Morandi.accent.copy(alpha = 0.32f)
         else -> Morandi.panelHi.copy(alpha = 0.45f)
     }
 
@@ -1827,6 +1900,13 @@ private fun PresetGridCard(
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
             .background(cellBg)
+            .then(
+                if (isSelected && !isBatchMode) {
+                    Modifier.border(1.5.dp, Morandi.accent, RoundedCornerShape(8.dp))
+                } else if (isBatchMode && isChecked) {
+                    Modifier.border(1.5.dp, Morandi.accent.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+                } else Modifier
+            )
             .then(
                 itemGestureModifier ?: Modifier.combinedClickable(
                     onClick = onClick,
@@ -1896,9 +1976,9 @@ private fun PresetGridCard(
         Spacer(Modifier.height(3.dp))
         Text(
             preset.name,
-            color = if ((isSelected && !isBatchMode) || (isBatchMode && isChecked)) Morandi.text else Morandi.subText,
+            color = if (isSelected && !isBatchMode) Morandi.accent else if (isBatchMode && isChecked) Morandi.text else Morandi.subText,
             fontSize = 10.sp,
-            fontWeight = if ((isSelected && !isBatchMode) || (isBatchMode && isChecked)) FontWeight.SemiBold else FontWeight.Normal,
+            fontWeight = if ((isSelected && !isBatchMode) || (isBatchMode && isChecked)) FontWeight.Bold else FontWeight.Normal,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(horizontal = 1.dp)
@@ -1922,8 +2002,8 @@ private fun PresetListRow(
     modifier: Modifier = Modifier,
 ) {
     val cellBg = when {
-        isBatchMode && isChecked -> Morandi.accent.copy(alpha = 0.2f)
-        isSelected -> Morandi.accent.copy(alpha = 0.16f)
+        isBatchMode && isChecked -> Morandi.accent.copy(alpha = 0.28f)
+        isSelected -> Morandi.accent.copy(alpha = 0.30f)
         else -> Morandi.panelHi.copy(alpha = 0.35f)
     }
 
@@ -1933,6 +2013,13 @@ private fun PresetListRow(
             .height(48.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(cellBg)
+            .then(
+                if (isSelected && !isBatchMode) {
+                    Modifier.border(1.5.dp, Morandi.accent, RoundedCornerShape(10.dp))
+                } else if (isBatchMode && isChecked) {
+                    Modifier.border(1.5.dp, Morandi.accent.copy(alpha = 0.6f), RoundedCornerShape(10.dp))
+                } else Modifier
+            )
             .then(
                 itemGestureModifier ?: Modifier.combinedClickable(
                     onClick = onClick,
@@ -2024,16 +2111,16 @@ private fun PresetListRow(
         Column(Modifier.weight(1f)) {
             Text(
                 preset.name,
-                color = if (isSelected && !isBatchMode) Morandi.text else Morandi.subText,
+                color = if (isSelected && !isBatchMode) Morandi.accent else Morandi.text,
                 fontSize = 12.sp,
-                fontWeight = if (isSelected && !isBatchMode) FontWeight.SemiBold else FontWeight.Normal,
+                fontWeight = if (isSelected && !isBatchMode) FontWeight.Bold else FontWeight.Normal,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             if (fullSubtitle != null) {
                 Text(
                     fullSubtitle,
-                    color = Morandi.subText.copy(alpha = 0.75f),
+                    color = if (isSelected && !isBatchMode) Morandi.accent.copy(alpha = 0.85f) else Morandi.subText.copy(alpha = 0.75f),
                     fontSize = 10.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,

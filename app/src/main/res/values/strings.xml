@@ -1373,6 +1373,8 @@
     <string name="brush_batch_move_success">已将 %1$d 个笔刷移动至「%2$s」</string>
     <string name="brush_group_more_options">分组操作</string>
     <string name="brush_in_use_hint">使用中 · 点按调属性</string>
+    <string name="brush_locate_current_preset">定位当前笔刷所在分组</string>
+    <string name="brush_located_toast">已定位至分组: %s</string>
     <string name="brush_fav_add">加入常用</string>
     <string name="brush_fav_remove">取消常用</string>
     <string name="brush_group_header">分类: %s</string>

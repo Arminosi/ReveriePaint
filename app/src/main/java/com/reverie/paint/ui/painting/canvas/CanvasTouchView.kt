@@ -46,8 +46,12 @@ import kotlin.math.sin
 private const val MAX_VISIBLE_GRID_LINES = 6000
 private const val DYNAMIC_GUIDE_ABORT_FRAME = -1
 
-/** 对称绘制最多需要的镜像分支数 (径向对称 7 个 + 主笔迹) */
-private const val MAX_MIRROR_BRANCHES = 8
+/**
+ * 镜像缓冲的初始容量。实际分支数由当前对称配置决定 (旋转对称最多 35 支, 36 轴万花筒
+ * 最多 71 支), 由 [ensureMirrorBranches] 按需扩容; 实时镜像另受
+ * [PaintViewModel.MIRROR_BRANCH_COUNT] 限制, 超出的整笔改走抬笔重放。
+ */
+private const val INITIAL_MIRROR_BRANCH_CAPACITY = 8
 
 private const val SYMMETRY_SAMPLE_STRIDE = PaintViewModel.STROKE_SAMPLE_STRIDE_WITH_TIME
 
@@ -1453,14 +1457,19 @@ class CanvasTouchView(context: Context) : View(context) {
     // 对称绘制采样缓冲: 主笔画分支 (primary) 与镜像分支 (mirrored), 扁平存 [x, y, pressure]
     private var primarySamples = FloatArray(48)
     private var primarySampleSize = 0
-    private val mirroredSamples = ArrayList<FloatArray>(MAX_MIRROR_BRANCHES)
-    private val mirroredSizes = IntArray(MAX_MIRROR_BRANCHES)
+    private val mirroredSamples = ArrayList<FloatArray>(INITIAL_MIRROR_BRANCH_CAPACITY)
+    // 必须与 mirroredSamples 等长: 分支数不再是固定的 8 (36 轴万花筒 = 71 支),
+    // 固定长度会在 resetMirrorBranches 里踩到 IntArray 边界 (1.6.2 线上 AIOOBE)。
+    private var mirroredSizes = IntArray(INITIAL_MIRROR_BRANCH_CAPACITY)
+    /** 本笔是否允许实时镜像入队 (分支数超过引擎上限时置 false, 整笔改走抬笔重放)。 */
+    private var mirrorLiveQueueAllowed = true
     @Volatile private var isSymmetryReplaying = false
 
     /** 是否有任一分支已累积采样点 (绘制 / 回放 / 局部失效判定的共同前提) */
     private fun mirrorBranchHasSamples(): Boolean {
         if (primarySampleSize > 0) return true
-        for (i in 0 until mirroredSamples.size) {
+        val n = minOf(mirroredSamples.size, mirroredSizes.size)
+        for (i in 0 until n) {
             if (mirroredSizes[i] > 0) return true
         }
         return false
@@ -1468,7 +1477,8 @@ class CanvasTouchView(context: Context) : View(context) {
 
     private fun resetMirrorBranches() {
         primarySampleSize = 0
-        for (i in 0 until mirroredSamples.size) mirroredSizes[i] = 0
+        val n = minOf(mirroredSamples.size, mirroredSizes.size)
+        for (i in 0 until n) mirroredSizes[i] = 0
         isSymmetryReplaying = false
         symmetryStrokeStartTimeMs = 0L
     }
@@ -1491,13 +1501,31 @@ class CanvasTouchView(context: Context) : View(context) {
 
     /** 按当前分支数准备缓冲; 多余的数组保留复用, 下一笔不再重新分配 */
     private fun ensureMirrorBranches(count: Int) {
-        while (mirroredSamples.size > count) {
+        val wanted = count.coerceAtLeast(0)
+        while (mirroredSamples.size > wanted) {
             mirroredSamples.removeAt(mirroredSamples.size - 1)
         }
-        while (mirroredSamples.size < count) {
+        while (mirroredSamples.size < wanted) {
             mirroredSamples.add(FloatArray(0))
         }
+        // 分支数由对称配置决定 (2..36 轴 -> 最多 71 支): 尺寸数组必须同步扩到分支数,
+        // 否则写入第 9 支起就越界。这里只在变长时才重新分配, 稳态零分配。
+        if (mirroredSizes.size < mirroredSamples.size) {
+            mirroredSizes = mirroredSizes.copyOf(mirroredSamples.size)
+        }
         resetMirrorBranches()
+    }
+
+    /**
+     * 落笔时按当前对称分支数准备缓冲, 并决定本笔能否走实时镜像。
+     *
+     * 实时镜像需要每个分支各建一套原生 paintop, 引擎侧固定只接受 0..7; 分支数超出时
+     * 整笔改走抬笔重放 ([CanvasTouchView] 抬笔分支), 避免出现"前 8 支实时出墨、其余
+     * 分支永久缺墨"的半截结果。
+     */
+    private fun prepareMirrorBranches(branchCount: Int) {
+        ensureMirrorBranches(branchCount)
+        mirrorLiveQueueAllowed = branchCount <= PaintViewModel.MIRROR_BRANCH_COUNT
     }
 
     /** 追加主落笔采样点 (零分配热路径); 姿态与时间缺省 0 时与旧 3 元语义一致 */
@@ -1543,7 +1571,7 @@ class CanvasTouchView(context: Context) : View(context) {
         rotation: Float = 0f,
         timeSeconds: Float = 0f,
     ) {
-        if (branchIndex < 0 || branchIndex >= mirroredSamples.size) return
+        if (branchIndex < 0 || branchIndex >= mirroredSamples.size || branchIndex >= mirroredSizes.size) return
         val used = mirroredSizes[branchIndex]
         val need = (used + 1) * SYMMETRY_SAMPLE_STRIDE
         var buf = mirroredSamples[branchIndex]
@@ -1563,8 +1591,10 @@ class CanvasTouchView(context: Context) : View(context) {
         buf[base + 6] = timeSeconds
         mirroredSizes[branchIndex] = used + 1
         // 实时镜像: 同一点送进 ViewModel 的镜像队列, 由渲染线程画进已经打开的笔触。
-        // 不要在其他地方再送一份, 否则会画两次。
-        vm?.queueMirrorSample(branchIndex, x, y, pressure.toFloat(), tiltX, tiltY, rotation, timeSeconds)
+        // 不要在其他地方再送一份, 否则会画两次。分支数超过引擎上限时整笔走重放, 这里不入队。
+        if (mirrorLiveQueueAllowed) {
+            vm?.queueMirrorSample(branchIndex, x, y, pressure.toFloat(), tiltX, tiltY, rotation, timeSeconds)
+        }
     }
 
     /** 当前对称类型下, 一个文档坐标点对应的镜像采样点 (含镜像后的姿态)。 */
@@ -5813,7 +5843,7 @@ class CanvasTouchView(context: Context) : View(context) {
                     val stx = tiltX.toFloat()
                     val sty = tiltY.toFloat()
                     val srot = rotation.toFloat()
-                    ensureMirrorBranches(
+                    prepareMirrorBranches(
                         symmetricSamplesFor(v.smoothedStrokeX, v.smoothedStrokeY, stx, sty, srot).size
                     )
                     appendSymmetricSamplePair(
@@ -6189,7 +6219,7 @@ class CanvasTouchView(context: Context) : View(context) {
                             val stx = touchTiltX.toFloat()
                             val sty = touchTiltY.toFloat()
                             val srot = touchRotation.toFloat()
-                            ensureMirrorBranches(
+                            prepareMirrorBranches(
                                 symmetricSamplesFor(v.smoothedStrokeX, v.smoothedStrokeY, stx, sty, srot).size
                             )
                             appendSymmetricSamplePair(

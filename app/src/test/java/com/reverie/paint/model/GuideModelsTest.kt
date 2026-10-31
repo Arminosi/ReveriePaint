@@ -392,4 +392,48 @@ class GuideModelsTest {
             assertEquals(symPts[i].y, outY[i], 0.001f)
         }
     }
+
+    @Test
+    fun `computeSymmetricSamples default kaleidoscope exceeds live mirror branch cap`() {
+        // 1.6.2 线上 AIOOBE 的回归钉子: 万花筒默认 8 轴 -> 15 个镜像分支, 而实时镜像
+        // 只支持 8 支。分支数本身是产品语义 (2*rays-1), 不能靠调小它来"修"崩溃。
+        val config = DrawingGuideConfig(
+            mode = GuideMode.SYMMETRY,
+            symmetryType = SymmetryType.RADIAL,
+            symmetryRayCount = SYMMETRY_RAY_COUNT_DEFAULT,
+            symmetryRotational = false,
+        )
+        val branches = config.computeSymmetricSamples(Point2D(600f, 500f), 0f, 0f, 0f, 1000, 1000)
+        assertEquals(2 * SYMMETRY_RAY_COUNT_DEFAULT - 1, branches.size)
+        assertTrue("默认万花筒分支数应超过实时镜像上限", branches.size > 8)
+    }
+
+    @Test
+    fun `computeSymmetricSamples covers full ray range without shrinking branches`() {
+        // 2..36 轴全覆盖: 旋转 = rays-1 支, 万花筒 = 2*rays-1 支 (最多 71 支)。
+        // 缓冲/队列必须按这个规模准备, 不能假设 <= 8。
+        for (rays in SYMMETRY_RAY_COUNT_MIN..SYMMETRY_RAY_COUNT_MAX) {
+            val rotational = DrawingGuideConfig(
+                mode = GuideMode.SYMMETRY,
+                symmetryType = SymmetryType.RADIAL,
+                symmetryRayCount = rays,
+                symmetryRotational = true,
+            )
+            assertEquals(
+                rays - 1,
+                rotational.computeSymmetricSamples(Point2D(600f, 500f), 0f, 0f, 0f, 1000, 1000).size,
+            )
+
+            val kaleidoscope = DrawingGuideConfig(
+                mode = GuideMode.SYMMETRY,
+                symmetryType = SymmetryType.RADIAL,
+                symmetryRayCount = rays,
+                symmetryRotational = false,
+            )
+            assertEquals(
+                2 * rays - 1,
+                kaleidoscope.computeSymmetricSamples(Point2D(600f, 500f), 0f, 0f, 0f, 1000, 1000).size,
+            )
+        }
+    }
 }

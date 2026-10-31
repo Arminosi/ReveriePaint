@@ -5378,7 +5378,11 @@ class PaintViewModel : ViewModel() {
          * -> `paintMirrorPolyline(..., 7, ...)` 接受 7 维。实时运笔缓冲仍固定 6 元。
          */
         const val STROKE_SAMPLE_STRIDE_WITH_TIME = 7
-        /** 对称镜像实时队列: 最多 8 条分支, 每条 256 个 7 元采样点。 */
+        /**
+         * 对称镜像"实时出墨"的分支上限: 每条分支要单独建一套原生 paintop, 引擎侧按 8 支封顶。
+         * 对称配置产生的分支数可以超过它 (36 轴万花筒 71 支): 超出时本笔不入实时队列, 整笔在
+         * 抬笔后走 replaySymmetricBranches, 落盘结果一致。每条分支 256 个 7 元采样点。
+         */
         const val MIRROR_BRANCH_COUNT = 8
         const val MIRROR_BRANCH_CAPACITY = 256
         /** JNI touchStrokeMirrorBatch 返回值 (与 C++ reverie::MirrorBatchAction 映射一致)。 */

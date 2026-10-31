@@ -576,6 +576,29 @@ fun BrushPanel(
             ) { v ->
                 when (v) {
                     is BrushView.List -> {
+                        val filtered = remember(selectedCategory, vm.brushPresets, vm.favoriteBrushIds, vm.recentBrushIds, searchQuery) {
+                            val baseList = when (selectedCategory) {
+                                "全部" -> vm.brushPresets
+                                "常用" -> vm.brushPresets.filter { vm.isFavoriteBrush(it.id) }
+                                "最近" -> vm.recentBrushIds.mapNotNull { id ->
+                                    vm.brushPresets.firstOrNull { it.id == id }
+                                }
+                                else -> vm.brushPresets.filter { it.group == selectedCategory }
+                            }
+                            if (searchQuery.isBlank()) {
+                                baseList
+                            } else {
+                                baseList.filter { preset ->
+                                    matchesBrushQuery(
+                                        preset.name,
+                                        preset.group,
+                                        searchQuery,
+                                        brushCategoryDisplayName(context, preset.group)
+                                    )
+                                }
+                            }
+                        }
+
                         Column(Modifier.fillMaxSize()) {
                             Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
                                 // Left categories
@@ -753,29 +776,6 @@ fun BrushPanel(
                                         }
                                     }
 
-                                    val filtered = remember(selectedCategory, vm.brushPresets, vm.favoriteBrushIds, vm.recentBrushIds, searchQuery) {
-                                        val baseList = when (selectedCategory) {
-                                            "全部" -> vm.brushPresets
-                                            "常用" -> vm.brushPresets.filter { vm.isFavoriteBrush(it.id) }
-                                            "最近" -> vm.recentBrushIds.mapNotNull { id ->
-                                                vm.brushPresets.firstOrNull { it.id == id }
-                                            }
-                                            else -> vm.brushPresets.filter { it.group == selectedCategory }
-                                        }
-                                        if (searchQuery.isBlank()) {
-                                            baseList
-                                        } else {
-                                            baseList.filter { preset ->
-                                                matchesBrushQuery(
-                                                    preset.name,
-                                                    preset.group,
-                                                    searchQuery,
-                                                    brushCategoryDisplayName(context, preset.group)
-                                                )
-                                            }
-                                        }
-                                    }
-
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
@@ -917,29 +917,6 @@ fun BrushPanel(
                                                 )
                                             }
                                             Spacer(Modifier.weight(1f))
-                                            Text(
-                                                stringResource(R.string.brush_presets_count, filtered.size),
-                                                color = Morandi.subText,
-                                                fontSize = 11.sp,
-                                            )
-                                            Spacer(Modifier.width(6.dp))
-                                            val isAlreadyLocated = selectedCategory == activePresetCategory && activePresetCategory != "全部"
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(28.dp)
-                                                    .clip(RoundedCornerShape(6.dp))
-                                                    .background(if (isAlreadyLocated) Morandi.accent.copy(alpha = 0.18f) else Morandi.panelHi.copy(alpha = 0.5f))
-                                                    .clickable { locateCurrentPreset() },
-                                                contentAlignment = Alignment.Center
-                                            ) {
-                                                Icon(
-                                                    painter = painterResource(R.drawable.ic_focus_view),
-                                                    contentDescription = stringResource(R.string.brush_locate_current_preset),
-                                                    tint = if (isAlreadyLocated) Morandi.accent else Morandi.icon,
-                                                    modifier = Modifier.size(15.dp)
-                                                )
-                                            }
-                                            Spacer(Modifier.width(6.dp))
                                             Box(
                                                 modifier = Modifier
                                                     .size(28.dp)
@@ -1502,6 +1479,33 @@ fun BrushPanel(
                                     }
 
                                     Spacer(Modifier.weight(1f))
+
+                                    Text(
+                                        stringResource(R.string.brush_presets_count, filtered.size),
+                                        color = Morandi.subText,
+                                        fontSize = 11.5.sp,
+                                    )
+
+                                    Spacer(Modifier.width(8.dp))
+
+                                    val isAlreadyLocated = selectedCategory == activePresetCategory && activePresetCategory != "全部"
+                                    Box(
+                                        modifier = Modifier
+                                            .size(28.dp)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(if (isAlreadyLocated) Morandi.accent.copy(alpha = 0.18f) else Morandi.panelHi.copy(alpha = 0.65f))
+                                            .clickable { locateCurrentPreset() },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            painter = painterResource(R.drawable.ic_focus_view),
+                                            contentDescription = stringResource(R.string.brush_locate_current_preset),
+                                            tint = if (isAlreadyLocated) Morandi.accent else Morandi.icon,
+                                            modifier = Modifier.size(15.dp)
+                                        )
+                                    }
+
+                                    Spacer(Modifier.width(6.dp))
 
                                     Box(
                                         modifier = Modifier

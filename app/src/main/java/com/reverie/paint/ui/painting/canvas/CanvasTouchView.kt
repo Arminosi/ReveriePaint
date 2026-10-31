@@ -4376,47 +4376,38 @@ class CanvasTouchView(context: Context) : View(context) {
             maxTouchPointers = 0
         }
 
-        // 抓手平移 (Spacebar Hold-to-Pan 或 切换到 PAN 抓手工具)
-        val isPanToolActive = effTool() == Tool.PAN
-        if (v.isSpacePanning || isPanToolActive) {
-            if (event.pointerCount >= 2) {
-                if (isSpaceDragging) {
+        // 空格键长按临时抓手平移 (Spacebar Hold-to-Pan)
+        if (v.isSpacePanning) {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    // 空格抓手平移同样写画布变换, 且此分支在统一取消点之前 return:
+                    // 这里先终止动画并失效待执行帧, 避免与旧动画同帧竞争
+                    cancelCanvasTransformAnimators()
+                    spacePanStartPos = Offset(event.x, event.y)
+                    spacePanInitialPan = Offset(canvasPanX, canvasPanY)
+                    isSpaceDragging = true
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && systemGrabPointer != null) {
+                        pointerIcon = systemGrabPointer
+                    }
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (isSpaceDragging) {
+                        val dx = event.x - spacePanStartPos.x
+                        val dy = event.y - spacePanStartPos.y
+                        canvasPanX = spacePanInitialPan.x + dx
+                        canvasPanY = spacePanInitialPan.y + dy
+                        onTransform?.invoke(canvasZoom, canvasRotation, canvasPanX, canvasPanY)
+                        invalidate()
+                    }
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     isSpaceDragging = false
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && systemHandPointer != null) {
                         pointerIcon = systemHandPointer
                     }
                 }
-            } else {
-                when (event.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> {
-                        // 抓手平移写画布变换, 这里先终止动画并失效待执行帧, 避免与旧动画同帧竞争
-                        cancelCanvasTransformAnimators()
-                        spacePanStartPos = Offset(event.x, event.y)
-                        spacePanInitialPan = Offset(canvasPanX, canvasPanY)
-                        isSpaceDragging = true
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && systemGrabPointer != null) {
-                            pointerIcon = systemGrabPointer
-                        }
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        if (isSpaceDragging) {
-                            val dx = event.x - spacePanStartPos.x
-                            val dy = event.y - spacePanStartPos.y
-                            canvasPanX = spacePanInitialPan.x + dx
-                            canvasPanY = spacePanInitialPan.y + dy
-                            onTransform?.invoke(canvasZoom, canvasRotation, canvasPanX, canvasPanY)
-                            invalidate()
-                        }
-                    }
-                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                        isSpaceDragging = false
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && systemHandPointer != null) {
-                            pointerIcon = systemHandPointer
-                        }
-                    }
-                }
-                return true
             }
+            return true
         }
         // 任何新的接触 (新手势第一个触点 / 新落下的触点) 都可能成为画布变换的新写入者:
         // 先终止吸附收敛与满屏复位动画并失效其待执行帧, 避免与手势同帧竞争画布变换
@@ -4784,6 +4775,14 @@ class CanvasTouchView(context: Context) : View(context) {
                         return true
                     }
 
+                    if (effTool() == Tool.PAN) {
+                        isPendingLongPress = false
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && systemGrabPointer != null) {
+                            pointerIcon = systemGrabPointer
+                        }
+                        return true
+                    }
+
                     // 笔尖接触瞬间立即启动绘图，彻底消除长按判定位移容差带来的起笔延迟
                     updateStylusSensors(event, stylusPointerIndex, isStylus = true)
                     handleToolDown(screenPos, docPos, pressure, isStylus = true, touchTiltX, touchTiltY, touchRotation)
@@ -4803,6 +4802,17 @@ class CanvasTouchView(context: Context) : View(context) {
                     }
                 }
                 MotionEvent.ACTION_MOVE -> {
+                    if (effTool() == Tool.PAN) {
+                        val deltaX = screenPos.x - previousSinglePos.x
+                        val deltaY = screenPos.y - previousSinglePos.y
+                        previousSinglePos = screenPos
+                        canvasPanX += deltaX
+                        canvasPanY += deltaY
+                        onTransform?.invoke(canvasZoom, canvasRotation, canvasPanX, canvasPanY)
+                        invalidate()
+                        return true
+                    }
+
                     if (draggingGuideHandleIndex != -1) {
                         if (handleGuideHandleDrag(docPos)) return true
                     }
@@ -4855,6 +4865,15 @@ class CanvasTouchView(context: Context) : View(context) {
                         draggingGuideHandleIndex = -1
                         if (strokeStarted) cancelActiveStroke(v)
                         isInteracting = false
+                        invalidate()
+                        return true
+                    }
+
+                    if (effTool() == Tool.PAN) {
+                        isInteracting = false
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && systemHandPointer != null) {
+                            pointerIcon = systemHandPointer
+                        }
                         invalidate()
                         return true
                     }
@@ -5449,7 +5468,8 @@ class CanvasTouchView(context: Context) : View(context) {
             com.reverie.paint.model.GestureTrigger.SINGLE_FINGER_TOUCH_SLIDE
         val isDrawingTool = effTool() == Tool.BRUSH || effTool() == Tool.ERASER || effTool() == Tool.SMUDGE || effTool() == Tool.LIQUIFY
         val canEyedrop = v.longPressEyedropperEnabled && isDrawingTool
-        val isPenOnlyPan = !isTouchSlideQuickMenu && v.penOnlyMode && v.penModeSingleFingerPanEnabled && (
+        val isPanTool = effTool() == Tool.PAN
+        val isSinglePointerPan = isPanTool || (!isTouchSlideQuickMenu && v.penOnlyMode && v.penModeSingleFingerPanEnabled && (
             tool.group == ToolGroup.BRUSH ||
             tool.group == ToolGroup.SELECTION ||
             tool.group == ToolGroup.SHAPES ||
@@ -5458,7 +5478,7 @@ class CanvasTouchView(context: Context) : View(context) {
             tool == Tool.PICKER ||
             tool == Tool.MEASURE ||
             tool == Tool.TEXT
-        )
+        ))
 
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
@@ -5506,7 +5526,7 @@ class CanvasTouchView(context: Context) : View(context) {
                 val isEdgeTouch = screenPos.x <= edgeThreshold || (curW > 0 && screenPos.x >= curW - edgeThreshold)
                 val isEdgeBackAllowed = (v.allowEdgeBackGesture && v.backKeyAction != BackKeyAction.NONE) || overlayPanelsOpen
 
-                if (isEdgeTouch && isEdgeBackAllowed && !isPenOnlyPan && !v.penOnlyMode) {
+                if (isEdgeTouch && isEdgeBackAllowed && !isSinglePointerPan && !v.penOnlyMode) {
                     isPendingEdgeFinger = true
                     pendingEdgeScreenPos = screenPos
                     pendingEdgeDocPos = docPos
@@ -5529,7 +5549,7 @@ class CanvasTouchView(context: Context) : View(context) {
                         localPressure = 1f
                         invalidate()
                     }
-                } else if (!isPenOnlyPan) {
+                } else if (!isSinglePointerPan) {
                     if (v.penOnlyMode) {
                         // 笔模式下且未开启单指平移：忽略单指触控输入，防止手掌误触作画
                         return true
@@ -5547,6 +5567,10 @@ class CanvasTouchView(context: Context) : View(context) {
                     }
                     // 真墨按住时这一笔由前缓冲呈现, 不再整屏失效主画布。
                     if (!realInk.wantsHold()) invalidate()
+                } else if (isPanTool) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && systemGrabPointer != null) {
+                        pointerIcon = systemGrabPointer
+                    }
                 }
                 return true
             }
@@ -5630,7 +5654,7 @@ class CanvasTouchView(context: Context) : View(context) {
                 }
 
                 val isShiftTraceAlign = v.anim.shiftTraceActive && v.anim.shiftTraceGestureMode == ShiftTraceGestureMode.ALIGN_FRAME
-                if (isPenOnlyPan) {
+                if (isSinglePointerPan) {
                     if (isShiftTraceAlign) {
                         val target = v.anim.shiftTraceTarget
                         val curTf = if (target == ShiftTraceTarget.PREV) v.anim.shiftTracePrevTransform else v.anim.shiftTraceNextTransform
@@ -5748,7 +5772,7 @@ class CanvasTouchView(context: Context) : View(context) {
                     return true
                 }
 
-                if (!isPenOnlyPan) {
+                if (!isSinglePointerPan) {
                     if (v.penOnlyMode) {
                         localIsTouching = false
                         clearLocalCursorPos()
@@ -5758,6 +5782,11 @@ class CanvasTouchView(context: Context) : View(context) {
                     handleToolUp(event, docPos, isCancel = (event.actionMasked == MotionEvent.ACTION_CANCEL))
                     localIsTouching = false
                     clearLocalCursorPos()
+                    invalidate()
+                } else if (isPanTool) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && systemHandPointer != null) {
+                        pointerIcon = systemHandPointer
+                    }
                     invalidate()
                 }
                 return true

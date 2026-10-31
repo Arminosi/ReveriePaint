@@ -256,7 +256,10 @@ internal fun GeneralSettingsSubPage(
                 )
             }
 
-            // Section 4: 高级与开发者选项
+            // Section 4: 隐私 (崩溃报告自动上报)
+            TelemetrySettingsSection()
+
+            // Section 5: 高级与开发者选项
             SettingCategoryTitle(stringResource(R.string.settings_category_advanced))
             SettingGroup {
                 SettingNavGroupItem(

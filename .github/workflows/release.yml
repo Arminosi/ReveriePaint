@@ -71,6 +71,15 @@ jobs:
           chmod +x scripts/check_jni_symbols.sh
           ./scripts/check_jni_symbols.sh
 
+      - name: Native Closure Symbol Check
+        # JNI 门禁只查 Kotlin external fun 对 .so 导出, 查不到 .so 之间的 C/C++ 依赖。
+        # 1.6.2 的 armeabi-v7a 包就是栽在这层: libkritacolorsmudgepaintop.so 引用
+        # ReveriePigmentMix::isEnabled(), 闭包里没有任何库定义它, 32 位用户启动即崩。
+        # 这个门禁对每个 ABI 求「未定义符号 - 闭包已定义 - Android 平台库」, 非空即失败。
+        run: |
+          chmod +x scripts/check_native_symbols.sh
+          ./scripts/check_native_symbols.sh
+
       - name: Decode Keystore
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}

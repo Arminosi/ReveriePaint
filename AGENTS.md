@@ -37,10 +37,11 @@ Kotlin/Compose UI ──JNI── C++ ReverieCore ── Krita libs (KisImage/Ki
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ./gradlew assembleRelease -PappIdSuffix=.beta   # 测试分发: 独立包名 com.reverie.paint.beta 的 release 包 (与正式版同装互不影响)
 ./scripts/check_jni_symbols.sh       # JNI 符号门禁: 每个 ABI 的预编译 .so 必须覆盖 Kotlin 全部 external fun
+./scripts/check_native_symbols.sh    # 闭包 ABI 门禁: .so 之间的未定义符号必须能在闭包或 Android 平台库里解析 (改/刷新预编译库后必跑)
 ./scripts/build_native.sh --abi armeabi-v7a     # 重编 32 位 C++ 并刷新 32 位预编译闭包 + 自动跑符号门禁
 ```
 
-**改动 Kotlin 代码后至少运行 `compileDebugKotlin`; 改动 `model/` 或纯逻辑代码后运行 `testDebugUnitTest`; 新增/删除 `ReverieCoreBridge.kt` 的 `external fun` 或改 C++ 后必须跑 `check_jni_symbols.sh` 并刷新对应 ABI 的预编译库 (否则装出来的包一调用新方法就 UnsatisfiedLinkError)**
+**改动 Kotlin 代码后至少运行 `compileDebugKotlin`; 改动 `model/` 或纯逻辑代码后运行 `testDebugUnitTest`; 新增/删除 `ReverieCoreBridge.kt` 的 `external fun` 或改 C++ 后必须跑 `check_jni_symbols.sh` 并刷新对应 ABI 的预编译库 (否则装出来的包一调用新方法就 UnsatisfiedLinkError); 刷新/替换任何预编译 `.so` 后还必须跑 `check_native_symbols.sh`——它查的是 .so 之间的 C/C++ 依赖, 1.6.2 的 32 位包就是闭包里缺 `ReveriePigmentMix` 符号导致启动即崩 (见 `docs/INCIDENT-1.6.2-CRASHES.md`)**
 
 ## 3. 目录结构
 

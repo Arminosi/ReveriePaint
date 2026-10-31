@@ -2792,7 +2792,7 @@
     <string name="settings_three_finger_edit_title">三指下滑打开编辑菜单</string>
     <string name="settings_three_finger_edit_desc">三指一起向下滑动打开自定义菜单；轻点仍可重做</string>
     <string name="canvas_edit_title">快捷菜单</string>
-    <string name="canvas_edit_customize">自定义三指菜单</string>
+    <string name="canvas_edit_customize">自定义快捷菜单</string>
     <string name="canvas_edit_customize_hint">添加常用操作，用上下箭头调整顺序，至少保留一项</string>
     <string name="canvas_edit_selected_tab">已选 (%1$d)</string>
     <string name="canvas_edit_available_tab">添加 (%1$d)</string>
@@ -3163,7 +3163,7 @@
     <string name="gesture_reset_defaults_done">已恢复默认手势设置</string>
 
     <string name="gesture_action_quick_menu">快捷菜单</string>
-    <string name="gesture_action_quick_menu_desc">呼出六键悬浮快捷编辑菜单</string>
+    <string name="gesture_action_quick_menu_desc">呼出环形悬浮快捷编辑菜单</string>
     <string name="gesture_action_undo">撤销</string>
     <string name="gesture_action_undo_desc">撤销上一笔绘制或操作</string>
     <string name="gesture_action_redo">重做</string>

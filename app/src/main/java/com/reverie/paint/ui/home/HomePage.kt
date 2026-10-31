@@ -21,8 +21,8 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
+import androidx.compose.ui.input.pointer.PointerEventTimeoutCancellationException
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
@@ -930,24 +930,51 @@ fun HomePage(vm: PaintViewModel) {
                                                         awaitEachGesture {
                                                             val down = awaitFirstDown(requireUnconsumed = false)
                                                             val downRoot = itemCoordinates?.localToRoot(down.position) ?: down.position
-                                                            var dragStarted = false
-                                                            var totalDrag = Offset.Zero
+                                                            val downPos = down.position
                                                             val touchSlop = viewConfiguration.touchSlop
+                                                            var isLongPressTriggered = false
+                                                            var currentPointer = down
 
-                                                            val longPress = awaitLongPressOrCancellation(down.id)
-                                                            if (longPress == null) {
-                                                                if (!down.isConsumed) {
-                                                                    if (isSelectMode) {
-                                                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                                        if (isSelected) selectedProjects.remove(p) else selectedProjects.add(p)
-                                                                    } else {
-                                                                        vm.loadProject(p)
+                                                            try {
+                                                                withTimeout(viewConfiguration.longPressTimeoutMillis) {
+                                                                    while (true) {
+                                                                        val event = awaitPointerEvent()
+                                                                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                                                        currentPointer = change
+                                                                        if (change.isConsumed) {
+                                                                            // 已被父级滚动容器消费，放弃点击与长按
+                                                                            return@withTimeout
+                                                                        }
+                                                                        val dist = (change.position - downPos).getDistance()
+                                                                        if (dist > touchSlop) {
+                                                                            // 移动距离超过滑动容差，属于滑动手势，放弃点击与长按
+                                                                            return@withTimeout
+                                                                        }
+                                                                        if (change.changedToUpIgnoreConsumed()) {
+                                                                            // 手指在容差范围内正常抬起，属于纯正的点击
+                                                                            change.consume()
+                                                                            if (isSelectMode) {
+                                                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                                                if (isSelected) selectedProjects.remove(p) else selectedProjects.add(p)
+                                                                            } else {
+                                                                                vm.loadProject(p)
+                                                                            }
+                                                                            return@withTimeout
+                                                                        }
                                                                     }
                                                                 }
-                                                            } else {
+                                                            } catch (_: PointerEventTimeoutCancellationException) {
+                                                                // 长按时间已到且未移动，触发长按
+                                                                isLongPressTriggered = true
+                                                            }
+
+                                                            if (isLongPressTriggered) {
                                                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                                var currentPos = itemCoordinates?.localToRoot(longPress.position) ?: downRoot
-                                                                var pointerId = longPress.id
+                                                                var dragStarted = false
+                                                                var totalDrag = Offset.Zero
+                                                                var currentPos = itemCoordinates?.localToRoot(currentPointer.position) ?: downRoot
+                                                                val pointerId = currentPointer.id
+
                                                                 while (true) {
                                                                     val event = awaitPointerEvent()
                                                                     val change = event.changes.firstOrNull { it.id == pointerId } ?: break

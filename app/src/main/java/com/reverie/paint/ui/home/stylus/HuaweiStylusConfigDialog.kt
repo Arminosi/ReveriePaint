@@ -47,6 +47,7 @@ internal fun HuaweiStylusConfigDialog(
         stringResource(R.string.stylus_action_follow_system) to "system",
         stringResource(R.string.stylus_action_undo) to "undo",
         stringResource(R.string.stylus_action_redo) to "redo",
+        stringResource(R.string.stylus_action_quick_menu) to "toggle_quick_menu",
         stringResource(R.string.stylus_action_eyedropper) to "tool_picker",
         stringResource(R.string.stylus_action_prev_tool) to "toggle_last_tool",
         stringResource(R.string.stylus_action_quick_palette) to "tool_color",

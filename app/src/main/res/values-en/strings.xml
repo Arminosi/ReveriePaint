@@ -2792,7 +2792,7 @@
     <string name="settings_three_finger_edit_title">Three-finger swipe down to edit</string>
     <string name="settings_three_finger_edit_desc">Swipe down with three fingers to open your custom menu; tap to redo</string>
     <string name="canvas_edit_title">Quick menu</string>
-    <string name="canvas_edit_customize">Customize swipe menu</string>
+    <string name="canvas_edit_customize">Customize quick menu</string>
     <string name="canvas_edit_customize_hint">Add actions and use the arrows to reorder them. Keep at least one action.</string>
     <string name="canvas_edit_selected_tab">Menu (%1$d)</string>
     <string name="canvas_edit_available_tab">Add (%1$d)</string>
@@ -3163,7 +3163,7 @@
     <string name="gesture_reset_defaults_done">Gestures reset to default</string>
 
     <string name="gesture_action_quick_menu">Quick Menu</string>
-    <string name="gesture_action_quick_menu_desc">Open 6-capsule floating quick edit menu</string>
+    <string name="gesture_action_quick_menu_desc">Open radial floating quick edit menu</string>
     <string name="gesture_action_undo">Undo</string>
     <string name="gesture_action_undo_desc">Undo last stroke or action</string>
     <string name="gesture_action_redo">Redo</string>

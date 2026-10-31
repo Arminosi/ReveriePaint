@@ -5,7 +5,7 @@
 package com.reverie.paint.core.stylus
 
 enum class StylusBrand(val displayName: String, val subtitle: String) {
-    OPPO_ONEPLUS("OPPO Pencil / 一加智能手写笔", "适配笔身双击、书写震动、拟真发声与低延迟笔迹预测"),
+    OPPO_ONEPLUS("OPPO Pencil / 一加智能手写笔", "适配笔身双击、书写震动与拟真发声"),
     HUAWEI_MPENCIL("HUAWEI M-Pencil", "适配笔身双击、星闪低延迟、物理侧键映射与触感联动"),
     HONOR_MAGIC_PENCIL("荣耀 Magic-Pencil", "适配笔身双击、折叠屏侧键、微震触感与防误触"),
     SAMSUNG_SPEN("三星 S Pen", "适配侧键单击/双击/长按、悬空指令与触觉反馈"),
@@ -79,7 +79,7 @@ enum class OppoPencilModel(
         maxPressure = 4096,
         hasInPenHaptics = false,
         hasSlideGesture = false,
-        hasAiPrediction = true,
+        hasAiPrediction = false,
         desc = "4096级压感 · 笔身双击手势 · 平板微震与发声联动"
     ),
     PRO(
@@ -88,8 +88,8 @@ enum class OppoPencilModel(
         maxPressure = 16384,
         hasInPenHaptics = true,
         hasSlideGesture = true,
-        hasAiPrediction = true,
-        desc = "16384级超高压感 (原生支持) · 笔身内置超线性微震 · 笔身触控滑动 · AI超低延时预测"
+        hasAiPrediction = false,
+        desc = "16384级超高压感 (原生支持) · 笔身内置超线性微震 · 笔身触控滑动"
     );
 
     val generationName: String get() = editionName

@@ -351,9 +351,10 @@ fun PaintingPage(
                 if (canvasEditMenuOpen) {
                     canvasEditMenuOpen = false
                 } else {
-                    vm.quickMenuAnchor = com.reverie.paint.ui.painting.canvas.CanvasTouchView
-                        .activeTouchView?.takeIf { it.width > 0 && it.height > 0 }
-                        ?.let { androidx.compose.ui.geometry.Offset(it.width / 2f, it.height / 2f) }
+                    val touchView = com.reverie.paint.ui.painting.canvas.CanvasTouchView.activeTouchView
+                    vm.quickMenuAnchor = touchView?.lastKnownCursorScreenPos
+                        ?: touchView?.takeIf { it.width > 0 && it.height > 0 }
+                            ?.let { androidx.compose.ui.geometry.Offset(it.width / 2f, it.height / 2f) }
                         ?: androidx.compose.ui.geometry.Offset(
                             context.resources.displayMetrics.widthPixels / 2f,
                             context.resources.displayMetrics.heightPixels / 2f,

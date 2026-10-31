@@ -2724,7 +2724,7 @@
     <string name="settings_three_finger_edit_title">三指下滑打开编辑菜单</string>
     <string name="settings_three_finger_edit_desc">三指一起往下滑打开快捷菜单；轻点还是重新抓一爪</string>
     <string name="canvas_edit_title">快捷菜单</string>
-    <string name="canvas_edit_customize">自定义三指菜单</string>
+    <string name="canvas_edit_customize">自定义快捷菜单</string>
     <string name="canvas_edit_customize_hint">加几个常用操作，用上下箭头排顺序，至少留一项</string>
     <string name="canvas_edit_selected_tab">已选 (%1$d)</string>
     <string name="canvas_edit_available_tab">添加 (%1$d)</string>

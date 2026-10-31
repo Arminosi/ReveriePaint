@@ -340,6 +340,11 @@ class CanvasTouchView(context: Context) : View(context) {
             isCursorTouching?.value = value
         }
 
+    val lastKnownCursorScreenPos: androidx.compose.ui.geometry.Offset?
+        get() = if (hasLocalCursorPos && (localIsHovering || localIsTouching)) {
+            androidx.compose.ui.geometry.Offset(localCursorX, localCursorY)
+        } else null
+
     /** 运笔中 (孔洞掩码构建据此推迟到抬笔后)。 */
     internal val strokeInProgress: Boolean get() = localIsTouching
 
@@ -5434,7 +5439,7 @@ class CanvasTouchView(context: Context) : View(context) {
         val isTouchSlideQuickMenu = v.gestureConfig.getTrigger(com.reverie.paint.model.GestureAction.QUICK_MENU) ==
             com.reverie.paint.model.GestureTrigger.SINGLE_FINGER_TOUCH_SLIDE
         val isDrawingTool = effTool() == Tool.BRUSH || effTool() == Tool.ERASER || effTool() == Tool.SMUDGE || effTool() == Tool.LIQUIFY
-        val canEyedrop = (v.longPressEyedropperEnabled || v.gestureConfig.getActionForTrigger(com.reverie.paint.model.GestureTrigger.SINGLE_FINGER_LONG_PRESS) == com.reverie.paint.model.GestureAction.EYEDROPPER) && isDrawingTool
+        val canEyedrop = v.longPressEyedropperEnabled && isDrawingTool
         val isPenOnlyPan = !isTouchSlideQuickMenu && v.penOnlyMode && v.penModeSingleFingerPanEnabled && (
             tool.group == ToolGroup.BRUSH ||
             tool.group == ToolGroup.SELECTION ||
@@ -5550,15 +5555,8 @@ class CanvasTouchView(context: Context) : View(context) {
                     val deadZone = 48f * density
                     if (dist > deadZone) {
                         val deg = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
-                        val slot = when {
-                            deg in -120f..-60f -> 0
-                            deg in -60f..0f -> 1
-                            deg in 0f..60f -> 2
-                            deg in 60f..120f -> 3
-                            deg in 120f..180f -> 4
-                            else -> 5
-                        }
-                        v.quickMenuHoverIndex = slot
+                        val count = v.canvasEditMenuActions.take(6).size
+                        v.quickMenuHoverIndex = com.reverie.paint.model.QuickMenuLayout.findHoverIndex(deg, count)
                     } else {
                         v.quickMenuHoverIndex = -1
                     }

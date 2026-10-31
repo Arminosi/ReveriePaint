@@ -2641,18 +2641,10 @@ class PaintViewModel : ViewModel() {
         }
     }
 
-    fun executeCanvasEditActionByIndex(slot: Int) {
+    fun executeCanvasEditActionByIndex(index: Int) {
         val actions = canvasEditMenuActions.take(6)
-        val slots = when (actions.size) {
-            1 -> listOf(0)
-            2 -> listOf(5, 1)
-            3 -> listOf(0, 2, 4)
-            4 -> listOf(5, 1, 2, 4)
-            else -> actions.indices.toList()
-        }
-        val actionIndex = slots.indexOf(slot)
-        if (actionIndex in actions.indices) {
-            executeCanvasEditAction(actions[actionIndex])
+        if (index in actions.indices) {
+            executeCanvasEditAction(actions[index])
         }
     }
 
